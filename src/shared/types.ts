@@ -269,7 +269,10 @@ export type GeoEventType =
   | 'LABEL_TOGGLE'
   | 'SEEK_TO'
   | 'SNAPSHOT_READY'
-  | 'PLANET_GENERATED';
+  | 'PLANET_GENERATED'
+  | 'CLIMATE_UPDATE'
+  | 'TROPICAL_CYCLONE_FORMED'
+  | 'SNOWBALL_EARTH';
 
 export interface LatLon {
   lat: number;
@@ -351,6 +354,22 @@ export interface PlanetGeneratedPayload {
   timeMa: number;
 }
 
+export interface ClimateUpdatePayload {
+  meanTemperature: number;
+  co2Ppm: number;
+  iceAlbedoFeedback: number;
+}
+
+export interface TropicalCycloneFormedPayload {
+  lat: number;
+  lon: number;
+  intensity: number; // 1-5 Saffir-Simpson
+}
+
+export interface SnowballEarthPayload {
+  equatorialTemp: number;
+}
+
 export interface GeoEventPayloadMap {
   TICK: TickPayload;
   VOLCANIC_ERUPTION: VolcanicEruptionPayload;
@@ -368,6 +387,9 @@ export interface GeoEventPayloadMap {
   SEEK_TO: SeekToPayload;
   SNAPSHOT_READY: SnapshotReadyPayload;
   PLANET_GENERATED: PlanetGeneratedPayload;
+  CLIMATE_UPDATE: ClimateUpdatePayload;
+  TROPICAL_CYCLONE_FORMED: TropicalCycloneFormedPayload;
+  SNOWBALL_EARTH: SnowballEarthPayload;
 }
 
 export interface GeoEvent<T extends GeoEventType = GeoEventType> {

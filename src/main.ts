@@ -10,6 +10,7 @@ import { GlobeRenderer } from './render/globe-renderer';
 import { PlanetGenerator } from './proc/planet-generator';
 import { TectonicEngine } from './geo/tectonic-engine';
 import { SurfaceEngine } from './geo/surface-engine';
+import { AtmosphereEngine } from './geo/atmosphere-engine';
 import { AppShell } from './ui/app-shell';
 import type { StateBufferViews } from './shared/types';
 
@@ -47,6 +48,7 @@ const renderer = new GlobeRenderer(viewportEl);
 
 let tectonicEngine: TectonicEngine | null = null;
 let surfaceEngine: SurfaceEngine | null = null;
+let atmosphereEngine: AtmosphereEngine | null = null;
 
 // ── Planet generation ───────────────────────────────────────────────────────
 
@@ -80,6 +82,12 @@ function generatePlanet(seed: number): void {
     minTickInterval: 0.5,
   });
   surfaceEngine.initialize(stateViews, tectonicEngine.stratigraphy);
+
+  // Initialize Phase 4 atmosphere engine
+  atmosphereEngine = new AtmosphereEngine(bus, eventLog, seed, {
+    minTickInterval: 1.0,
+  });
+  atmosphereEngine.initialize(stateViews, result.atmosphere);
 
   // Take initial snapshot
   snapshotManager.takeSnapshot(-4500, buffer);
@@ -145,6 +153,11 @@ function loop(now: number): void {
       // Run Phase 3 surface processes after tectonics
       if (surfaceEngine) {
         surfaceEngine.tick(clock.t, deltaMa);
+      }
+
+      // Run Phase 4 atmosphere processes
+      if (atmosphereEngine) {
+        atmosphereEngine.tick(clock.t, deltaMa);
       }
 
       tectonicAccum = 0;

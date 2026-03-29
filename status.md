@@ -159,8 +159,61 @@
   - No console errors during surface simulation
   - Simulation time display while surface processes run
 
-## Phase 4 — Atmosphere, Climate & Weather ⬜
-Not started.
+## Phase 4 — Atmosphere, Climate & Weather ✅
+
+**Goal**: Climate drives biomes. Winds, precipitation, and temperature change over geological time.
+
+### AGENT-ATMO: General Circulation
+- [x] 3-cell model: Hadley (0–30°), Ferrel (30–60°), Polar (60–90°) per hemisphere (`src/geo/climate-engine.ts`)
+- [x] Solar insolation: I = S₀ · cos(θ) · (1 - α) with latitude-based albedo (`src/geo/climate-engine.ts`)
+- [x] Differential albedo: ocean (0.06), land (0.30), ice (0.85) (`src/geo/climate-engine.ts`)
+- [x] Trade winds, westerlies, polar easterlies from 3-cell formulas (`src/geo/climate-engine.ts`)
+- [x] windUMap and windVMap updated each tick (`src/geo/climate-engine.ts`)
+
+### AGENT-ATMO: Ice Ages & Forcing
+- [x] Milankovitch eccentricity cycle (100 kyr period) forcing (`src/geo/climate-engine.ts`)
+- [x] Greenhouse forcing: ΔT = λ · ln(CO₂/CO₂_ref) / ln(2), λ = 3°C per doubling (`src/geo/climate-engine.ts`)
+- [x] Altitude lapse rate correction: 6.5°C per km (`src/geo/climate-engine.ts`)
+- [x] Ice-albedo feedback: fraction of ice cells tracked (`src/geo/climate-engine.ts`)
+- [x] Snowball Earth threshold: equatorial temp < -10°C detection (`src/geo/climate-engine.ts`)
+- [x] ICE_AGE_ONSET / ICE_AGE_END events from mean temperature (`src/geo/atmosphere-engine.ts`)
+
+### AGENT-ATMO: Weather Systems
+- [x] Frontal precipitation at polar front (~60°) and ITCZ (<10°) (`src/geo/weather-engine.ts`)
+- [x] Stochastic mid-latitude cyclones with precipitation (`src/geo/weather-engine.ts`)
+- [x] Tropical cyclone spawning: SST > 26°C, 5-20° latitude (`src/geo/weather-engine.ts`)
+- [x] Orographic precipitation: windward multiplier (×2), leeward rain shadow (×0.5) (`src/geo/weather-engine.ts`)
+- [x] precipitationMap updated each tick (`src/geo/weather-engine.ts`)
+
+### AGENT-ATMO: Cloud Generation
+- [x] Cloud type assignment (7 CloudGenus types used) based on temperature, precipitation, moisture (`src/geo/weather-engine.ts`)
+- [x] cloudTypeMap and cloudCoverMap updated each tick (`src/geo/weather-engine.ts`)
+- [x] Cloud cover between 0–1 (`src/geo/weather-engine.ts`)
+
+### Atmosphere Engine Orchestrator
+- [x] Climate → Weather pipeline orchestration (`src/geo/atmosphere-engine.ts`)
+- [x] Sub-tick batching with configurable minimum interval (default 1.0 Ma) (`src/geo/atmosphere-engine.ts`)
+- [x] Event emission: CLIMATE_UPDATE, TROPICAL_CYCLONE_FORMED, ICE_AGE_ONSET, ICE_AGE_END, SNOWBALL_EARTH (`src/geo/atmosphere-engine.ts`)
+- [x] getClimateEngine() and getWeatherEngine() accessors (`src/geo/atmosphere-engine.ts`)
+
+### AGENT-RENDER: Atmosphere
+- [x] Biome color function using Whittaker diagram (temperature × precipitation, 12 biomes) (`src/render/globe-renderer.ts`)
+- [x] updateClimateMap() method creates RGBA biome overlay texture (`src/render/globe-renderer.ts`)
+
+### Integration
+- [x] AtmosphereEngine wired into main render loop after SurfaceEngine (`src/main.ts`)
+- [x] New event types added to shared types: CLIMATE_UPDATE, TROPICAL_CYCLONE_FORMED, SNOWBALL_EARTH (`src/shared/types.ts`)
+- [x] Payload interfaces: ClimateUpdatePayload, TropicalCycloneFormedPayload, SnowballEarthPayload (`src/shared/types.ts`)
+
+### Testing
+- [x] 37 unit tests across 3 new test files (Vitest)
+  - `tests/climate-engine.test.ts` — 14 tests (insolation, winds, greenhouse, Milankovitch, Snowball Earth, determinism)
+  - `tests/weather-engine.test.ts` — 11 tests (clouds, precipitation, orographic, cyclones, fronts, determinism)
+  - `tests/atmosphere-engine.test.ts` — 12 tests (orchestration, events, sub-tick batching, getters, determinism)
+- [x] 3 new Playwright integration tests (`e2e/app-shell.spec.ts`)
+  - Atmosphere engine active after unpausing (no crash)
+  - Planet generation with atmosphere engine initialized
+  - No console errors during atmospheric simulation
 
 ## Phase 5 — Cross-Section Viewer ⬜
 Not started.
