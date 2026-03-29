@@ -11,8 +11,10 @@ import { PlanetGenerator } from './proc/planet-generator';
 import { TectonicEngine } from './geo/tectonic-engine';
 import { SurfaceEngine } from './geo/surface-engine';
 import { AtmosphereEngine } from './geo/atmosphere-engine';
+import { CrossSectionEngine } from './geo/cross-section-engine';
+import { renderCrossSection, exportCrossSectionPNG } from './render/cross-section-renderer';
 import { AppShell } from './ui/app-shell';
-import type { StateBufferViews } from './shared/types';
+import type { StateBufferViews, LatLon } from './shared/types';
 
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 
@@ -49,6 +51,9 @@ const renderer = new GlobeRenderer(viewportEl);
 let tectonicEngine: TectonicEngine | null = null;
 let surfaceEngine: SurfaceEngine | null = null;
 let atmosphereEngine: AtmosphereEngine | null = null;
+
+// Phase 5: Cross-Section Engine (persistent, re-initialised on planet generation)
+const crossSectionEngine = new CrossSectionEngine(bus);
 
 // ── Planet generation ───────────────────────────────────────────────────────
 
@@ -89,6 +94,10 @@ function generatePlanet(seed: number): void {
   });
   atmosphereEngine.initialize(stateViews, result.atmosphere);
 
+  // Initialize Phase 5 cross-section engine
+  crossSectionEngine.clear();
+  crossSectionEngine.initialize(stateViews, tectonicEngine.stratigraphy);
+
   // Take initial snapshot
   snapshotManager.takeSnapshot(-4500, buffer);
 
@@ -102,11 +111,78 @@ function generatePlanet(seed: number): void {
   clock.seekTo(-4500);
   shell.setSimTime(clock.t);
 
+  // Close any open cross-section panel on new planet
+  shell.hideCrossSection();
+  shell.setDrawMode(false);
+  drawModeActive = false;
+  drawPoints = [];
+
   bus.emit('PLANET_GENERATED', { seed, timeMa: clock.t });
 }
 
 // Generate the first planet
 generatePlanet(randomSeed());
+
+// ── Cross-Section Draw Mode ─────────────────────────────────────────────────
+
+let drawModeActive = false;
+let drawPoints: LatLon[] = [];
+
+shell.onDrawMode(() => {
+  drawModeActive = !drawModeActive;
+  shell.setDrawMode(drawModeActive);
+  if (drawModeActive) {
+    drawPoints = [];
+  }
+});
+
+// Listen for cross-section ready events to render the profile
+bus.on('CROSS_SECTION_READY', (payload) => {
+  const canvas = shell.getCrossSectionCanvas();
+  const panelEl = canvas.parentElement;
+  const w = panelEl ? panelEl.clientWidth : 960;
+  const h = 280;
+  renderCrossSection(payload.profile, {
+    width: w,
+    height: h,
+    showLabels: shell.areLabelsVisible(),
+    showLegend: true,
+  }, canvas);
+  shell.showCrossSection();
+});
+
+shell.onLabelToggle((visible) => {
+  bus.emit('LABEL_TOGGLE', { visible });
+  // Re-render if a profile is active
+  const profile = crossSectionEngine.getProfile();
+  if (profile) {
+    const canvas = shell.getCrossSectionCanvas();
+    const panelEl = canvas.parentElement;
+    const w = panelEl ? panelEl.clientWidth : 960;
+    renderCrossSection(profile, {
+      width: w,
+      height: 280,
+      showLabels: visible,
+      showLegend: true,
+    }, canvas);
+  }
+});
+
+shell.onExportPng(() => {
+  const canvas = shell.getCrossSectionCanvas();
+  const dataUrl = exportCrossSectionPNG(canvas);
+  const link = document.createElement('a');
+  link.download = 'cross-section.png';
+  link.href = dataUrl;
+  link.click();
+});
+
+shell.onCloseCrossSection(() => {
+  crossSectionEngine.clear();
+  drawModeActive = false;
+  shell.setDrawMode(false);
+  drawPoints = [];
+});
 
 // ── Wire UI callbacks ───────────────────────────────────────────────────────
 

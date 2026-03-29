@@ -332,9 +332,44 @@ export interface CrossSectionPathPayload {
   points: LatLon[];
 }
 
-export interface CrossSectionReadyPayload {
+/** A single sample column along the cross-section path. */
+export interface CrossSectionSample {
+  /** Distance along the path in km. */
+  distanceKm: number;
+  /** Surface elevation in meters (from heightMap). */
+  surfaceElevation: number;
+  /** Crust thickness in km (from crustThicknessMap). */
+  crustThicknessKm: number;
+  /** Soil type at surface. */
+  soilType: SoilOrder;
+  /** Soil depth in meters. */
+  soilDepthM: number;
+  /** Stratigraphic layers at this point (bottom → top). */
   layers: StratigraphicLayer[];
-  profile: number[];
+}
+
+/** Deep earth zone definition for cross-section rendering. */
+export interface DeepEarthZone {
+  name: string;
+  topKm: number;
+  bottomKm: number;
+  rockType: RockType;
+}
+
+/** Full cross-section profile data. */
+export interface CrossSectionProfile {
+  /** Sample columns along the path. */
+  samples: CrossSectionSample[];
+  /** Total path distance in km. */
+  totalDistanceKm: number;
+  /** Original path points used. */
+  pathPoints: LatLon[];
+  /** Deep earth zones to render below the crust. */
+  deepEarthZones: DeepEarthZone[];
+}
+
+export interface CrossSectionReadyPayload {
+  profile: CrossSectionProfile;
 }
 
 export interface LabelTogglePayload {
