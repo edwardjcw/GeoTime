@@ -28,6 +28,9 @@ const ICE_ACCUMULATION_RATE = 0.5;
 /** Ice ablation rate (thickness units per Ma per °C above threshold). */
 const ICE_ABLATION_RATE = 1.0;
 
+/** Fraction of glacial erosion deposited as moraine at glacier margin. */
+const MORAINE_FRACTION_OF_EROSION = 0.5;
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface GlacialResult {
@@ -169,7 +172,7 @@ export class GlacialEngine {
           if (this.iceThickness[nIdx] <= 0 && heightMap[nIdx] < heightMap[i]) {
             const moraine = Math.min(
               MORAINE_DEPOSITION_RATE * deltaMa,
-              actualEroded * 0.5,
+              actualEroded * MORAINE_FRACTION_OF_EROSION,
             );
             if (moraine > 0.01) {
               heightMap[nIdx] += moraine;

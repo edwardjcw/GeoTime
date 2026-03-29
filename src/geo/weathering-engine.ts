@@ -40,6 +40,15 @@ const ARID_PRECIP_THRESHOLD = 250;
 /** Tropical temperature threshold (°C). */
 const TROPICAL_TEMP_THRESHOLD = 20;
 
+/** Fraction of eroded material that becomes weathering product (density factor). */
+const WEATHERING_PRODUCT_DENSITY_FACTOR = 0.3;
+
+/** Fraction of eroded material lost as net height reduction (1 - WEATHERING_PRODUCT_DENSITY_FACTOR). */
+const NET_HEIGHT_LOSS_FACTOR = 1 - WEATHERING_PRODUCT_DENSITY_FACTOR;
+
+/** Fraction of aeolian-eroded material deposited as loess downwind. */
+const LOESS_DEPOSITION_FRACTION = 0.5;
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface WeatheringResult {
@@ -155,7 +164,7 @@ export class WeatheringEngine {
           stratigraphy.pushLayer(i, {
             rockType: product,
             ageDeposited: timeMa,
-            thickness: eroded * 0.3, // weathering products are less dense
+            thickness: eroded * WEATHERING_PRODUCT_DENSITY_FACTOR,
             dipAngle: 0,
             dipDirection: 0,
             deformation: DeformationType.UNDEFORMED,
@@ -165,9 +174,9 @@ export class WeatheringEngine {
           });
 
           // Net height change (weathering removes more than it deposits)
-          heightMap[i] -= eroded * 0.7;
+          heightMap[i] -= eroded * NET_HEIGHT_LOSS_FACTOR;
           chemicalWeathered += eroded;
-          totalDeposited += eroded * 0.3;
+          totalDeposited += eroded * WEATHERING_PRODUCT_DENSITY_FACTOR;
           cellsAffected++;
         }
       }
@@ -199,7 +208,7 @@ export class WeatheringEngine {
             const destIdx = destRow * gs + destCol;
 
             if (destIdx !== i) {
-              const loess = Math.min(eroded * 0.5, LOESS_DEPOSITION_RATE * deltaMa);
+              const loess = Math.min(eroded * LOESS_DEPOSITION_FRACTION, LOESS_DEPOSITION_RATE * deltaMa);
               if (loess > 0.001) {
                 heightMap[destIdx] += loess;
                 totalDeposited += loess;

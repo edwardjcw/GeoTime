@@ -227,8 +227,7 @@ export class PedogenesisEngine {
 
       // Write soil horizon to top stratigraphic layer
       if (topLayer && order !== SoilOrder.NONE) {
-        // Mutate in place (the layer is in the stack array)
-        (topLayer as { soilHorizon: SoilOrder }).soilHorizon = order;
+        topLayer.soilHorizon = order;
       }
     }
 

@@ -32,6 +32,9 @@ const DEPOSITION_RATE = 0.3;
 /** Minimum slope considered for erosion (prevents division by zero). */
 const MIN_SLOPE = 1e-6;
 
+/** Slope ratio threshold for triggering deposition (downstream slope < this × cell slope). */
+const DEPOSITION_SLOPE_THRESHOLD = 0.3;
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface FlowCell {
@@ -189,7 +192,7 @@ export class ErosionEngine {
         const downSlope = flow[f.downstream].slope;
 
         // Deposit a fraction at low-slope areas (alluvial fans, deltas)
-        if (downSlope < slope * 0.3 || heightMap[f.downstream] < 0) {
+        if (downSlope < slope * DEPOSITION_SLOPE_THRESHOLD || heightMap[f.downstream] < 0) {
           const deposit = sedimentLoad[i] * DEPOSITION_RATE;
           if (deposit > 0.01) {
             heightMap[f.downstream] += deposit;
