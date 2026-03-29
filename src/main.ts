@@ -9,6 +9,7 @@ import { SnapshotManager } from './kernel/snapshot-manager';
 import { GlobeRenderer } from './render/globe-renderer';
 import { PlanetGenerator } from './proc/planet-generator';
 import { TectonicEngine } from './geo/tectonic-engine';
+import { SurfaceEngine } from './geo/surface-engine';
 import { AppShell } from './ui/app-shell';
 import type { StateBufferViews } from './shared/types';
 
@@ -45,6 +46,7 @@ const viewportEl = shell.getViewportElement();
 const renderer = new GlobeRenderer(viewportEl);
 
 let tectonicEngine: TectonicEngine | null = null;
+let surfaceEngine: SurfaceEngine | null = null;
 
 // ── Planet generation ───────────────────────────────────────────────────────
 
@@ -72,6 +74,12 @@ function generatePlanet(seed: number): void {
     result.atmosphere,
     stateViews,
   );
+
+  // Initialize Phase 3 surface engine
+  surfaceEngine = new SurfaceEngine(bus, eventLog, seed, {
+    minTickInterval: 0.5,
+  });
+  surfaceEngine.initialize(stateViews, tectonicEngine.stratigraphy);
 
   // Take initial snapshot
   snapshotManager.takeSnapshot(-4500, buffer);
@@ -133,9 +141,15 @@ function loop(now: number): void {
     if (tectonicAccum >= TECTONIC_UPDATE_INTERVAL) {
       const deltaMa = (tectonicAccum / 1000) * clock.rate;
       tectonicEngine.tick(clock.t, deltaMa);
+
+      // Run Phase 3 surface processes after tectonics
+      if (surfaceEngine) {
+        surfaceEngine.tick(clock.t, deltaMa);
+      }
+
       tectonicAccum = 0;
 
-      // Update GPU textures after tectonic changes
+      // Update GPU textures after tectonic + surface changes
       renderer.updateHeightMap(stateViews.heightMap, GRID_SIZE);
 
       // Take periodic snapshots

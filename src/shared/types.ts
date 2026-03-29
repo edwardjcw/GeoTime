@@ -260,6 +260,10 @@ export type GeoEventType =
   | 'PLATE_RIFT'
   | 'ICE_AGE_ONSET'
   | 'ICE_AGE_END'
+  | 'EROSION_CYCLE'
+  | 'GLACIATION_ADVANCE'
+  | 'GLACIATION_RETREAT'
+  | 'MAJOR_RIVER_FORMED'
   | 'CROSS_SECTION_PATH'
   | 'CROSS_SECTION_READY'
   | 'LABEL_TOGGLE'
@@ -301,6 +305,26 @@ export interface IceAgeOnsetPayload {
 
 export interface IceAgeEndPayload {}
 
+export interface ErosionCyclePayload {
+  totalEroded: number;     // total meters of material eroded this cycle
+  totalDeposited: number;  // total meters deposited
+  cellsAffected: number;   // number of cells modified
+}
+
+export interface GlaciationAdvancePayload {
+  glaciatedCells: number;
+  equilibriumLineAltitude: number;
+}
+
+export interface GlaciationRetreatPayload {
+  glaciatedCells: number;
+}
+
+export interface MajorRiverFormedPayload {
+  cellIndex: number;
+  drainageArea: number;  // in grid cells
+}
+
 export interface CrossSectionPathPayload {
   points: LatLon[];
 }
@@ -334,6 +358,10 @@ export interface GeoEventPayloadMap {
   PLATE_RIFT: PlateRiftPayload;
   ICE_AGE_ONSET: IceAgeOnsetPayload;
   ICE_AGE_END: IceAgeEndPayload;
+  EROSION_CYCLE: ErosionCyclePayload;
+  GLACIATION_ADVANCE: GlaciationAdvancePayload;
+  GLACIATION_RETREAT: GlaciationRetreatPayload;
+  MAJOR_RIVER_FORMED: MajorRiverFormedPayload;
   CROSS_SECTION_PATH: CrossSectionPathPayload;
   CROSS_SECTION_READY: CrossSectionReadyPayload;
   LABEL_TOGGLE: LabelTogglePayload;

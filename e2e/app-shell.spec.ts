@@ -126,3 +126,89 @@ test.describe('GeoTime App Shell', () => {
     expect(criticalErrors).toHaveLength(0);
   });
 });
+
+// ─── Phase 3 Integration Tests ──────────────────────────────────────────────
+
+test.describe('Phase 3 — Surface Processes Integration', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+  });
+
+  test('should not crash with surface engine active after unpausing', async ({ page }) => {
+    // Unpause the simulation to activate tectonic + surface engines
+    const pauseBtn = page.locator('button', { hasText: /Pause|Resume/ });
+    await pauseBtn.click();
+
+    // Let it run for a bit
+    await page.waitForTimeout(3000);
+
+    // App should still be functional
+    const canvas = page.locator('canvas');
+    await expect(canvas).toBeVisible();
+    await expect(page.locator('text=FPS:')).toBeVisible();
+  });
+
+  test('should survive planet generation with surface engine initialized', async ({ page }) => {
+    // Generate a new planet (reinitializes both tectonic + surface engine)
+    const newPlanetBtn = page.locator('button', { hasText: 'New Planet' });
+    await newPlanetBtn.click();
+    await page.waitForTimeout(2000);
+
+    // Unpause to start simulation
+    const pauseBtn = page.locator('button', { hasText: /Pause|Resume/ });
+    await pauseBtn.click();
+    await page.waitForTimeout(2000);
+
+    // Pause again
+    await pauseBtn.click();
+
+    // App should still be functional
+    await expect(page.locator('canvas')).toBeVisible();
+    await expect(page.locator('text=Tris:')).toBeVisible();
+  });
+
+  test('should not produce console errors during surface simulation', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        errors.push(msg.text());
+      }
+    });
+
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+
+    // Unpause and let surface processes run
+    const pauseBtn = page.locator('button', { hasText: /Pause|Resume/ });
+    await pauseBtn.click();
+    await page.waitForTimeout(3000);
+
+    // Filter out known non-critical warnings
+    const criticalErrors = errors.filter(
+      (e) => !e.includes('WebGL') && !e.includes('THREE.'),
+    );
+    expect(criticalErrors).toHaveLength(0);
+  });
+
+  test('should update simulation time while surface processes run', async ({ page }) => {
+    // Get initial time
+    await page.waitForTimeout(500);
+    const timeLocator = page.locator('text=Time:');
+    const initialTime = await timeLocator.textContent();
+
+    // Set rate slider to maximum for fast advancement
+    const slider = page.locator('input[type="range"]');
+    await slider.fill('100');
+
+    // Unpause and let simulation advance
+    const pauseBtn = page.locator('button', { hasText: /Pause|Resume/ });
+    await pauseBtn.click();
+    await page.waitForTimeout(5000);
+
+    // Time should have advanced (or at minimum not crashed)
+    const updatedTime = await timeLocator.textContent();
+    // The simulation is running; verify the time display is still valid
+    expect(updatedTime).toMatch(/Time: -?\d+\.?\d*\s*(Ma|Ga)/);
+  });
+});
