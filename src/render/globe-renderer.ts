@@ -74,7 +74,27 @@ void main() {
 }
 `;
 
-// ─── Plate overlay shaders ──────────────────────────────────────────────────
+// ─── Biome color shaders ────────────────────────────────────────────────────
+
+const biomeVertexShader = /* glsl */ `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  vec3 pos = position * 1.001;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+}
+`;
+
+const biomeFragmentShader = /* glsl */ `
+uniform sampler2D uBiomeMap;
+varying vec2 vUv;
+
+void main() {
+  vec4 col = texture2D(uBiomeMap, vUv);
+  if (col.a < 0.01) discard;
+  gl_FragColor = col;
+}
+`;
 
 const plateVertexShader = /* glsl */ `
 varying vec2 vUv;
@@ -112,6 +132,27 @@ const SUBDIVISION_LEVEL = 5; // ~20 480 triangles
 const DISPLACEMENT_SCALE = 0.02;
 const CAMERA_DISTANCE = 3.0;
 
+// ─── Biome Color Lookup (Whittaker diagram) ──────────────────────────────────
+
+/**
+ * Map temperature (°C) × precipitation (mm/yr equivalent) to RGB [0-255].
+ * 12-biome Whittaker classification.
+ */
+function biomeColor(temp: number, precip: number): [number, number, number] {
+  if (temp < -15) return [240, 248, 255]; // Ice / polar desert
+  if (temp < -5 && precip < 200) return [200, 220, 240]; // Tundra
+  if (temp < 5 && precip > 200) return [100, 130, 100];  // Taiga / boreal forest
+  if (temp < 10 && precip < 300) return [180, 190, 150]; // Cold desert / steppe
+  if (temp < 20 && precip > 600) return [ 60, 120,  50]; // Temperate rainforest
+  if (temp < 20 && precip > 300) return [ 80, 150,  60]; // Temperate deciduous
+  if (temp < 20 && precip < 300) return [200, 200, 120]; // Temperate grassland / shrubland
+  if (temp >= 20 && precip < 200) return [240, 220, 130]; // Hot desert
+  if (temp >= 20 && precip < 600) return [170, 200,  80]; // Savanna / dry woodland
+  if (temp >= 20 && precip < 1500) return [ 50, 160,  60]; // Subtropical forest
+  if (temp >= 20 && precip >= 1500) return [ 10,  80,  10]; // Tropical rainforest
+  return [120, 160,  80]; // Default: subtropical
+}
+
 // ─── GlobeRenderer Class ────────────────────────────────────────────────────
 
 export class GlobeRenderer {
@@ -127,6 +168,10 @@ export class GlobeRenderer {
   private plateMesh: THREE.Mesh | null = null;
   private plateMaterial: THREE.ShaderMaterial | null = null;
   private plateTexture: THREE.DataTexture | null = null;
+
+  private biomeMesh: THREE.Mesh | null = null;
+  private biomeMaterial: THREE.ShaderMaterial | null = null;
+  private biomeTexture: THREE.DataTexture | null = null;
 
   private triangleCount: number;
 
@@ -285,6 +330,66 @@ export class GlobeRenderer {
     return this.triangleCount;
   }
 
+  /**
+   * Build and upload a biome overlay texture from temperature and precipitation maps.
+   * Uses the Whittaker biome classification (temperature × precipitation).
+   * @param temperatureMap  - Float32 array of °C values (row-major, same grid).
+   * @param precipitationMap - Float32 array of mm/yr equivalent values.
+   * @param gridSize         - Width/height of the square grid.
+   */
+  updateClimateMap(
+    temperatureMap: Float32Array,
+    precipitationMap: Float32Array,
+    gridSize: number,
+  ): void {
+    const cellCount = gridSize * gridSize;
+    // RGBA8 texture
+    const rgba = new Uint8Array(cellCount * 4);
+
+    for (let i = 0; i < cellCount; i++) {
+      const temp = temperatureMap[i];
+      const precip = precipitationMap[i];
+      const [r, g, b] = biomeColor(temp, precip);
+      rgba[i * 4 + 0] = r;
+      rgba[i * 4 + 1] = g;
+      rgba[i * 4 + 2] = b;
+      rgba[i * 4 + 3] = 180; // semi-transparent overlay
+    }
+
+    if (this.biomeTexture) this.biomeTexture.dispose();
+
+    this.biomeTexture = new THREE.DataTexture(
+      rgba,
+      gridSize,
+      gridSize,
+      THREE.RGBAFormat,
+      THREE.UnsignedByteType,
+    );
+    this.biomeTexture.magFilter = THREE.LinearFilter;
+    this.biomeTexture.minFilter = THREE.LinearFilter;
+    this.biomeTexture.needsUpdate = true;
+
+    if (!this.biomeMesh) {
+      this.biomeMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          uBiomeMap: { value: this.biomeTexture },
+        },
+        vertexShader: biomeVertexShader,
+        fragmentShader: biomeFragmentShader,
+        transparent: true,
+        depthWrite: false,
+      });
+
+      this.biomeMesh = new THREE.Mesh(
+        this.globeMesh.geometry,
+        this.biomeMaterial,
+      );
+      this.scene.add(this.biomeMesh);
+    } else {
+      this.biomeMaterial!.uniforms.uBiomeMap.value = this.biomeTexture;
+    }
+  }
+
   /** Release all GPU resources. */
   dispose(): void {
     this.controls.dispose();
@@ -299,6 +404,12 @@ export class GlobeRenderer {
       this.plateMaterial?.dispose();
       this.plateMesh.geometry.dispose();
       this.scene.remove(this.plateMesh);
+    }
+
+    if (this.biomeMesh) {
+      this.biomeTexture?.dispose();
+      this.biomeMaterial?.dispose();
+      this.scene.remove(this.biomeMesh);
     }
 
     this.renderer.dispose();

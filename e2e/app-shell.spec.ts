@@ -212,3 +212,64 @@ test.describe('Phase 3 — Surface Processes Integration', () => {
     expect(updatedTime).toMatch(/Time: -?\d+\.?\d*\s*(Ma|Ga)/);
   });
 });
+
+// ─── Phase 4: Atmosphere Engine Tests ───────────────────────────────────────
+
+test.describe('Phase 4: Atmosphere Engine', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+  });
+
+  test('atmosphere engine active after unpausing (no crash)', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    // Unpause and let atmosphere engine run
+    const pauseBtn = page.locator('button', { hasText: /Pause|Resume/ });
+    await pauseBtn.click();
+    await page.waitForTimeout(3000);
+
+    // No uncaught errors
+    expect(errors).toHaveLength(0);
+    // Globe still visible
+    await expect(page.locator('canvas')).toBeVisible();
+  });
+
+  test('planet generation with atmosphere engine initialized', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    // Trigger new planet generation
+    const newPlanetBtn = page.locator('button', { hasText: /New Planet/ });
+    await newPlanetBtn.click();
+    await page.waitForTimeout(2000);
+
+    // App should still render without error
+    expect(errors).toHaveLength(0);
+    await expect(page.locator('canvas')).toBeVisible();
+  });
+
+  test('no console errors during atmospheric simulation', async ({ page }) => {
+    const consoleErrors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        consoleErrors.push(msg.text());
+      }
+    });
+
+    // Unpause, set fast rate, let atmosphere tick
+    const slider = page.locator('input[type="range"]');
+    await slider.fill('50');
+
+    const pauseBtn = page.locator('button', { hasText: /Pause|Resume/ });
+    await pauseBtn.click();
+    await page.waitForTimeout(4000);
+
+    // Filter known non-critical renderer messages
+    const critical = consoleErrors.filter(
+      (e) => !e.includes('WebGL') && !e.includes('THREE.'),
+    );
+    expect(critical).toHaveLength(0);
+  });
+});
