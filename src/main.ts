@@ -4,8 +4,11 @@ import './style.css';
 import { TOTAL_BUFFER_SIZE, GRID_SIZE, createStateBufferLayout } from './shared/types';
 import { EventBus } from './kernel/event-bus';
 import { SimClock } from './kernel/sim-clock';
+import { EventLog } from './kernel/event-log';
+import { SnapshotManager } from './kernel/snapshot-manager';
 import { GlobeRenderer } from './render/globe-renderer';
 import { PlanetGenerator } from './proc/planet-generator';
+import { TectonicEngine } from './geo/tectonic-engine';
 import { AppShell } from './ui/app-shell';
 import type { StateBufferViews } from './shared/types';
 
@@ -34,10 +37,14 @@ let stateViews: StateBufferViews = createStateBufferLayout(
 
 const bus = new EventBus();
 const clock = new SimClock(bus);
+const eventLog = new EventLog();
+const snapshotManager = new SnapshotManager(10, 500);
 const shell = new AppShell(appEl);
 
 const viewportEl = shell.getViewportElement();
 const renderer = new GlobeRenderer(viewportEl);
+
+let tectonicEngine: TectonicEngine | null = null;
 
 // ── Planet generation ───────────────────────────────────────────────────────
 
@@ -51,7 +58,23 @@ function generatePlanet(seed: number): void {
   stateViews = createStateBufferLayout(buffer as SharedArrayBuffer);
 
   const generator = new PlanetGenerator(seed);
-  generator.generate(stateViews);
+  const result = generator.generate(stateViews);
+
+  // Initialize Phase 2 tectonic engine
+  eventLog.clear();
+  snapshotManager.clear();
+  tectonicEngine = new TectonicEngine(bus, eventLog, seed, {
+    minTickInterval: 0.1,
+  });
+  tectonicEngine.initialize(
+    result.plates,
+    result.hotspots,
+    result.atmosphere,
+    stateViews,
+  );
+
+  // Take initial snapshot
+  snapshotManager.takeSnapshot(-4500, buffer);
 
   renderer.updateHeightMap(stateViews.heightMap, GRID_SIZE);
   renderer.updatePlateMap(stateViews.plateMap, GRID_SIZE);
@@ -90,6 +113,10 @@ let lastTime = performance.now();
 let frameCount = 0;
 let fpsAccum = 0;
 
+/** Tectonic simulation accumulator — updates terrain less frequently than render. */
+let tectonicAccum = 0;
+const TECTONIC_UPDATE_INTERVAL = 100; // ms between tectonic updates
+
 function loop(now: number): void {
   requestAnimationFrame(loop);
 
@@ -99,6 +126,22 @@ function loop(now: number): void {
   // Advance simulation (convert ms → seconds for the SimClock)
   clock.advance(dtMs / 1000);
   shell.setSimTime(clock.t);
+
+  // Run tectonic simulation at a throttled rate
+  if (!clock.paused && tectonicEngine) {
+    tectonicAccum += dtMs;
+    if (tectonicAccum >= TECTONIC_UPDATE_INTERVAL) {
+      const deltaMa = (tectonicAccum / 1000) * clock.rate;
+      tectonicEngine.tick(clock.t, deltaMa);
+      tectonicAccum = 0;
+
+      // Update GPU textures after tectonic changes
+      renderer.updateHeightMap(stateViews.heightMap, GRID_SIZE);
+
+      // Take periodic snapshots
+      snapshotManager.maybeTakeSnapshot(clock.t, buffer);
+    }
+  }
 
   // FPS counter (update roughly every 500 ms)
   frameCount++;

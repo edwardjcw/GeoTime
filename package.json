@@ -9,13 +9,19 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:e2e": "playwright test"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/edwardjcw/GeoTime.git"
   },
-  "keywords": ["geology", "simulation", "planetary", "tectonics"],
+  "keywords": [
+    "geology",
+    "simulation",
+    "planetary",
+    "tectonics"
+  ],
   "author": "",
   "license": "Apache-2.0",
   "bugs": {
@@ -26,6 +32,7 @@
     "three": "^0.183.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/three": "^0.183.1",
     "typescript": "^6.0.2",
     "vite": "^8.0.3",
