@@ -273,3 +273,99 @@ test.describe('Phase 4: Atmosphere Engine', () => {
     expect(critical).toHaveLength(0);
   });
 });
+
+// ─── Phase 5: Cross-Section Viewer Tests ────────────────────────────────────
+
+test.describe('Phase 5: Cross-Section Viewer', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+  });
+
+  test('should have a Draw Cross-Section button in the sidebar', async ({ page }) => {
+    const drawBtn = page.locator('button', { hasText: /Draw Cross-Section|Click Globe/ });
+    await expect(drawBtn).toBeVisible();
+  });
+
+  test('should toggle draw mode on button click', async ({ page }) => {
+    const drawBtn = page.locator('button', { hasText: /Draw Cross-Section/ });
+    await expect(drawBtn).toBeVisible();
+
+    // Click to activate draw mode
+    await drawBtn.click();
+
+    // Button text should change to indicate draw mode is active
+    await expect(page.locator('button', { hasText: /Click Globe/ })).toBeVisible();
+
+    // Click again to deactivate
+    await drawBtn.click();
+    await expect(page.locator('button', { hasText: /Draw Cross-Section/ })).toBeVisible();
+  });
+
+  test('cross-section panel should be hidden by default', async ({ page }) => {
+    // The cross-section panel has a Labels button and Export PNG button
+    // but should not be visible on initial load
+    const labelsBtn = page.locator('button', { hasText: 'Labels' });
+    await expect(labelsBtn).not.toBeVisible();
+  });
+
+  test('should not crash when draw mode is toggled multiple times', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    const drawBtn = page.locator('button', { hasText: /Draw Cross-Section|Click Globe/ });
+
+    // Toggle draw mode several times
+    for (let i = 0; i < 5; i++) {
+      await drawBtn.click();
+      await page.waitForTimeout(200);
+    }
+
+    expect(errors).toHaveLength(0);
+    await expect(page.locator('canvas')).toBeVisible();
+  });
+
+  test('draw mode should reset on new planet generation', async ({ page }) => {
+    // Activate draw mode
+    const drawBtn = page.locator('button', { hasText: /Draw Cross-Section/ });
+    await drawBtn.click();
+    await expect(page.locator('button', { hasText: /Click Globe/ })).toBeVisible();
+
+    // Generate new planet
+    const newPlanetBtn = page.locator('button', { hasText: 'New Planet' });
+    await newPlanetBtn.click();
+    await page.waitForTimeout(2000);
+
+    // Draw mode should be reset
+    await expect(page.locator('button', { hasText: /Draw Cross-Section/ })).toBeVisible();
+  });
+
+  test('no console errors with cross-section engine initialized', async ({ page }) => {
+    const consoleErrors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        consoleErrors.push(msg.text());
+      }
+    });
+
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+
+    // Toggle draw mode on and off
+    const drawBtn = page.locator('button', { hasText: /Draw Cross-Section/ });
+    await drawBtn.click();
+    await page.waitForTimeout(500);
+    await drawBtn.click();
+    await page.waitForTimeout(500);
+
+    // Generate a new planet with cross-section engine wired in
+    const newPlanetBtn = page.locator('button', { hasText: 'New Planet' });
+    await newPlanetBtn.click();
+    await page.waitForTimeout(2000);
+
+    const critical = consoleErrors.filter(
+      (e) => !e.includes('WebGL') && !e.includes('THREE.'),
+    );
+    expect(critical).toHaveLength(0);
+  });
+});
