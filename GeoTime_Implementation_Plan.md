@@ -476,11 +476,13 @@ Full specification in Section 5. Key deliverables:
 
 ---
 
-### Phase 7 — Biomatter (Weeks 19–21)
+### Phase 7 — Biomatter (Weeks 19–21) ✅
 
 **Goal**: Simple non-plant biomatter that reshapes ocean chemistry, sedimentation, atmosphere, and produces petroleum source rocks. Feature-flagged, building on the vegetation module from Phase 6.
 
-**AGENT-GEO: Biomatter Engine (feature-flagged)**
+**Status**: ✅ Implemented in C# backend (`GeoTime.Core/Engines/BiomatterEngine.cs`). 30 unit tests + 12 API integration tests. Total: 156 backend tests.
+
+**AGENT-GEO: Biomatter Engine (feature-flagged)** ✅
 - **Microbial mats / stromatolites**: earliest life form; appear on shallow marine cells when temperature > 10°C and sunlight available; produce laminated carbonate structures recorded in stratigraphy as SED_LIMESTONE or SED_CHERT
 - **Cyanobacteria**: oxygenic photosynthesis; emit OXYGENATION_EVENT when cumulative biomatter exceeds threshold; drive the Great Oxygenation Event analog, converting atmosphere from anoxic to oxic over hundreds of Myr
 - **Marine plankton (phytoplankton & zooplankton)**: productivity driven by ocean cell temperature (10–25°C optimum), nutrient upwelling proximity, and sunlight; phytoplankton contribute O₂ to ATMO; zooplankton shells produce biogenic sediment (SED_CHALK from coccoliths, SED_CHERT from radiolarians/diatoms, SED_DIATOMITE)
@@ -488,19 +490,19 @@ Full specification in Section 5. Key deliverables:
 - **Benthic organisms**: seafloor biomatter in deep marine cells; bioturbation mixes upper sediment layers, increasing weathering rate of top stratigraphy layer
 - **Fungi & decomposers**: terrestrial cells with soil depth > 0.1 m and organic litter; accelerate pedogenesis rate by 20–40%; increase soil organic carbon content
 
-**AGENT-GEO: Petroleum Source Rocks**
+**AGENT-GEO: Petroleum Source Rocks** ✅
 - **Organic carbon burial**: when biomatter (marine plankton, microbial mats) dies in anoxic marine basins, organic carbon accumulates in organicCarbonMap
 - **Kerogen formation**: buried organic carbon at depth > 2 km and temperature 60–120°C (oil window) converts to kerogen; recorded as a new StratigraphicLayer with rockType SED_OIL_SHALE
 - **Petroleum migration**: simplified model — kerogen layers capped by impermeable shale or evaporite form petroleum trap; flagged in stratigraphy for cross-section display
 - **Coal analogs**: terrestrial peat (SED_PEAT) from high-biomass vegetation zones, when buried to depth > 1 km, converts to SED_COAL; rate depends on burial depth and time
 
-**AGENT-ATMO: Biomatter ↔ Atmosphere Feedback**
+**AGENT-ATMO: Biomatter ↔ Atmosphere Feedback** ✅
 - Cyanobacteria and phytoplankton O₂ production increases atmospheric O₂ concentration over geological time
 - Methane production by anaerobic microbes in anoxic wetlands and ocean sediments adds CH₄ to greenhouse gas budget
 - CO₂ drawdown by marine biomatter (biological pump): plankton fix CO₂ at surface, organic matter sinks and sequesters carbon in deep ocean sediment
 - Atmospheric O₂ level gates: below 2% O₂, only anaerobic biomatter active; above 2%, aerobic organisms enabled; above 15%, terrestrial organisms and fire possible
 
-**AGENT-GEO: Biogenic Sedimentation**
+**AGENT-GEO: Biogenic Sedimentation** ✅
 - Coccolith ooze → SED_CHALK: deposited in deep marine cells when plankton productivity is high
 - Radiolarian / diatom ooze → SED_CHERT / SED_DIATOMITE: deposited in cold, nutrient-rich upwelling zones
 - Coral reef limestone → SED_LIMESTONE: deposited in warm shallow marine cells with active reef organisms
@@ -508,13 +510,13 @@ Full specification in Section 5. Key deliverables:
 - Phosphorite → SED_PHOSPHORITE: deposited in upwelling zones where organic matter concentration is high
 - Banded iron formation → SED_IRONSTONE: deposited in Archean–Proterozoic oceans when dissolved iron reacts with newly produced O₂ from cyanobacteria
 
-**AGENT-RENDER: Biomatter Visuals**
+**AGENT-RENDER: Biomatter Visuals** (frontend — deferred)
 - biomatterMap overlay: toggleable heat-map layer showing non-plant biomatter density
 - Reef structures: subtle heightMap bump and distinct texture on warm shallow marine cells
 - Stromatolite texture on ancient shallow marine shelf cells
 - organicCarbonMap overlay: dark organic-rich layer visible in cross-section
 
-**AGENT-UI: Biomatter Controls**
+**AGENT-UI: Biomatter Controls** (frontend — deferred, API ready)
 - Biomatter toggle in settings panel (feature-flagged, like vegetation)
 - Cell inspection expanded: biomatter density, organic carbon, reef presence
 - Layer overlay: biomatter density map (marine + terrestrial combined)
