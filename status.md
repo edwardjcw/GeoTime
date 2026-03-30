@@ -288,8 +288,57 @@
   - Draw mode reset on new planet generation
   - No console errors with cross-section engine initialized
 
-## Phase 6 — Vegetation & Polish ⬜
-Not started.
+## Phase 6 — Vegetation & Polish ✅
+
+**Goal**: Optional vegetation module, performance improvements, full integration testing, UI polish.
+
+### AGENT-GEO: Vegetation (feature-flagged)
+- [x] Net primary productivity (NPP) from temperature and precipitation: Miami Model approximation (`src/geo/vegetation-engine.ts`)
+- [x] Biomass accumulation rate scaled to NPP; biomass written to biomassMap (`src/geo/vegetation-engine.ts`)
+- [x] Biomass cleared by glaciation (temp < -10°C) or desertification (precip < 50 mm/yr) (`src/geo/vegetation-engine.ts`)
+- [x] Forest fire stochastic model: dry season + high biomass → fire probability (`src/geo/vegetation-engine.ts`)
+- [x] Vegetation albedo feedback: forests darker than grassland → warming feedback (`src/geo/vegetation-engine.ts`)
+- [x] Grass coverage on slopes where soil depth sufficient and precipitation > 250 mm/yr (`src/geo/vegetation-engine.ts`)
+- [x] Feature-flag support: `enabled` config option, defaults to true (`src/geo/vegetation-engine.ts`)
+
+### AGENT-KERNEL: Performance Pass
+- [x] Sparse delta snapshots: `computeDelta()` / `applyDelta()` helpers for block-level diffing (`src/kernel/snapshot-manager.ts`)
+- [x] Adaptive tick rate: configurable `maxFrameBudget` caps real-time dt to prevent UI jank (`src/kernel/sim-clock.ts`)
+
+### AGENT-UI: Polish
+- [x] Click-to-inspect: viewport click → `InspectInfo` panel showing elevation, rock type, soil order, climate, biomass (`src/ui/app-shell.ts`)
+- [x] Geological timeline: horizontal strip below globe with event markers and cursor position (`src/ui/app-shell.ts`)
+- [x] Layer overlay panel: 6 toggleable layers — plates, temperature, precipitation, soil, clouds, biomass (`src/ui/app-shell.ts`)
+- [x] Planet URL sharing: seed encoded in URL fragment for shareable links (`src/main.ts`)
+
+### Shared Types & Buffer Layout
+- [x] `biomassMap` added to SharedArrayBuffer layout — 14th typed array view (Float32, 1 048 576 bytes) (`src/shared/types.ts`)
+- [x] `VEGETATION_UPDATE` and `FOREST_FIRE` event types with typed payloads (`src/shared/types.ts`)
+- [x] Total buffer size: ~11.8 MB (14 typed array views) (`src/shared/types.ts`)
+
+### Testing
+- [x] 36 unit tests for VegetationEngine (`tests/vegetation-engine.test.ts`)
+  - computeNPP: 7 tests (boundary conditions, monotonicity, ranges)
+  - nppToBiomassRate: 3 tests (zero, positive, linearity)
+  - computeFireProbability: 5 tests (threshold, dry/wet, biomass, bounds)
+  - computeVegetationAlbedo: 4 tests (zero, forest, grassland, transition)
+  - VegetationEngine lifecycle: 17 tests (init, tick, disable, underwater, glaciation, desert, soil, cap, events, fire, determinism, batching)
+- [x] 9 integration validation tests (`tests/integration-validation.test.ts`)
+  - Continent distribution plausibility (flood-fill for ≥2 major continents)
+  - Soil type coverage (≥1 USDA order after atmosphere + surface ticks)
+  - Stratigraphy consistency (valid layer stacks after tectonic processing)
+  - Erosion volume conservation (height ratio stability during surface processing)
+  - Vegetation integration (biomass accumulation with favorable climate)
+  - Vegetation glaciation clearing
+  - Multi-seed smoke tests (3 seeds: 42, 12345, 98765)
+- [x] 7 new Playwright integration tests (`e2e/app-shell.spec.ts`)
+  - Layer overlay toggles visible in sidebar
+  - Layer toggle button interaction
+  - Geological timeline strip rendered
+  - Seed encoded in URL fragment
+  - Seed loaded from URL fragment
+  - Vegetation engine runs without errors
+  - No console errors after new planet generation with Phase 6 engines
 
 ---
 
@@ -318,7 +367,8 @@ src/
 │   ├── weathering-engine.ts — Aeolian & chemical weathering
 │   ├── pedogenesis.ts — Soil formation (CLORPT, USDA soil orders)
 │   ├── surface-engine.ts — Surface process orchestrator
-│   └── cross-section-engine.ts — Cross-section path sampling & profile builder
+│   ├── cross-section-engine.ts — Cross-section path sampling & profile builder
+│   └── vegetation-engine.ts — Vegetation NPP, biomass, fire, albedo feedback
 ├── render/
 │   ├── icosphere.ts   — Icosphere mesh generation
 │   ├── globe-renderer.ts — Three.js renderer with height displacement
@@ -326,13 +376,13 @@ src/
 ├── ui/
 │   └── app-shell.ts   — DOM-based UI shell
 └── main.ts            — Application entry point, wires everything together
-tests/                 — 23 Vitest test files (306 tests)
-e2e/                   — Playwright integration tests (22 tests)
+tests/                 — 25 Vitest test files (351 tests)
+e2e/                   — Playwright integration tests (29 tests)
 ```
 
 ### Key Design Decisions
 - **Grid Size**: 512×512 (configurable via `GRID_SIZE` in `shared/types.ts`)
-- **Buffer Layout**: ~10.7 MB SharedArrayBuffer with 13 typed array views
+- **Buffer Layout**: ~11.8 MB SharedArrayBuffer with 14 typed array views
 - **Event Bus**: Synchronous pub/sub; agents subscribe to typed events
 - **SimClock**: Starts at -4500 Ma (4.5 Ga); rate in Ma/second; paused by default
 - **PRNG**: Fully deterministic; same seed → same planet
@@ -351,6 +401,14 @@ e2e/                   — Playwright integration tests (22 tests)
 - **Cross-Section Engine**: Great-circle path sampling with Haversine distance, 512 sample points default
 - **Cross-Section Renderer**: Canvas 2D with split vertical scale (linear 0-100 km, log 100-6371 km)
 - **Deep Earth Zones**: 7 zones from Lithospheric Mantle (30 km) to Inner Core (6371 km)
+- **Vegetation Engine**: Miami Model NPP, feature-flagged, stochastic fire model
+- **Biomass Map**: Per-cell biomass in kg/m², max 40 kg/m², cleared by glaciation/desertification
+- **Adaptive Tick Rate**: Configurable maxFrameBudget caps real-time dt (50 ms default in main.ts)
+- **Sparse Delta Snapshots**: 256-byte block-level diffing for efficient snapshot storage
+- **URL Seed Sharing**: Planet seed encoded in URL fragment (#seed=N) for shareable links
+- **UI Inspect Panel**: Floating panel showing per-cell location report on viewport click
+- **Layer Overlays**: 6 toggleable layer views — plates, temperature, precipitation, soil, clouds, biomass
+- **Timeline Strip**: Geological timeline with event markers and cursor position
 
 ### Phase 4 Prerequisites
 - The surface process engines are fully functional and tested

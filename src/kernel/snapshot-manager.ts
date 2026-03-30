@@ -16,6 +16,52 @@ export interface Snapshot {
   bufferData: ArrayBuffer;
 }
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Compare two buffers and produce a sparse delta.
+ * Only stores 256-byte blocks that differ.
+ */
+export function computeDelta(
+  prev: ArrayBuffer,
+  curr: ArrayBuffer,
+): Array<{ offset: number; data: Uint8Array }> {
+  const BLOCK_SIZE = 256;
+  const prevView = new Uint8Array(prev);
+  const currView = new Uint8Array(curr);
+  const len = Math.min(prevView.length, currView.length);
+  const changes: Array<{ offset: number; data: Uint8Array }> = [];
+
+  for (let off = 0; off < len; off += BLOCK_SIZE) {
+    const end = Math.min(off + BLOCK_SIZE, len);
+    let differs = false;
+    for (let j = off; j < end; j++) {
+      if (prevView[j] !== currView[j]) {
+        differs = true;
+        break;
+      }
+    }
+    if (differs) {
+      changes.push({ offset: off, data: currView.slice(off, end) });
+    }
+  }
+
+  return changes;
+}
+
+/**
+ * Apply a delta to a buffer.
+ */
+export function applyDelta(
+  buffer: ArrayBuffer,
+  changes: Array<{ offset: number; data: Uint8Array }>,
+): void {
+  const view = new Uint8Array(buffer);
+  for (const { offset, data } of changes) {
+    view.set(data, offset);
+  }
+}
+
 // ─── SnapshotManager ────────────────────────────────────────────────────────
 
 export class SnapshotManager {

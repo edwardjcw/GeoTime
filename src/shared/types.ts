@@ -179,7 +179,10 @@ const CLOUD_TYPE_MAP_BYTES        = CELL_COUNT * BYTES_U8;                      
 const CLOUD_COVER_MAP_OFFSET      = CLOUD_TYPE_MAP_OFFSET + CLOUD_TYPE_MAP_BYTES;    // 9 699 328
 const CLOUD_COVER_MAP_BYTES       = CELL_COUNT * BYTES_F32;                          // 1 048 576
 
-export const TOTAL_BUFFER_SIZE    = CLOUD_COVER_MAP_OFFSET + CLOUD_COVER_MAP_BYTES;  // 10 747 904
+const BIOMASS_MAP_OFFSET          = CLOUD_COVER_MAP_OFFSET + CLOUD_COVER_MAP_BYTES;  // 10 747 904
+const BIOMASS_MAP_BYTES           = CELL_COUNT * BYTES_F32;                          // 1 048 576
+
+export const TOTAL_BUFFER_SIZE    = BIOMASS_MAP_OFFSET + BIOMASS_MAP_BYTES;          // 11 796 480
 
 export const SharedStateLayout = {
   GRID_SIZE,
@@ -211,6 +214,8 @@ export const SharedStateLayout = {
   CLOUD_TYPE_MAP_BYTES,
   CLOUD_COVER_MAP_OFFSET,
   CLOUD_COVER_MAP_BYTES,
+  BIOMASS_MAP_OFFSET,
+  BIOMASS_MAP_BYTES,
 
   TOTAL_BUFFER_SIZE,
 } as const;
@@ -229,6 +234,7 @@ export interface StateBufferViews {
   windVMap: Float32Array;
   cloudTypeMap: Uint8Array;
   cloudCoverMap: Float32Array;
+  biomassMap: Float32Array;
 }
 
 export function createStateBufferLayout(
@@ -248,6 +254,7 @@ export function createStateBufferLayout(
     windVMap:           new Float32Array(buffer, WIND_V_MAP_OFFSET,          CELL_COUNT),
     cloudTypeMap:       new Uint8Array(buffer,   CLOUD_TYPE_MAP_OFFSET,      CELL_COUNT),
     cloudCoverMap:      new Float32Array(buffer, CLOUD_COVER_MAP_OFFSET,     CELL_COUNT),
+    biomassMap:         new Float32Array(buffer, BIOMASS_MAP_OFFSET,         CELL_COUNT),
   };
 }
 
@@ -272,7 +279,9 @@ export type GeoEventType =
   | 'PLANET_GENERATED'
   | 'CLIMATE_UPDATE'
   | 'TROPICAL_CYCLONE_FORMED'
-  | 'SNOWBALL_EARTH';
+  | 'SNOWBALL_EARTH'
+  | 'VEGETATION_UPDATE'
+  | 'FOREST_FIRE';
 
 export interface LatLon {
   lat: number;
@@ -405,6 +414,17 @@ export interface SnowballEarthPayload {
   equatorialTemp: number;
 }
 
+export interface VegetationUpdatePayload {
+  totalBiomass: number;
+  meanNpp: number;
+  cellsWithVegetation: number;
+}
+
+export interface ForestFirePayload {
+  cellIndex: number;
+  biomassBurned: number;
+}
+
 export interface GeoEventPayloadMap {
   TICK: TickPayload;
   VOLCANIC_ERUPTION: VolcanicEruptionPayload;
@@ -425,6 +445,8 @@ export interface GeoEventPayloadMap {
   CLIMATE_UPDATE: ClimateUpdatePayload;
   TROPICAL_CYCLONE_FORMED: TropicalCycloneFormedPayload;
   SNOWBALL_EARTH: SnowballEarthPayload;
+  VEGETATION_UPDATE: VegetationUpdatePayload;
+  FOREST_FIRE: ForestFirePayload;
 }
 
 export interface GeoEvent<T extends GeoEventType = GeoEventType> {

@@ -9,8 +9,8 @@ describe('SharedStateLayout', () => {
   it('should have correct TOTAL_BUFFER_SIZE', () => {
     expect(SharedStateLayout.TOTAL_BUFFER_SIZE).toBe(TOTAL_BUFFER_SIZE);
     expect(TOTAL_BUFFER_SIZE).toBe(
-      SharedStateLayout.CLOUD_COVER_MAP_OFFSET +
-        SharedStateLayout.CLOUD_COVER_MAP_BYTES,
+      SharedStateLayout.BIOMASS_MAP_OFFSET +
+        SharedStateLayout.BIOMASS_MAP_BYTES,
     );
   });
 });
@@ -38,6 +38,7 @@ describe('createStateBufferLayout', () => {
     expect(views.windVMap).toBeInstanceOf(Float32Array);
     expect(views.cloudTypeMap).toBeInstanceOf(Uint8Array);
     expect(views.cloudCoverMap).toBeInstanceOf(Float32Array);
+    expect(views.biomassMap).toBeInstanceOf(Float32Array);
   });
 
   it('all views should have correct length (GRID_SIZE * GRID_SIZE)', () => {
@@ -55,6 +56,7 @@ describe('createStateBufferLayout', () => {
     expect(views.windVMap.length).toBe(cellCount);
     expect(views.cloudTypeMap.length).toBe(cellCount);
     expect(views.cloudCoverMap.length).toBe(cellCount);
+    expect(views.biomassMap.length).toBe(cellCount);
   });
 
   it('views should be writable and readable', () => {

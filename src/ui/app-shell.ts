@@ -3,6 +3,17 @@
 // cross-section panel, and a semi-transparent HUD bar.  All DOM is created
 // programmatically.
 
+export interface InspectInfo {
+  lat: number;
+  lon: number;
+  elevation: number;
+  rockType: string;
+  soilOrder: string;
+  temperature: number;
+  precipitation: number;
+  biomass: number;
+}
+
 export class AppShell {
   // ── Root containers ─────────────────────────────────────────────────────
   private root: HTMLElement;
@@ -32,6 +43,18 @@ export class AppShell {
   private exportPngBtn: HTMLButtonElement;
   private closeCrossSectionBtn: HTMLButtonElement;
 
+  // ── Inspect panel elements ──────────────────────────────────────────────
+  private inspectPanel: HTMLElement;
+  private inspectContent: HTMLElement;
+
+  // ── Timeline elements ───────────────────────────────────────────────────
+  private timelineStrip: HTMLElement;
+  private timelineBar: HTMLElement;
+  private timelineCursorEl: HTMLElement;
+
+  // ── Layer overlay elements ──────────────────────────────────────────────
+  private layerToggles: Map<string, HTMLButtonElement> = new Map();
+
   // ── Callbacks ───────────────────────────────────────────────────────────
   private newPlanetCb: (() => void) | null = null;
   private pauseToggleCb: (() => void) | null = null;
@@ -40,10 +63,13 @@ export class AppShell {
   private labelToggleCb: ((visible: boolean) => void) | null = null;
   private exportPngCb: (() => void) | null = null;
   private closeCrossSectionCb: (() => void) | null = null;
+  private inspectClickCb: ((x: number, y: number) => void) | null = null;
+  private layerToggleCb: ((layer: string, active: boolean) => void) | null = null;
 
   private sidebarOpen = true;
   private labelsVisible = true;
   private crossSectionOpen = false;
+  private activeLayers: Set<string> = new Set();
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -60,6 +86,41 @@ export class AppShell {
       overflow: 'hidden',
     });
     this.root.appendChild(this.viewport);
+
+    // ── Inspect panel (floating, hidden by default) ───────────────────────
+    this.inspectPanel = el('div', {
+      position: 'absolute',
+      top: '48px',
+      left: '12px',
+      width: '220px',
+      background: 'rgba(10,10,14,0.92)',
+      border: '1px solid rgba(255,255,255,0.12)',
+      borderRadius: '6px',
+      padding: '10px 12px',
+      display: 'none',
+      flexDirection: 'column',
+      gap: '4px',
+      zIndex: '22',
+      color: '#ddd',
+      fontSize: '12px',
+      fontFamily: 'monospace',
+      pointerEvents: 'auto',
+    });
+    this.inspectContent = el('div', {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '2px',
+    });
+    this.inspectPanel.appendChild(this.inspectContent);
+    this.root.appendChild(this.inspectPanel);
+
+    // Forward viewport clicks for inspect
+    this.viewport.addEventListener('click', (e: MouseEvent) => {
+      if (this.inspectClickCb) {
+        const rect = this.viewport.getBoundingClientRect();
+        this.inspectClickCb(e.clientX - rect.left, e.clientY - rect.top);
+      }
+    });
 
     // ── HUD bar ───────────────────────────────────────────────────────────
     this.hud = el('div', {
@@ -185,7 +246,81 @@ export class AppShell {
     this.drawBtn.addEventListener('click', () => this.drawModeCb?.());
     this.sidebar.appendChild(this.drawBtn);
 
+    // -- Layer overlay toggles
+    const layerGroup = el('div', {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '4px',
+    });
+    const layerTitle = document.createElement('span');
+    layerTitle.textContent = 'Layer Overlays';
+    layerTitle.style.opacity = '0.6';
+    layerTitle.style.marginBottom = '2px';
+    layerGroup.appendChild(layerTitle);
+
+    const layerNames = ['plates', 'temperature', 'precipitation', 'soil', 'clouds', 'biomass'];
+    for (const name of layerNames) {
+      const btn = document.createElement('button');
+      btn.textContent = name;
+      btn.dataset.layer = name;
+      styleBtn(btn);
+      btn.style.textAlign = 'left';
+      btn.addEventListener('click', () => {
+        const active = this.activeLayers.has(name);
+        if (active) {
+          this.activeLayers.delete(name);
+          btn.style.background = 'rgba(255,255,255,0.08)';
+        } else {
+          this.activeLayers.add(name);
+          btn.style.background = '#2a6';
+        }
+        this.layerToggleCb?.(name, !active);
+      });
+      this.layerToggles.set(name, btn);
+      layerGroup.appendChild(btn);
+    }
+    this.sidebar.appendChild(layerGroup);
+
     this.root.appendChild(this.sidebar);
+
+    // ── Geological Timeline (bottom strip above cross-section) ────────────
+    this.timelineStrip = el('div', {
+      position: 'absolute',
+      left: '0',
+      right: '0',
+      bottom: '0',
+      height: '40px',
+      background: 'rgba(10,10,14,0.85)',
+      borderTop: '1px solid rgba(255,255,255,0.10)',
+      display: 'flex',
+      alignItems: 'center',
+      zIndex: '18',
+      pointerEvents: 'auto',
+      userSelect: 'none',
+    });
+    this.timelineBar = el('div', {
+      position: 'relative',
+      flex: '1',
+      height: '12px',
+      margin: '0 12px',
+      background: 'rgba(255,255,255,0.08)',
+      borderRadius: '6px',
+      overflow: 'visible',
+    });
+    this.timelineCursorEl = el('div', {
+      position: 'absolute',
+      top: '-4px',
+      left: '0%',
+      width: '3px',
+      height: '20px',
+      background: '#4af',
+      borderRadius: '2px',
+      transition: 'left 0.15s ease',
+      pointerEvents: 'none',
+    });
+    this.timelineBar.appendChild(this.timelineCursorEl);
+    this.timelineStrip.appendChild(this.timelineBar);
+    this.root.appendChild(this.timelineStrip);
 
     // ── Cross-Section Panel (bottom, hidden by default) ───────────────────
     this.crossSectionPanel = el('div', {
@@ -370,6 +505,98 @@ export class AppShell {
     this.drawBtn.textContent = active ? '✏️ Click Globe to Draw' : '✏️ Draw Cross-Section';
   }
 
+  // ── Inspect Panel API ──────────────────────────────────────────────────
+
+  /** Register a callback for viewport clicks (for inspect). */
+  onInspectClick(cb: (x: number, y: number) => void): void {
+    this.inspectClickCb = cb;
+  }
+
+  /** Show the inspect panel with location details. */
+  showInspectPanel(info: InspectInfo): void {
+    this.inspectContent.innerHTML = '';
+    const lines: [string, string][] = [
+      ['Lat/Lon', `${info.lat.toFixed(2)}°, ${info.lon.toFixed(2)}°`],
+      ['Elevation', `${info.elevation.toFixed(0)} m`],
+      ['Rock Type', info.rockType],
+      ['Soil Order', info.soilOrder],
+      ['Temperature', `${info.temperature.toFixed(1)} °C`],
+      ['Precipitation', `${info.precipitation.toFixed(0)} mm/yr`],
+      ['Biomass', `${info.biomass.toFixed(1)} kg/m²`],
+    ];
+    for (const [label, value] of lines) {
+      const row = el('div', { display: 'flex', justifyContent: 'space-between' });
+      const lbl = document.createElement('span');
+      lbl.textContent = label;
+      lbl.style.opacity = '0.6';
+      const val = document.createElement('span');
+      val.textContent = value;
+      row.append(lbl, val);
+      this.inspectContent.appendChild(row);
+    }
+    this.inspectPanel.style.display = 'flex';
+  }
+
+  /** Hide the inspect panel. */
+  hideInspectPanel(): void {
+    this.inspectPanel.style.display = 'none';
+  }
+
+  // ── Timeline API ───────────────────────────────────────────────────────
+
+  /** Set event markers on the geological timeline. */
+  setTimelineEvents(events: Array<{ timeMa: number; type: string; description: string }>): void {
+    // Remove existing markers
+    const existing = this.timelineBar.querySelectorAll('[data-timeline-event]');
+    existing.forEach((m) => m.remove());
+
+    if (events.length === 0) return;
+    const maxTime = Math.max(...events.map((e) => e.timeMa), 1);
+
+    for (const evt of events) {
+      const pct = Math.min(100, Math.max(0, (evt.timeMa / maxTime) * 100));
+      const marker = el('div', {
+        position: 'absolute',
+        left: `${pct}%`,
+        top: '0',
+        width: '4px',
+        height: '100%',
+        borderRadius: '2px',
+        background: evt.type === 'extinction' ? '#e55' : '#fa4',
+        opacity: '0.8',
+        pointerEvents: 'none',
+      });
+      marker.dataset.timelineEvent = evt.description;
+      marker.title = `${evt.timeMa} Ma – ${evt.description}`;
+      this.timelineBar.appendChild(marker);
+    }
+  }
+
+  /** Set the cursor position on the geological timeline. */
+  setTimelineCursor(timeMa: number): void {
+    // Cursor position is relative to the max time of currently placed markers
+    const markers = this.timelineBar.querySelectorAll('[data-timeline-event]');
+    let maxTime = 4600; // default Earth age
+    if (markers.length > 0) {
+      const times: number[] = [];
+      markers.forEach((m) => {
+        const title = (m as HTMLElement).title;
+        const match = title.match(/^([\d.]+)/);
+        if (match) times.push(Number(match[1]));
+      });
+      if (times.length > 0) maxTime = Math.max(...times, 1);
+    }
+    const pct = Math.min(100, Math.max(0, (timeMa / maxTime) * 100));
+    this.timelineCursorEl.style.left = `${pct}%`;
+  }
+
+  // ── Layer Overlay API ──────────────────────────────────────────────────
+
+  /** Register a callback for layer overlay toggles. */
+  onLayerToggle(cb: (layer: string, active: boolean) => void): void {
+    this.layerToggleCb = cb;
+  }
+
   dispose(): void {
     this.root.innerHTML = '';
     this.newPlanetCb = null;
@@ -379,6 +606,8 @@ export class AppShell {
     this.labelToggleCb = null;
     this.exportPngCb = null;
     this.closeCrossSectionCb = null;
+    this.inspectClickCb = null;
+    this.layerToggleCb = null;
   }
 
   // ── Sidebar toggle ─────────────────────────────────────────────────────
