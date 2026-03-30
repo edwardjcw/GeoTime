@@ -89,3 +89,8 @@ This document tracks the migration of GeoTime's simulation logic from the browse
 - [ ] Move snapshot management to backend with delta compression
 - [ ] Add integration tests for API endpoints
 - [ ] Performance optimization: parallel engine ticks using Task.WhenAll
+- [ ] Biomatter engine: migrate simple non-plant biomatter system (microbes, plankton, reef organisms) to backend — ocean chemistry, biogenic sedimentation, atmosphere O₂/CH₄ feedback, petroleum source-rock pipeline (see Phase 7 of implementation plan)
+- [ ] Add `biomatterMap` and `organicCarbonMap` state arrays and REST endpoints (`GET /api/state/biomattermap`, `GET /api/state/organiccarbonmap`)
+- [ ] Add `BiomatterEngine` to `GeoTime.Core/Engines/` with cyanobacteria, plankton, reef, fungi productivity models
+- [ ] Add `SED_OIL_SHALE` to `RockType` enum for petroleum source rocks
+- [ ] Expand `CellInspection` model with biomatter density, organic carbon, and reef presence fields

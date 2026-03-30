@@ -1,5 +1,5 @@
 # GeoTime — Planetary Geological Simulation Engine
-## Comprehensive Implementation Plan v1.1
+## Comprehensive Implementation Plan v1.2
 **Multi-Agent Architecture · Earth-Analog Iteration**
 
 ---
@@ -15,9 +15,10 @@
 7. [Soil Type Catalog](#7-soil-type-catalog)
 8. [Cloud Type Catalog](#8-cloud-type-catalog)
 9. [Atmospheric & Climate Modeling](#9-atmospheric--climate-modeling)
-10. [Recommended Technology Stack](#10-recommended-technology-stack)
-11. [Risk Register](#11-risk-register)
-12. [Per-Agent Briefing Notes](#12-per-agent-briefing-notes)
+10. [Biomatter System](#10-biomatter-system)
+11. [Recommended Technology Stack](#11-recommended-technology-stack)
+12. [Risk Register](#12-risk-register)
+13. [Per-Agent Briefing Notes](#13-per-agent-briefing-notes)
 
 ---
 
@@ -43,6 +44,7 @@ Every system must be loosely coupled via message-passing interfaces. Agents own 
 - Day/night cycle with solar angle
 - Physically-based terrain texturing by rock type, soil type, and biome
 - Optional vegetation growth modeling (feature-flagged)
+- Simple biomatter beyond plants: microbes, plankton, reef organisms — influencing ocean chemistry, biogenic sedimentation, atmospheric composition, and petroleum source-rock formation (feature-flagged)
 - Temporal scrubber: forward and backward through geological time
 - Free-orbit camera with zoom to any surface location
 
@@ -50,8 +52,7 @@ Every system must be loosely coupled via message-passing interfaces. Agents own 
 
 - Non-Earth-analog planet types
 - Multi-star systems or orbital mechanics
-- Evolutionary biology / fauna
-- Deep-sea ocean chemistry
+- Evolutionary biology / complex fauna (simple biomatter such as microbes, plankton, and reef organisms are in scope — see Section 10)
 - Multiplayer or collaborative editing
 - Real-time surface editing by user
 - Civilization placement
@@ -171,6 +172,8 @@ All agents communicate through the typed event bus. The following are the canoni
 | `cloudTypeMap` | Uint8Array | ATMO | Dominant cloud genus per cell (see Section 8) |
 | `cloudCoverMap` | Float32Array | ATMO | Cloud fraction 0.0–1.0 per cell |
 | `biomassMap` | Float32Array | VEG (optional) | Vegetation biomass kg C/m², feature-flagged |
+| `biomatterMap` | Float32Array | GEO (optional) | Non-plant biomatter density kg C/m² (microbes, plankton, reef), feature-flagged |
+| `organicCarbonMap` | Float32Array | GEO (optional) | Buried organic carbon kg C/m² (kerogen / petroleum precursor), feature-flagged |
 
 ### Stratigraphy Stack (separate data structure, per-cell)
 
@@ -207,6 +210,9 @@ The stack is ordered from youngest (top) to oldest (bottom). The AGENT-SECTION s
 | `LABEL_TOGGLE` | `{ visible: bool }` | UI | SECTION |
 | `SEEK_TO` | `{ t }` | UI | KERNEL |
 | `SNAPSHOT_READY` | `{ snapshotId, t }` | KERNEL | UI |
+| `BIOMATTER_UPDATE` | `{ t, totalBiomatter, meanProductivity }` | GEO | RENDER, ATMO |
+| `OXYGENATION_EVENT` | `{ t, deltaO2_pct }` | GEO | ATMO, RENDER |
+| `PETROLEUM_DEPOSIT` | `{ cellIndex, t, thickness_m }` | GEO | SECTION |
 
 ### SimClock
 
@@ -462,6 +468,51 @@ Full specification in Section 5. Key deliverables:
 - Layer overlay panel: tectonic plates, temperature, precipitation, soil type, cloud type (toggleable)
 - Planet URL sharing: seed encoded in URL fragment
 - Timelapse export: render to WebM at 30 fps
+
+---
+
+### Phase 7 — Biomatter (Weeks 19–21)
+
+**Goal**: Simple non-plant biomatter that reshapes ocean chemistry, sedimentation, atmosphere, and produces petroleum source rocks. Feature-flagged, building on the vegetation module from Phase 6.
+
+**AGENT-GEO: Biomatter Engine (feature-flagged)**
+- **Microbial mats / stromatolites**: earliest life form; appear on shallow marine cells when temperature > 10°C and sunlight available; produce laminated carbonate structures recorded in stratigraphy as SED_LIMESTONE or SED_CHERT
+- **Cyanobacteria**: oxygenic photosynthesis; emit OXYGENATION_EVENT when cumulative biomatter exceeds threshold; drive the Great Oxygenation Event analog, converting atmosphere from anoxic to oxic over hundreds of Myr
+- **Marine plankton (phytoplankton & zooplankton)**: productivity driven by ocean cell temperature (10–25°C optimum), nutrient upwelling proximity, and sunlight; phytoplankton contribute O₂ to ATMO; zooplankton shells produce biogenic sediment (SED_CHALK from coccoliths, SED_CHERT from radiolarians/diatoms, SED_DIATOMITE)
+- **Reef organisms (corals, sponges)**: colonize warm shallow marine cells (18–30°C, depth < 50 m); build carbonate reef structures that modify local heightMap and deposit SED_LIMESTONE layers; reef growth rate proportional to temperature and water clarity
+- **Benthic organisms**: seafloor biomatter in deep marine cells; bioturbation mixes upper sediment layers, increasing weathering rate of top stratigraphy layer
+- **Fungi & decomposers**: terrestrial cells with soil depth > 0.1 m and organic litter; accelerate pedogenesis rate by 20–40%; increase soil organic carbon content
+
+**AGENT-GEO: Petroleum Source Rocks**
+- **Organic carbon burial**: when biomatter (marine plankton, microbial mats) dies in anoxic marine basins, organic carbon accumulates in organicCarbonMap
+- **Kerogen formation**: buried organic carbon at depth > 2 km and temperature 60–120°C (oil window) converts to kerogen; recorded as a new StratigraphicLayer with rockType SED_OIL_SHALE
+- **Petroleum migration**: simplified model — kerogen layers capped by impermeable shale or evaporite form petroleum trap; flagged in stratigraphy for cross-section display
+- **Coal analogs**: terrestrial peat (SED_PEAT) from high-biomass vegetation zones, when buried to depth > 1 km, converts to SED_COAL; rate depends on burial depth and time
+
+**AGENT-ATMO: Biomatter ↔ Atmosphere Feedback**
+- Cyanobacteria and phytoplankton O₂ production increases atmospheric O₂ concentration over geological time
+- Methane production by anaerobic microbes in anoxic wetlands and ocean sediments adds CH₄ to greenhouse gas budget
+- CO₂ drawdown by marine biomatter (biological pump): plankton fix CO₂ at surface, organic matter sinks and sequesters carbon in deep ocean sediment
+- Atmospheric O₂ level gates: below 2% O₂, only anaerobic biomatter active; above 2%, aerobic organisms enabled; above 15%, terrestrial organisms and fire possible
+
+**AGENT-GEO: Biogenic Sedimentation**
+- Coccolith ooze → SED_CHALK: deposited in deep marine cells when plankton productivity is high
+- Radiolarian / diatom ooze → SED_CHERT / SED_DIATOMITE: deposited in cold, nutrient-rich upwelling zones
+- Coral reef limestone → SED_LIMESTONE: deposited in warm shallow marine cells with active reef organisms
+- Stromatolite layers → SED_LIMESTONE: laminated carbonate in shallow tidal flat cells with microbial mats
+- Phosphorite → SED_PHOSPHORITE: deposited in upwelling zones where organic matter concentration is high
+- Banded iron formation → SED_IRONSTONE: deposited in Archean–Proterozoic oceans when dissolved iron reacts with newly produced O₂ from cyanobacteria
+
+**AGENT-RENDER: Biomatter Visuals**
+- biomatterMap overlay: toggleable heat-map layer showing non-plant biomatter density
+- Reef structures: subtle heightMap bump and distinct texture on warm shallow marine cells
+- Stromatolite texture on ancient shallow marine shelf cells
+- organicCarbonMap overlay: dark organic-rich layer visible in cross-section
+
+**AGENT-UI: Biomatter Controls**
+- Biomatter toggle in settings panel (feature-flagged, like vegetation)
+- Cell inspection expanded: biomatter density, organic carbon, reef presence
+- Layer overlay: biomatter density map (marine + terrestrial combined)
 
 ---
 
@@ -811,7 +862,101 @@ Rate increases with: higher temperature, higher precipitation, more exposed fres
 
 ---
 
-## 10. Recommended Technology Stack
+## 10. Biomatter System
+
+Beyond plant vegetation (covered by the optional VegetationEngine), GeoTime models simple non-plant biomatter — microbes, plankton, reef-building organisms, fungi, and decomposers. These organisms drive fundamental planetary changes: oxygenating the atmosphere, producing biogenic sediments, altering ocean chemistry, and generating petroleum source rocks.
+
+### Biomatter Categories
+
+| Category | Habitat | Key Output | Geological Record |
+|----------|---------|------------|-------------------|
+| Cyanobacteria | Shallow marine, tidal flats | O₂ production, stromatolite structures | SED_LIMESTONE (laminated), SED_IRONSTONE (via iron oxidation) |
+| Microbial mats | Shallow marine, lagoons | Carbonate precipitation, organic carbon burial | SED_LIMESTONE, SED_CHERT |
+| Phytoplankton (coccolithophores) | Open ocean, photic zone | O₂ production, coccolith shells, CO₂ drawdown | SED_CHALK |
+| Phytoplankton (diatoms) | Cold nutrient-rich ocean | O₂ production, siliceous frustules | SED_DIATOMITE, SED_CHERT |
+| Zooplankton (foraminifera, radiolaria) | Open ocean | Carbonate/siliceous test accumulation | SED_LIMESTONE, SED_CHERT |
+| Reef organisms (corals, sponges) | Warm shallow marine (18–30°C) | Carbonate reef framework, local height modification | SED_LIMESTONE |
+| Benthic organisms | Seafloor, all depths | Bioturbation of upper sediment layers | Increased weathering rate of top stratigraphy layer |
+| Fungi & decomposers | Terrestrial soils | Organic litter breakdown, accelerated pedogenesis | Enhanced soil organic carbon; faster soil order maturation |
+| Anaerobic microbes | Anoxic basins, wetlands | CH₄ (methane) production, organic carbon preservation | Kerogen, SED_OIL_SHALE, petroleum precursors |
+
+### Biomatter Productivity Model
+
+Biomatter productivity is computed per cell based on habitat type:
+
+**Marine biomatter** (ocean cells):
+- `productivity = base_rate × temp_factor × nutrient_factor × light_factor`
+- `temp_factor`: bell curve centered at 20°C for tropical plankton; shifted to 5°C for cold-water diatoms
+- `nutrient_factor`: proportional to proximity to upwelling zones (divergent ocean boundaries, western continental margins)
+- `light_factor`: 1.0 for cells in photic zone (depth < 200 m); decreases with depth for benthic organisms
+- Maximum marine biomatter: 5 kg C/m²
+
+**Terrestrial biomatter** (land cells, non-plant):
+- Fungi and decomposers: `productivity = 0.2 × vegetation_biomass` (proportional to plant litter availability)
+- Requires soil depth > 0.1 m, temperature > 0°C
+- Maximum terrestrial non-plant biomatter: 2 kg C/m²
+
+### Atmospheric Interactions
+
+Biomatter drives major atmospheric composition changes over geological time:
+
+| Process | Direction | Mechanism | Timescale |
+|---------|-----------|-----------|-----------|
+| Oxygenic photosynthesis | O₂ ↑ | Cyanobacteria + phytoplankton fix CO₂, release O₂ | 100 Myr–1 Gyr |
+| Biological pump | CO₂ ↓ | Plankton fix CO₂ at surface; organic matter sinks to deep ocean | 1–10 Myr |
+| Methanogenesis | CH₄ ↑ | Anaerobic microbes in anoxic basins and wetlands produce methane | 1–100 Myr |
+| Great Oxygenation Event | O₂ ↑↑ | Cumulative cyanobacteria output exceeds reducing sinks (dissolved iron, volcanic gases) | One-time threshold event |
+
+**O₂ gating rules**:
+- < 0.1% O₂: only anaerobic microbes and cyanobacteria active
+- 0.1–2% O₂: aerobic marine organisms enabled (plankton, reef organisms)
+- 2–15% O₂: terrestrial fungi and decomposers enabled
+- \> 15% O₂: fire becomes possible; vegetation fire model activates
+
+### Ocean Chemistry Effects
+
+| Effect | Trigger | Impact |
+|--------|---------|--------|
+| Carbonate compensation depth (CCD) | Marine plankton productivity + ocean temperature | Below CCD, carbonate shells dissolve; above CCD, SED_CHALK / SED_LIMESTONE deposited |
+| Banded iron formation | Cyanobacteria O₂ output in iron-rich Archean ocean | SED_IRONSTONE deposited until dissolved iron exhausted |
+| Ocean anoxia events | High organic productivity + poor ocean circulation | Organic carbon preserved in anoxic bottom water → petroleum source rocks |
+| Reef building | Coral/sponge colonization of warm shallow cells | Local heightMap increase (up to +30 m over 10 Myr); SED_LIMESTONE deposition |
+| Phosphorite deposition | High biomatter productivity in upwelling zones | SED_PHOSPHORITE layers in stratigraphy |
+
+### Petroleum Source-Rock Pipeline
+
+Petroleum formation follows a multi-step geological pipeline:
+
+1. **Organic carbon accumulation**: High-productivity marine biomatter dies and settles in anoxic basin → organicCarbonMap increases
+2. **Burial**: Sedimentation covers organic-rich layer; recorded in stratigraphy
+3. **Oil window** (60–120°C, burial depth 2–4 km): Kerogen matures into hydrocarbons → new StratigraphicLayer with `rockType = SED_OIL_SHALE`
+4. **Gas window** (120–200°C, burial depth > 4 km): Remaining kerogen cracks to natural gas
+5. **Petroleum trap**: Oil/gas migrates upward until capped by impermeable layer (SED_SHALE, SED_EVAPORITE) → flagged as petroleum reservoir in stratigraphy for cross-section display
+
+### Biogenic Sediment Deposition Rules
+
+| Sediment Type | Enum | Condition | Deposition Rate |
+|---------------|------|-----------|-----------------|
+| Chalk | SED_CHALK | Ocean cell, depth > CCD, coccolith productivity > threshold | 0.01–0.05 m/Myr |
+| Chert | SED_CHERT | Cold ocean, upwelling zone, radiolarian/diatom productivity high | 0.005–0.02 m/Myr |
+| Diatomite | SED_DIATOMITE | Cold nutrient-rich ocean or lacustrine, diatom bloom zone | 0.01–0.04 m/Myr |
+| Reef limestone | SED_LIMESTONE | Warm shallow marine (18–30°C), reef organism active | 0.1–1.0 m/Myr |
+| Stromatolite carbonate | SED_LIMESTONE | Shallow tidal flat, microbial mat active, Precambrian or low-grazing | 0.01–0.1 m/Myr |
+| Phosphorite | SED_PHOSPHORITE | Upwelling zone, high organic concentration | 0.001–0.01 m/Myr |
+| Banded iron formation | SED_IRONSTONE | Archean ocean, dissolved iron + cyanobacteria O₂ | 0.01–0.05 m/Myr (ceases after iron exhaustion) |
+| Oil shale | SED_OIL_SHALE | Buried organic carbon in oil window (60–120°C, 2–4 km depth) | Conversion from existing organic layer |
+
+### New Rock Type
+
+The biomatter system introduces one new rock type to the geological layer catalog:
+
+| Enum | Name | Formation Context | Texture Notes |
+|------|------|------------------|--------------|
+| SED_OIL_SHALE | Oil Shale (Kerogen-rich) | Mature organic carbon in oil window | Dark brown-black, laminated, organic-rich |
+
+---
+
+## 11. Recommended Technology Stack
 
 ### Rendering
 
@@ -857,7 +1002,7 @@ Rate increases with: higher temperature, higher precipitation, more exposed fres
 
 ---
 
-## 11. Risk Register
+## 12. Risk Register
 
 | Risk | Severity | Agent | Mitigation |
 |------|----------|-------|-----------|
@@ -872,11 +1017,14 @@ Rate increases with: higher temperature, higher precipitation, more exposed fres
 | Soil coverage: not all 12 orders appearing on a typical planet | MEDIUM | GEO | Guarantee climate zone diversity via PROC; add minimum coverage assertion in integration test suite |
 | Texture memory exceeding GPU budget at max LOD | LOW | RENDER | Streaming KTX2 tiles; virtual texturing; only resident tiles for camera-visible region |
 | Vegetation feature scope creep | LOW | All | Feature-flagged from build time; disable for release candidate |
+| Biomatter feature scope creep into evolutionary biology | LOW | GEO, ATMO | Keep biomatter simple: no speciation, no food webs, no behavioral modeling; organisms are productivity functions, not individuals |
+| Petroleum source-rock pipeline complexity | LOW | GEO | Simplified burial/maturation model; no fluid-flow simulation; flag petroleum traps in stratigraphy only |
+| Biomatter ↔ atmosphere feedback loop instability | MEDIUM | GEO, ATMO | Clamp O₂ and CH₄ rate-of-change per tick; operator-split biomatter and atmosphere updates |
 | Cross-section label readability at all zoom levels | LOW | SECTION | Dynamic font size; leader lines; label LOD culling below 3 px layer height |
 
 ---
 
-## 12. Per-Agent Briefing Notes
+## 13. Per-Agent Briefing Notes
 
 > **For all agents**: Read Section 3 (Inter-Agent Interfaces) before writing any code. Never mutate another agent's canonical data directly — always emit an event and let the owning agent update its own state. The KERNEL agent has final authority over clock advancement.
 
@@ -905,6 +1053,10 @@ Rate increases with: higher temperature, higher precipitation, more exposed fres
 - Emit `VOLCANIC_ERUPTION` and `PLATE_COLLISION` events consistently — RENDER and ATMO depend on them
 - Soil formation (pedogenesis) must be tied to the CLORPT factors: document which climate inputs you read from ATMO at each soil-formation tick
 - Dip angle updates must be gradual and physically motivated — avoid sudden discontinuities that would create visual artifacts in the cross-section
+- **Biomatter (Phase 7)**: The biomatter engine is feature-flagged like vegetation. Biomatter productivity is a per-cell function of habitat type (marine vs. terrestrial), temperature, and nutrients — keep it simple, no individual organisms
+- **Biogenic sedimentation**: Cyanobacteria, plankton, and reef organisms deposit new StratigraphicLayers (SED_CHALK, SED_CHERT, SED_LIMESTONE, etc.) — reuse existing sediment rock types where possible
+- **Petroleum pipeline**: Organic carbon burial → kerogen maturation is a depth/temperature threshold check on existing stratigraphy — no fluid-flow simulation needed
+- Emit `BIOMATTER_UPDATE` and `OXYGENATION_EVENT` consistently — ATMO depends on them for atmosphere composition changes
 
 ### AGENT-ATMO
 
@@ -914,6 +1066,8 @@ Rate increases with: higher temperature, higher precipitation, more exposed fres
 - Ice-age onset and recovery must emit events consumed by GEO (glacial erosion activation) and RENDER (ice/snow shader)
 - All 10 cloud genera must be generatable; ensure each has at least one trigger condition that will be met on a typical planet within 500 Myr
 - Cloud cover must affect surface albedo, which feeds back into the temperature calculation
+- **Biomatter (Phase 7)**: Accept `BIOMATTER_UPDATE` and `OXYGENATION_EVENT` from GEO to update atmospheric O₂ and CH₄ concentrations; O₂ level gates control which biomatter categories are active
+- The biological pump (plankton CO₂ fixation → deep ocean burial) provides a long-term CO₂ sink alongside the Urey weathering reaction — both must be represented
 
 ### AGENT-RENDER
 
@@ -942,10 +1096,11 @@ Rate increases with: higher temperature, higher precipitation, more exposed fres
 - All map overlay layers (plates, temperature, precipitation, soil, cloud) are shader uniforms or texture swaps in RENDER — communicate via event, not direct state mutation
 - The info inspector popup (click on globe → ray-cast → sample all maps) should display: elevation, rock type, age, soil order, biome, mean temperature, annual precipitation, dominant cloud type
 - Settings panel: vegetation toggle, label toggle, quality slider (LOD bias), cross-section sample count
+- **Biomatter (Phase 7)**: Add biomatter toggle to settings panel; expand cell inspection to show biomatter density, organic carbon, and reef presence; add biomatter density overlay to layer panel
 - Mobile touch support must be considered from the start — pinch-zoom, two-finger pan, long-press for cross-section draw
 
 ---
 
-*End of GeoTime Implementation Plan v1.1*
+*End of GeoTime Implementation Plan v1.2*
 
-*6 Agents · 7 Domains · 6 Phases · 18 Weeks · 1 Planet at a Time*
+*6 Agents · 7 Domains · 7 Phases · 21 Weeks · 1 Planet at a Time*

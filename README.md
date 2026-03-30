@@ -15,8 +15,9 @@ GeoTime uses a client-server architecture where all computation-heavy simulation
 │  • UI shell / HUD    │   GET  /api/state/*      │  • Surface processes     │
 │  • Layer overlays    │   POST /api/crosssection  │  • Climate & weather     │
 │                      │                          │  • Vegetation engine     │
+│                      │                          │  • Biomatter engine      │
 └─────────────────────┘                          │  • Cross-section engine  │
-                                                  └─────────────────────────┘
+                                                  └──────────────────────────┘
 ```
 
 ## Features
@@ -28,6 +29,7 @@ GeoTime uses a client-server architecture where all computation-heavy simulation
 - **Climate System**: 3-cell atmospheric circulation, Milankovitch cycles, greenhouse forcing, ice-albedo feedback
 - **Weather**: Frontal systems, tropical cyclones, orographic precipitation, 10 cloud genera
 - **Vegetation**: Miami Model NPP, biomass accumulation, stochastic forest fires, albedo feedback
+- **Biomatter**: Simple non-plant organisms (microbes, plankton, reef builders) driving ocean chemistry, biogenic sedimentation, atmospheric O₂/CH₄, and petroleum source rocks (feature-flagged)
 - **Cross-Section Viewer**: Interactive great-circle cross-sections with split-scale rendering
 - **Performance**: Adaptive tick rate, deterministic seeded PRNG
 - **UI**: Globe viewport, collapsible sidebar, layer overlays, geological timeline, inspect panel, URL seed sharing
@@ -65,7 +67,7 @@ VITE_API_BASE=http://localhost:5000 npm run dev
 - `GeoTime.Core/Models/` — Enums, data models (RockType, SoilOrder, PlateInfo, etc.)
 - `GeoTime.Core/Proc/` — Seeded PRNG (Xoshiro256\*\*), simplex noise, planet generator
 - `GeoTime.Core/Kernel/` — Event bus, simulation clock, event log, snapshot manager
-- `GeoTime.Core/Engines/` — All geological simulation engines (tectonic, erosion, glacial, weathering, pedogenesis, climate, weather, vegetation, cross-section)
+- `GeoTime.Core/Engines/` — All geological simulation engines (tectonic, erosion, glacial, weathering, pedogenesis, climate, weather, vegetation, biomatter, cross-section)
 - `GeoTime.Core/SimulationOrchestrator.cs` — Top-level simulation manager
 - `GeoTime.Api/Program.cs` — REST API endpoints
 - `GeoTime.Tests/` — 75 xUnit tests across 11 test files
