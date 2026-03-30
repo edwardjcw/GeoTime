@@ -16,7 +16,7 @@ import { VegetationEngine } from '../src/geo/vegetation-engine';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-function makeViews(): { views: StateBufferViews; buf: ArrayBuffer } {
+function makeViews(): { views: StateBufferViews; buf: ArrayBufferLike } {
   const buf = new ArrayBuffer(TOTAL_BUFFER_SIZE) as unknown as SharedArrayBuffer;
   const views = createStateBufferLayout(buf);
   return { views, buf };
@@ -24,7 +24,7 @@ function makeViews(): { views: StateBufferViews; buf: ArrayBuffer } {
 
 function generatePlanet(seed: number): {
   views: StateBufferViews;
-  buf: ArrayBuffer;
+  buf: ArrayBufferLike;
   bus: EventBus;
   log: EventLog;
   tectonic: TectonicEngine;
