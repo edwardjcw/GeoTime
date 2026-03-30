@@ -92,7 +92,19 @@ public sealed class SimulationOrchestrator
             tasks.Add(Task.Run(() => _vegetation.Tick(Clock.T, deltaMa)));
 
         if (tasks.Count > 0)
-            Task.WhenAll(tasks).GetAwaiter().GetResult();
+        {
+            try
+            {
+                Task.WhenAll(tasks).GetAwaiter().GetResult();
+            }
+            catch (AggregateException ex)
+            {
+                // Log but don't crash — partial state is better than no state.
+                // In production, this would feed into a diagnostics channel.
+                System.Diagnostics.Debug.WriteLine(
+                    $"Parallel engine tick error: {ex.Flatten().InnerExceptions.Count} engine(s) failed");
+            }
+        }
     }
 
     /// <summary>Build a cross-section profile along the given path.</summary>
