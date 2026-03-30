@@ -1,21 +1,15 @@
 // ─── GeoTime — Main Entry Point ─────────────────────────────────────────────
+// The frontend now delegates all simulation/calculation work to the C# .NET
+// backend via REST API calls. The frontend only handles display (Three.js
+// rendering, UI shell, cross-section Canvas 2D rendering).
 
 import './style.css';
-import { TOTAL_BUFFER_SIZE, GRID_SIZE, createStateBufferLayout } from './shared/types';
-import { EventBus } from './kernel/event-bus';
-import { SimClock } from './kernel/sim-clock';
-import { EventLog } from './kernel/event-log';
-import { SnapshotManager } from './kernel/snapshot-manager';
+import { GRID_SIZE } from './shared/types';
 import { GlobeRenderer } from './render/globe-renderer';
-import { PlanetGenerator } from './proc/planet-generator';
-import { TectonicEngine } from './geo/tectonic-engine';
-import { SurfaceEngine } from './geo/surface-engine';
-import { AtmosphereEngine } from './geo/atmosphere-engine';
-import { CrossSectionEngine } from './geo/cross-section-engine';
-import { VegetationEngine } from './geo/vegetation-engine';
 import { renderCrossSection, exportCrossSectionPNG } from './render/cross-section-renderer';
 import { AppShell } from './ui/app-shell';
-import type { StateBufferViews, LatLon } from './shared/types';
+import * as api from './api/backend-client';
+import type { LatLon } from './shared/types';
 
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 
@@ -24,111 +18,57 @@ if (!appEl) {
   throw new Error('Root element #app not found in the document.');
 }
 
-// ── Shared state buffer ─────────────────────────────────────────────────────
-
-function allocateBuffer(): ArrayBufferLike {
-  if (typeof SharedArrayBuffer !== 'undefined') {
-    return new SharedArrayBuffer(TOTAL_BUFFER_SIZE);
-  }
-  return new ArrayBuffer(TOTAL_BUFFER_SIZE);
-}
-
-let buffer = allocateBuffer();
-let stateViews: StateBufferViews = createStateBufferLayout(
-  buffer as SharedArrayBuffer,
-);
-
-// ── Core systems ────────────────────────────────────────────────────────────
-
-const bus = new EventBus();
-const clock = new SimClock(bus, { maxFrameBudget: 0.05 });
-const eventLog = new EventLog();
-const snapshotManager = new SnapshotManager(10, 500);
 const shell = new AppShell(appEl);
-
 const viewportEl = shell.getViewportElement();
 const renderer = new GlobeRenderer(viewportEl);
 
-let tectonicEngine: TectonicEngine | null = null;
-let surfaceEngine: SurfaceEngine | null = null;
-let atmosphereEngine: AtmosphereEngine | null = null;
-let vegetationEngine: VegetationEngine | null = null;
+// ── Simulation state (display-only buffers populated from backend) ──────────
 
-// Phase 5: Cross-Section Engine (persistent, re-initialised on planet generation)
-const crossSectionEngine = new CrossSectionEngine(bus);
+/** Current simulation time (Ma), updated from backend. */
+let simTimeMa = -4500;
+/** Whether the simulation is paused locally. */
+let paused = false;
+/** Simulation rate (Ma per second of real time). */
+let simRate = 1;
 
-// ── Planet generation ───────────────────────────────────────────────────────
+// ── Planet generation via backend ───────────────────────────────────────────
 
 function randomSeed(): number {
   return (Math.random() * 0xffff_fffe + 1) >>> 0;
 }
 
-function generatePlanet(seed: number): void {
-  // Re-allocate to clear previous state
-  buffer = allocateBuffer();
-  stateViews = createStateBufferLayout(buffer as SharedArrayBuffer);
+async function doGeneratePlanet(seed: number): Promise<void> {
+  try {
+    const result = await api.generatePlanet(seed);
+    simTimeMa = result.timeMa;
 
-  const generator = new PlanetGenerator(seed);
-  const result = generator.generate(stateViews);
+    // Fetch initial display data from backend
+    const [heightData, plateData] = await Promise.all([
+      api.getHeightMap(),
+      api.getPlateMap(),
+    ]);
 
-  // Initialize Phase 2 tectonic engine
-  eventLog.clear();
-  snapshotManager.clear();
-  tectonicEngine = new TectonicEngine(bus, eventLog, seed, {
-    minTickInterval: 0.1,
-  });
-  tectonicEngine.initialize(
-    result.plates,
-    result.hotspots,
-    result.atmosphere,
-    stateViews,
-  );
+    const heightMap = new Float32Array(heightData);
+    const plateMap = new Uint16Array(plateData);
 
-  // Initialize Phase 3 surface engine
-  surfaceEngine = new SurfaceEngine(bus, eventLog, seed, {
-    minTickInterval: 0.5,
-  });
-  surfaceEngine.initialize(stateViews, tectonicEngine.stratigraphy);
+    renderer.updateHeightMap(heightMap, GRID_SIZE);
+    renderer.updatePlateMap(plateMap, GRID_SIZE);
 
-  // Initialize Phase 4 atmosphere engine
-  atmosphereEngine = new AtmosphereEngine(bus, eventLog, seed, {
-    minTickInterval: 1.0,
-  });
-  atmosphereEngine.initialize(stateViews, result.atmosphere);
+    shell.setSeed(result.seed);
+    shell.setTriangleCount(renderer.getTriangleCount());
+    shell.setSimTime(simTimeMa);
 
-  // Initialize Phase 5 cross-section engine
-  crossSectionEngine.clear();
-  crossSectionEngine.initialize(stateViews, tectonicEngine.stratigraphy);
+    // Close any open cross-section panel on new planet
+    shell.hideCrossSection();
+    shell.setDrawMode(false);
+    drawModeActive = false;
+    drawPoints = [];
 
-  // Initialize Phase 6 vegetation engine (feature-flagged)
-  vegetationEngine = new VegetationEngine(bus, eventLog, seed, {
-    minTickInterval: 1.0,
-  });
-  vegetationEngine.initialize(stateViews);
-
-  // Take initial snapshot
-  snapshotManager.takeSnapshot(-4500, buffer);
-
-  renderer.updateHeightMap(stateViews.heightMap, GRID_SIZE);
-  renderer.updatePlateMap(stateViews.plateMap, GRID_SIZE);
-
-  shell.setSeed(seed);
-  shell.setTriangleCount(renderer.getTriangleCount());
-
-  // Reset clock to initial geological time
-  clock.seekTo(-4500);
-  shell.setSimTime(clock.t);
-
-  // Close any open cross-section panel on new planet
-  shell.hideCrossSection();
-  shell.setDrawMode(false);
-  drawModeActive = false;
-  drawPoints = [];
-
-  bus.emit('PLANET_GENERATED', { seed, timeMa: clock.t });
-
-  // Encode seed in URL fragment for sharing
-  window.location.hash = `seed=${seed}`;
+    // Encode seed in URL fragment for sharing
+    window.location.hash = `seed=${result.seed}`;
+  } catch (err) {
+    console.error('Failed to generate planet:', err);
+  }
 }
 
 // Parse seed from URL fragment if available
@@ -143,12 +83,13 @@ function seedFromURL(): number | null {
 }
 
 // Generate the first planet (from URL seed or random)
-generatePlanet(seedFromURL() ?? randomSeed());
+doGeneratePlanet(seedFromURL() ?? randomSeed());
 
 // ── Cross-Section Draw Mode ─────────────────────────────────────────────────
 
 let drawModeActive = false;
 let drawPoints: LatLon[] = [];
+let lastCrossSectionProfile: api.CrossSectionProfile | null = null;
 
 shell.onDrawMode(() => {
   drawModeActive = !drawModeActive;
@@ -158,30 +99,13 @@ shell.onDrawMode(() => {
   }
 });
 
-// Listen for cross-section ready events to render the profile
-bus.on('CROSS_SECTION_READY', (payload) => {
-  const canvas = shell.getCrossSectionCanvas();
-  const panelEl = canvas.parentElement;
-  const w = panelEl ? panelEl.clientWidth : 960;
-  const h = 280;
-  renderCrossSection(payload.profile, {
-    width: w,
-    height: h,
-    showLabels: shell.areLabelsVisible(),
-    showLegend: true,
-  }, canvas);
-  shell.showCrossSection();
-});
-
 shell.onLabelToggle((visible) => {
-  bus.emit('LABEL_TOGGLE', { visible });
   // Re-render if a profile is active
-  const profile = crossSectionEngine.getProfile();
-  if (profile) {
+  if (lastCrossSectionProfile) {
     const canvas = shell.getCrossSectionCanvas();
     const panelEl = canvas.parentElement;
     const w = panelEl ? panelEl.clientWidth : 960;
-    renderCrossSection(profile, {
+    renderCrossSection(lastCrossSectionProfile as never, {
       width: w,
       height: 280,
       showLabels: visible,
@@ -200,7 +124,7 @@ shell.onExportPng(() => {
 });
 
 shell.onCloseCrossSection(() => {
-  crossSectionEngine.clear();
+  lastCrossSectionProfile = null;
   drawModeActive = false;
   shell.setDrawMode(false);
   drawPoints = [];
@@ -209,27 +133,32 @@ shell.onCloseCrossSection(() => {
 // ── Wire UI callbacks ───────────────────────────────────────────────────────
 
 shell.onNewPlanet(() => {
-  generatePlanet(randomSeed());
+  doGeneratePlanet(randomSeed());
 });
 
 shell.onPauseToggle(() => {
-  clock.togglePause();
-  shell.setPaused(clock.paused);
+  paused = !paused;
+  shell.setPaused(paused);
 });
 
 shell.onRateChange((rate) => {
-  clock.setRate(rate);
+  simRate = Math.max(0.001, Math.min(100, rate));
 });
 
 // ── Render loop ─────────────────────────────────────────────────────────────
+// The render loop now only handles display and periodically asks the backend
+// to advance the simulation and fetches updated state.
 
 let lastTime = performance.now();
 let frameCount = 0;
 let fpsAccum = 0;
 
-/** Tectonic simulation accumulator — updates terrain less frequently than render. */
-let tectonicAccum = 0;
-const TECTONIC_UPDATE_INTERVAL = 100; // ms between tectonic updates
+/** Accumulator for backend simulation calls. */
+let simAccum = 0;
+const SIM_UPDATE_INTERVAL = 200; // ms between backend simulation calls
+
+/** Flag to prevent overlapping backend requests. */
+let pendingSimRequest = false;
 
 function loop(now: number): void {
   requestAnimationFrame(loop);
@@ -237,39 +166,32 @@ function loop(now: number): void {
   const dtMs = now - lastTime;
   lastTime = now;
 
-  // Advance simulation (convert ms → seconds for the SimClock)
-  clock.advance(dtMs / 1000);
-  shell.setSimTime(clock.t);
+  // Accumulate time for backend simulation calls
+  if (!paused) {
+    simAccum += dtMs;
+    const deltaMa = (simAccum / 1000) * simRate;
 
-  // Run tectonic simulation at a throttled rate
-  if (!clock.paused && tectonicEngine) {
-    tectonicAccum += dtMs;
-    if (tectonicAccum >= TECTONIC_UPDATE_INTERVAL) {
-      const deltaMa = (tectonicAccum / 1000) * clock.rate;
-      tectonicEngine.tick(clock.t, deltaMa);
+    // Send simulation advance to backend at throttled intervals
+    if (simAccum >= SIM_UPDATE_INTERVAL && !pendingSimRequest && deltaMa > 0) {
+      pendingSimRequest = true;
+      simAccum = 0;
 
-      // Run Phase 3 surface processes after tectonics
-      if (surfaceEngine) {
-        surfaceEngine.tick(clock.t, deltaMa);
-      }
+      api.advanceSimulation(deltaMa)
+        .then(async (result) => {
+          simTimeMa = result.timeMa;
+          shell.setSimTime(simTimeMa);
 
-      // Run Phase 4 atmosphere processes
-      if (atmosphereEngine) {
-        atmosphereEngine.tick(clock.t, deltaMa);
-      }
-
-      // Run Phase 6 vegetation processes
-      if (vegetationEngine) {
-        vegetationEngine.tick(clock.t, deltaMa);
-      }
-
-      tectonicAccum = 0;
-
-      // Update GPU textures after tectonic + surface changes
-      renderer.updateHeightMap(stateViews.heightMap, GRID_SIZE);
-
-      // Take periodic snapshots
-      snapshotManager.maybeTakeSnapshot(clock.t, buffer);
+          // Fetch updated height map for rendering
+          const heightData = await api.getHeightMap();
+          const heightMap = new Float32Array(heightData);
+          renderer.updateHeightMap(heightMap, GRID_SIZE);
+        })
+        .catch((err) => {
+          console.error('Simulation advance failed:', err);
+        })
+        .finally(() => {
+          pendingSimRequest = false;
+        });
     }
   }
 
