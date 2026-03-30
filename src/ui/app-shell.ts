@@ -1,6 +1,7 @@
 // ─── Application Shell ──────────────────────────────────────────────────────
 // Builds the full UI chrome: viewport for the 3D globe, collapsible sidebar,
-// and a semi-transparent HUD bar.  All DOM is created programmatically.
+// cross-section panel, and a semi-transparent HUD bar.  All DOM is created
+// programmatically.
 
 export class AppShell {
   // ── Root containers ─────────────────────────────────────────────────────
@@ -23,12 +24,26 @@ export class AppShell {
   private rateSlider: HTMLInputElement;
   private rateLabel: HTMLSpanElement;
 
+  // ── Cross-Section elements ──────────────────────────────────────────────
+  private drawBtn: HTMLButtonElement;
+  private crossSectionPanel: HTMLElement;
+  private crossSectionCanvas: HTMLCanvasElement;
+  private labelToggleBtn: HTMLButtonElement;
+  private exportPngBtn: HTMLButtonElement;
+  private closeCrossSectionBtn: HTMLButtonElement;
+
   // ── Callbacks ───────────────────────────────────────────────────────────
   private newPlanetCb: (() => void) | null = null;
   private pauseToggleCb: (() => void) | null = null;
   private rateChangeCb: ((rate: number) => void) | null = null;
+  private drawModeCb: (() => void) | null = null;
+  private labelToggleCb: ((visible: boolean) => void) | null = null;
+  private exportPngCb: (() => void) | null = null;
+  private closeCrossSectionCb: (() => void) | null = null;
 
   private sidebarOpen = true;
+  private labelsVisible = true;
+  private crossSectionOpen = false;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -163,7 +178,78 @@ export class AppShell {
     rateGroup.append(this.rateLabel, this.rateSlider);
     this.sidebar.appendChild(rateGroup);
 
+    // -- Draw Cross-Section button
+    this.drawBtn = document.createElement('button');
+    this.drawBtn.textContent = '✏️ Draw Cross-Section';
+    styleBtn(this.drawBtn);
+    this.drawBtn.addEventListener('click', () => this.drawModeCb?.());
+    this.sidebar.appendChild(this.drawBtn);
+
     this.root.appendChild(this.sidebar);
+
+    // ── Cross-Section Panel (bottom, hidden by default) ───────────────────
+    this.crossSectionPanel = el('div', {
+      position: 'absolute',
+      left: '0',
+      right: '0',
+      bottom: '0',
+      height: '320px',
+      background: 'rgba(10,10,14,0.95)',
+      borderTop: '1px solid rgba(255,255,255,0.12)',
+      display: 'none',
+      flexDirection: 'column',
+      zIndex: '25',
+      color: '#ddd',
+      fontSize: '13px',
+      fontFamily: 'sans-serif',
+    });
+
+    // Cross-section panel header
+    const csHeader = el('div', {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: '6px 12px',
+      borderBottom: '1px solid rgba(255,255,255,0.08)',
+    });
+
+    const csTitle = document.createElement('span');
+    csTitle.textContent = 'Cross-Section';
+    csTitle.style.fontWeight = 'bold';
+    csTitle.style.flex = '1';
+
+    this.labelToggleBtn = document.createElement('button');
+    this.labelToggleBtn.textContent = '🏷️ Labels';
+    styleBtn(this.labelToggleBtn);
+    this.labelToggleBtn.addEventListener('click', () => {
+      this.labelsVisible = !this.labelsVisible;
+      this.labelToggleBtn.style.opacity = this.labelsVisible ? '1' : '0.5';
+      this.labelToggleCb?.(this.labelsVisible);
+    });
+
+    this.exportPngBtn = document.createElement('button');
+    this.exportPngBtn.textContent = '📷 Export PNG';
+    styleBtn(this.exportPngBtn);
+    this.exportPngBtn.addEventListener('click', () => this.exportPngCb?.());
+
+    this.closeCrossSectionBtn = document.createElement('button');
+    this.closeCrossSectionBtn.textContent = '✕';
+    styleBtn(this.closeCrossSectionBtn);
+    this.closeCrossSectionBtn.style.padding = '4px 8px';
+    this.closeCrossSectionBtn.addEventListener('click', () => {
+      this.hideCrossSection();
+      this.closeCrossSectionCb?.();
+    });
+
+    csHeader.append(csTitle, this.labelToggleBtn, this.exportPngBtn, this.closeCrossSectionBtn);
+    this.crossSectionPanel.appendChild(csHeader);
+
+    // Cross-section canvas (fills remaining space)
+    this.crossSectionCanvas = document.createElement('canvas');
+    this.crossSectionCanvas.style.cssText = 'width:100%;flex:1;display:block;';
+    this.crossSectionPanel.appendChild(this.crossSectionCanvas);
+
+    this.root.appendChild(this.crossSectionPanel);
 
     // ── Sidebar toggle tab ────────────────────────────────────────────────
     this.sidebarToggle = el('div', {
@@ -233,11 +319,66 @@ export class AppShell {
     this.rateChangeCb = cb;
   }
 
+  // ── Cross-Section API ──────────────────────────────────────────────────
+
+  onDrawMode(cb: () => void): void {
+    this.drawModeCb = cb;
+  }
+
+  onLabelToggle(cb: (visible: boolean) => void): void {
+    this.labelToggleCb = cb;
+  }
+
+  onExportPng(cb: () => void): void {
+    this.exportPngCb = cb;
+  }
+
+  onCloseCrossSection(cb: () => void): void {
+    this.closeCrossSectionCb = cb;
+  }
+
+  /** Show the cross-section panel. */
+  showCrossSection(): void {
+    this.crossSectionOpen = true;
+    this.crossSectionPanel.style.display = 'flex';
+  }
+
+  /** Hide the cross-section panel. */
+  hideCrossSection(): void {
+    this.crossSectionOpen = false;
+    this.crossSectionPanel.style.display = 'none';
+  }
+
+  /** Get the cross-section canvas for rendering. */
+  getCrossSectionCanvas(): HTMLCanvasElement {
+    return this.crossSectionCanvas;
+  }
+
+  /** Get whether the cross-section panel is currently open. */
+  isCrossSectionOpen(): boolean {
+    return this.crossSectionOpen;
+  }
+
+  /** Get whether labels are visible. */
+  areLabelsVisible(): boolean {
+    return this.labelsVisible;
+  }
+
+  /** Set the draw button state (active mode). */
+  setDrawMode(active: boolean): void {
+    this.drawBtn.style.background = active ? '#c84' : 'rgba(255,255,255,0.08)';
+    this.drawBtn.textContent = active ? '✏️ Click Globe to Draw' : '✏️ Draw Cross-Section';
+  }
+
   dispose(): void {
     this.root.innerHTML = '';
     this.newPlanetCb = null;
     this.pauseToggleCb = null;
     this.rateChangeCb = null;
+    this.drawModeCb = null;
+    this.labelToggleCb = null;
+    this.exportPngCb = null;
+    this.closeCrossSectionCb = null;
   }
 
   // ── Sidebar toggle ─────────────────────────────────────────────────────

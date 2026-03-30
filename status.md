@@ -215,8 +215,78 @@
   - Planet generation with atmosphere engine initialized
   - No console errors during atmospheric simulation
 
-## Phase 5 — Cross-Section Viewer ⬜
-Not started.
+## Phase 5 — Cross-Section Viewer ✅
+
+**Goal**: User draws a line on the surface and sees a geologically accurate vertical cross-section from atmosphere to core.
+
+### AGENT-SECTION: Cross-Section Engine
+- [x] Great-circle interpolation for polyline path sampling (`src/geo/cross-section-engine.ts`)
+- [x] Haversine central angle computation for accurate distance (`src/geo/cross-section-engine.ts`)
+- [x] N equally-spaced sample points along great-circle arcs (default N=512) (`src/geo/cross-section-engine.ts`)
+- [x] Lat/lon → grid cell index coordinate mapping (`src/geo/cross-section-engine.ts`)
+- [x] Multi-segment polyline path support (arbitrary waypoints) (`src/geo/cross-section-engine.ts`)
+- [x] Stratigraphy stack retrieval at each sample point (`src/geo/cross-section-engine.ts`)
+- [x] Surface elevation, crust thickness, soil type/depth sampling from SharedArrayBuffer (`src/geo/cross-section-engine.ts`)
+- [x] Deep earth zone definitions (Lithospheric Mantle through Inner Core, 7 zones) (`src/geo/cross-section-engine.ts`)
+- [x] CrossSectionProfile construction with full metadata (`src/geo/cross-section-engine.ts`)
+- [x] Event-driven: listens for CROSS_SECTION_PATH, emits CROSS_SECTION_READY (`src/geo/cross-section-engine.ts`)
+- [x] Label visibility toggle via LABEL_TOGGLE event (`src/geo/cross-section-engine.ts`)
+
+### AGENT-RENDER: Cross-Section Renderer
+- [x] Canvas 2D rendering of cross-section profile (`src/render/cross-section-renderer.ts`)
+- [x] Split vertical scale: linear 0–100 km, logarithmic 100–6371 km (`src/render/cross-section-renderer.ts`)
+- [x] Rock type colour mapping for all 56 rock types (igneous, sedimentary, metamorphic, deep earth) (`src/render/cross-section-renderer.ts`)
+- [x] Rock type name mapping for all types (`src/render/cross-section-renderer.ts`)
+- [x] Soil order name mapping for all 12 USDA orders (`src/render/cross-section-renderer.ts`)
+- [x] Deep earth zone rendering with zone labels (`src/render/cross-section-renderer.ts`)
+- [x] Unconformity markers (hatched red dashed lines) (`src/render/cross-section-renderer.ts`)
+- [x] Fault detection and indicator rendering (`src/render/cross-section-renderer.ts`)
+- [x] Moho discontinuity visualization per sample column (`src/render/cross-section-renderer.ts`)
+- [x] Surface elevation profile line (`src/render/cross-section-renderer.ts`)
+- [x] Layer label generation with rock type, age (Ma), and optional soil order (`src/render/cross-section-renderer.ts`)
+- [x] Anti-collision label resolution (push overlapping labels apart) (`src/render/cross-section-renderer.ts`)
+- [x] Legend panel with colour swatches for visible rock types (`src/render/cross-section-renderer.ts`)
+- [x] Y-axis depth labels (linear + logarithmic ticks) (`src/render/cross-section-renderer.ts`)
+- [x] X-axis distance labels in km (`src/render/cross-section-renderer.ts`)
+- [x] Scale break indicator at 100 km (`src/render/cross-section-renderer.ts`)
+- [x] Export cross-section as PNG (`src/render/cross-section-renderer.ts`)
+
+### AGENT-UI: Draw Tool & Cross-Section Panel
+- [x] Draw Cross-Section button in sidebar (`src/ui/app-shell.ts`)
+- [x] Draw mode toggle with visual feedback (`src/ui/app-shell.ts`)
+- [x] Cross-section panel (bottom panel, hidden by default) (`src/ui/app-shell.ts`)
+- [x] Panel header with Labels toggle, Export PNG, and Close buttons (`src/ui/app-shell.ts`)
+- [x] Cross-section canvas element for 2D rendering (`src/ui/app-shell.ts`)
+- [x] Label toggle button with opacity feedback (`src/ui/app-shell.ts`)
+- [x] Export PNG button triggers download (`src/ui/app-shell.ts`)
+- [x] Panel show/hide API (`src/ui/app-shell.ts`)
+- [x] Draw mode resets on new planet generation (`src/ui/app-shell.ts`)
+
+### Shared Types
+- [x] CrossSectionSample interface (distanceKm, surfaceElevation, crustThicknessKm, soilType, soilDepthM, layers) (`src/shared/types.ts`)
+- [x] DeepEarthZone interface (name, topKm, bottomKm, rockType) (`src/shared/types.ts`)
+- [x] CrossSectionProfile interface (samples, totalDistanceKm, pathPoints, deepEarthZones) (`src/shared/types.ts`)
+- [x] Enhanced CrossSectionReadyPayload with profile data (`src/shared/types.ts`)
+
+### Integration
+- [x] CrossSectionEngine instantiated and wired into event bus in main.ts (`src/main.ts`)
+- [x] Engine initialized with stateViews and stratigraphy on planet generation (`src/main.ts`)
+- [x] CROSS_SECTION_READY event renders profile to panel canvas (`src/main.ts`)
+- [x] Label toggle re-renders active profile (`src/main.ts`)
+- [x] Export PNG creates downloadable link (`src/main.ts`)
+- [x] Engine and UI state cleared on new planet generation (`src/main.ts`)
+
+### Testing
+- [x] 91 unit tests across 2 new test files (Vitest)
+  - `tests/cross-section-engine.test.ts` — 54 tests (coordinate mapping, central angle, great-circle interpolation, path sampling, path distance, deep earth zones, engine integration, stratigraphy retrieval, profile construction, edge cases)
+  - `tests/cross-section-renderer.test.ts` — 37 tests (rock colours, rock names, soil names, vertical scale, label building, render function, export PNG)
+- [x] 6 new Playwright integration tests (`e2e/app-shell.spec.ts`)
+  - Draw Cross-Section button visibility
+  - Draw mode toggle behaviour
+  - Cross-section panel hidden by default
+  - No crash on multiple draw mode toggles
+  - Draw mode reset on new planet generation
+  - No console errors with cross-section engine initialized
 
 ## Phase 6 — Vegetation & Polish ⬜
 Not started.
@@ -247,15 +317,17 @@ src/
 │   ├── glacial-engine.ts — Glacial erosion (ELA, ice, moraine deposition)
 │   ├── weathering-engine.ts — Aeolian & chemical weathering
 │   ├── pedogenesis.ts — Soil formation (CLORPT, USDA soil orders)
-│   └── surface-engine.ts — Surface process orchestrator
+│   ├── surface-engine.ts — Surface process orchestrator
+│   └── cross-section-engine.ts — Cross-section path sampling & profile builder
 ├── render/
 │   ├── icosphere.ts   — Icosphere mesh generation
-│   └── globe-renderer.ts — Three.js renderer with height displacement
+│   ├── globe-renderer.ts — Three.js renderer with height displacement
+│   └── cross-section-renderer.ts — Canvas 2D cross-section renderer
 ├── ui/
 │   └── app-shell.ts   — DOM-based UI shell
 └── main.ts            — Application entry point, wires everything together
-tests/                 — 18 Vitest test files (177 tests)
-e2e/                   — Playwright integration tests (16 tests)
+tests/                 — 23 Vitest test files (306 tests)
+e2e/                   — Playwright integration tests (22 tests)
 ```
 
 ### Key Design Decisions
@@ -276,6 +348,9 @@ e2e/                   — Playwright integration tests (16 tests)
 - **Weathering**: Arrhenius chemical rates, aeolian threshold model, loess deposition
 - **Pedogenesis**: Simplified CLORPT model, all 12 USDA soil orders, max 5 m depth
 - **Surface Engine**: Orchestrates erosion → glacial → weathering → pedogenesis each tick
+- **Cross-Section Engine**: Great-circle path sampling with Haversine distance, 512 sample points default
+- **Cross-Section Renderer**: Canvas 2D with split vertical scale (linear 0-100 km, log 100-6371 km)
+- **Deep Earth Zones**: 7 zones from Lithospheric Mantle (30 km) to Inner Core (6371 km)
 
 ### Phase 4 Prerequisites
 - The surface process engines are fully functional and tested
@@ -283,3 +358,10 @@ e2e/                   — Playwright integration tests (16 tests)
 - Temperature, precipitation, and wind maps in SharedArrayBuffer are ready for atmospheric simulation
 - The event system supports EROSION_CYCLE, GLACIATION_ADVANCE/RETREAT events
 - Glacial engine tracks ice extent and ELA for climate feedback integration
+
+### Phase 5 Prerequisites
+- All Phase 1-4 systems are complete and stable (215 unit tests across 21 files, 16 e2e tests)
+- StratigraphyStack provides per-cell layer stacks with getLayers() API
+- heightMap, crustThicknessMap, soilTypeMap, soilDepthMap available in SharedArrayBuffer
+- Event system supports CROSS_SECTION_PATH and CROSS_SECTION_READY events
+- All rock types, soil orders, and deformation types defined in shared types
