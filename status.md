@@ -326,7 +326,7 @@ src/
 ├── ui/
 │   └── app-shell.ts   — DOM-based UI shell
 └── main.ts            — Application entry point, wires everything together
-tests/                 — 23 Vitest test files (304 tests)
+tests/                 — 23 Vitest test files (306 tests)
 e2e/                   — Playwright integration tests (22 tests)
 ```
 
@@ -360,7 +360,7 @@ e2e/                   — Playwright integration tests (22 tests)
 - Glacial engine tracks ice extent and ELA for climate feedback integration
 
 ### Phase 5 Prerequisites
-- All Phase 1-4 systems are complete and stable (304 unit tests, 16 e2e tests)
+- All Phase 1-4 systems are complete and stable (215 unit tests across 21 files, 16 e2e tests)
 - StratigraphyStack provides per-cell layer stacks with getLayers() API
 - heightMap, crustThicknessMap, soilTypeMap, soilDepthMap available in SharedArrayBuffer
 - Event system supports CROSS_SECTION_PATH and CROSS_SECTION_READY events
