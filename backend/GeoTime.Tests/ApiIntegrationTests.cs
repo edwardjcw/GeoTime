@@ -121,6 +121,28 @@ public class ApiIntegrationTests : IClassFixture<WebApplicationFactory<GeoTime.A
         Assert.True(data.Length > 0);
     }
 
+    [Fact]
+    public async Task GetBiomatterMap_ReturnsArray()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        var response = await _client.GetAsync("/api/state/biomattermap");
+        response.EnsureSuccessStatusCode();
+        var data = await response.Content.ReadFromJsonAsync<float[]>();
+        Assert.NotNull(data);
+        Assert.True(data.Length > 0);
+    }
+
+    [Fact]
+    public async Task GetOrganicCarbonMap_ReturnsArray()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        var response = await _client.GetAsync("/api/state/organiccarbonmap");
+        response.EnsureSuccessStatusCode();
+        var data = await response.Content.ReadFromJsonAsync<float[]>();
+        Assert.NotNull(data);
+        Assert.True(data.Length > 0);
+    }
+
     // ── Plates, Hotspots, Atmosphere ──────────────────────────────────────────
 
     [Fact]
@@ -187,6 +209,9 @@ public class ApiIntegrationTests : IClassFixture<WebApplicationFactory<GeoTime.A
         response.EnsureSuccessStatusCode();
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(0, json.GetProperty("cellIndex").GetInt32());
+        Assert.True(json.TryGetProperty("biomatterDensity", out _));
+        Assert.True(json.TryGetProperty("organicCarbon", out _));
+        Assert.True(json.TryGetProperty("reefPresent", out _));
     }
 
     [Fact]
@@ -257,6 +282,24 @@ public class ApiIntegrationTests : IClassFixture<WebApplicationFactory<GeoTime.A
     {
         await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
         var response = await _client.GetAsync("/api/state/biomassmap/binary");
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("application/x-msgpack", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public async Task GetBiomatterMapBinary_ReturnsMsgpack()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        var response = await _client.GetAsync("/api/state/biomattermap/binary");
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("application/x-msgpack", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public async Task GetOrganicCarbonMapBinary_ReturnsMsgpack()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        var response = await _client.GetAsync("/api/state/organiccarbonmap/binary");
         response.EnsureSuccessStatusCode();
         Assert.Equal("application/x-msgpack", response.Content.Headers.ContentType?.MediaType);
     }

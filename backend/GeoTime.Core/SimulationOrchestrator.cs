@@ -21,6 +21,7 @@ public sealed class SimulationOrchestrator
     private SurfaceEngine? _surface;
     private AtmosphereEngine? _atmosphere;
     private VegetationEngine? _vegetation;
+    private BiomatterEngine? _biomatter;
     private CrossSectionEngine? _crossSection;
 
     private PlanetGeneratorResult? _planetResult;
@@ -65,6 +66,9 @@ public sealed class SimulationOrchestrator
         _vegetation = new VegetationEngine(Bus, EventLog, seed, _gridSize, 1.0);
         _vegetation.Initialize(State);
 
+        _biomatter = new BiomatterEngine(Bus, EventLog, seed, _gridSize, 1.0);
+        _biomatter.Initialize(State, result.Atmosphere, _tectonic.Stratigraphy);
+
         Clock.SeekTo(SimClock.INITIAL_TIME);
 
         Bus.Emit("PLANET_GENERATED", new { seed, timeMa = Clock.T });
@@ -90,6 +94,8 @@ public sealed class SimulationOrchestrator
             tasks.Add(Task.Run(() => _atmosphere.Tick(Clock.T, deltaMa)));
         if (_vegetation != null)
             tasks.Add(Task.Run(() => _vegetation.Tick(Clock.T, deltaMa)));
+        if (_biomatter != null)
+            tasks.Add(Task.Run(() => _biomatter.Tick(Clock.T, deltaMa)));
 
         if (tasks.Count > 0)
         {
@@ -130,6 +136,13 @@ public sealed class SimulationOrchestrator
     public CellInspection? InspectCell(int cellIndex)
     {
         if (cellIndex < 0 || cellIndex >= State.CellCount) return null;
+
+        double h = State.HeightMap[cellIndex];
+        double temp = State.TemperatureMap[cellIndex];
+        bool reefPresent = h < 0 && h >= BiomatterEngine.REEF_MAX_DEPTH
+            && temp >= BiomatterEngine.REEF_MIN_TEMP && temp <= BiomatterEngine.REEF_MAX_TEMP
+            && State.BiomatterMap[cellIndex] > 0;
+
         return new CellInspection
         {
             CellIndex = cellIndex,
@@ -143,6 +156,9 @@ public sealed class SimulationOrchestrator
             Temperature = State.TemperatureMap[cellIndex],
             Precipitation = State.PrecipitationMap[cellIndex],
             Biomass = State.BiomassMap[cellIndex],
+            BiomatterDensity = State.BiomatterMap[cellIndex],
+            OrganicCarbon = State.OrganicCarbonMap[cellIndex],
+            ReefPresent = reefPresent,
         };
     }
 
@@ -154,10 +170,11 @@ public sealed class SimulationOrchestrator
     {
         int cellCount = State.CellCount;
         // Layout: [8 bytes timeMa] + float arrays (HeightMap, CrustThickness, RockAge,
-        //   SoilDepth, Temperature, Precipitation, WindU, WindV, CloudCover, Biomass)
+        //   SoilDepth, Temperature, Precipitation, WindU, WindV, CloudCover, Biomass,
+        //   BiomatterMap, OrganicCarbonMap)
         //   + byte arrays (RockType, SoilType, CloudType)
         //   + ushort array (PlateMap)
-        int floatArrays = 10; // HeightMap, CrustThickness, RockAge, SoilDepth, Temperature, Precipitation, WindU, WindV, CloudCover, Biomass
+        int floatArrays = 12; // HeightMap, CrustThickness, RockAge, SoilDepth, Temperature, Precipitation, WindU, WindV, CloudCover, Biomass, BiomatterMap, OrganicCarbonMap
         int byteArrays = 3;   // RockType, SoilType, CloudType
         int ushortArrays = 1; // PlateMap
         int totalSize = 8 + (floatArrays * cellCount * 4) + (byteArrays * cellCount) + (ushortArrays * cellCount * 2);
@@ -180,6 +197,8 @@ public sealed class SimulationOrchestrator
         WriteFloatArray(data, ref offset, State.WindVMap);
         WriteFloatArray(data, ref offset, State.CloudCoverMap);
         WriteFloatArray(data, ref offset, State.BiomassMap);
+        WriteFloatArray(data, ref offset, State.BiomatterMap);
+        WriteFloatArray(data, ref offset, State.OrganicCarbonMap);
 
         // Byte arrays
         Buffer.BlockCopy(State.RockTypeMap, 0, data, offset, cellCount);
@@ -218,6 +237,8 @@ public sealed class SimulationOrchestrator
         ReadFloatArray(data, ref offset, State.WindVMap);
         ReadFloatArray(data, ref offset, State.CloudCoverMap);
         ReadFloatArray(data, ref offset, State.BiomassMap);
+        ReadFloatArray(data, ref offset, State.BiomatterMap);
+        ReadFloatArray(data, ref offset, State.OrganicCarbonMap);
 
         // Byte arrays
         Buffer.BlockCopy(data, offset, State.RockTypeMap, 0, cellCount);
@@ -258,4 +279,7 @@ public sealed class CellInspection
     public float Temperature { get; set; }
     public float Precipitation { get; set; }
     public float Biomass { get; set; }
+    public float BiomatterDensity { get; set; }
+    public float OrganicCarbon { get; set; }
+    public bool ReefPresent { get; set; }
 }

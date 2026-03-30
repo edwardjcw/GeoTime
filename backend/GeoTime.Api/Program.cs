@@ -70,6 +70,14 @@ app.MapGet("/api/state/biomassmap", (SimulationOrchestrator sim) =>
     Results.Ok(sim.State.BiomassMap)
 ).WithName("GetBiomassMap");
 
+app.MapGet("/api/state/biomattermap", (SimulationOrchestrator sim) =>
+    Results.Ok(sim.State.BiomatterMap)
+).WithName("GetBiomatterMap");
+
+app.MapGet("/api/state/organiccarbonmap", (SimulationOrchestrator sim) =>
+    Results.Ok(sim.State.OrganicCarbonMap)
+).WithName("GetOrganicCarbonMap");
+
 app.MapGet("/api/state/plates", (SimulationOrchestrator sim) =>
     Results.Ok(sim.GetPlates())
 ).WithName("GetPlates");
@@ -132,6 +140,18 @@ app.MapGet("/api/state/biomassmap/binary", (SimulationOrchestrator sim) =>
     byte[] packed = MessagePackSerializer.Serialize(sim.State.BiomassMap);
     return Results.Bytes(packed, "application/x-msgpack");
 }).WithName("GetBiomassMapBinary");
+
+app.MapGet("/api/state/biomattermap/binary", (SimulationOrchestrator sim) =>
+{
+    byte[] packed = MessagePackSerializer.Serialize(sim.State.BiomatterMap);
+    return Results.Bytes(packed, "application/x-msgpack");
+}).WithName("GetBiomatterMapBinary");
+
+app.MapGet("/api/state/organiccarbonmap/binary", (SimulationOrchestrator sim) =>
+{
+    byte[] packed = MessagePackSerializer.Serialize(sim.State.OrganicCarbonMap);
+    return Results.Bytes(packed, "application/x-msgpack");
+}).WithName("GetOrganicCarbonMapBinary");
 
 // ── Snapshot Management Endpoints ─────────────────────────────────────────────
 
