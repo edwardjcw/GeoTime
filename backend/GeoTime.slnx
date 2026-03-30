@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="GeoTime.Api/GeoTime.Api.csproj" />
+  <Project Path="GeoTime.Core/GeoTime.Core.csproj" />
+  <Project Path="GeoTime.Tests/GeoTime.Tests.csproj" />
+</Solution>

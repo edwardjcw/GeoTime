@@ -1,0 +1,129 @@
+namespace GeoTime.Core.Models;
+
+public enum RockType
+{
+    // Igneous
+    IGN_BASALT = 0,
+    IGN_GABBRO,
+    IGN_RHYOLITE,
+    IGN_GRANITE,
+    IGN_ANDESITE,
+    IGN_DACITE,
+    IGN_OBSIDIAN,
+    IGN_PUMICE,
+    IGN_PERIDOTITE,
+    IGN_KOMATIITE,
+    IGN_SYENITE,
+    IGN_DIORITE,
+    IGN_PYROCLASTIC,
+    IGN_TUFF,
+    IGN_PILLOW_BASALT,
+
+    // Sedimentary
+    SED_SANDSTONE,
+    SED_SHALE,
+    SED_LIMESTONE,
+    SED_DOLOSTONE,
+    SED_CONGLOMERATE,
+    SED_BRECCIA,
+    SED_COAL,
+    SED_CHALK,
+    SED_CHERT,
+    SED_EVAPORITE,
+    SED_TURBIDITE,
+    SED_TILLITE,
+    SED_LOESS,
+    SED_IRONSTONE,
+    SED_PHOSPHORITE,
+    SED_MUDSTONE,
+    SED_SILTSTONE,
+    SED_ARKOSE,
+    SED_GREYWACKE,
+    SED_DIATOMITE,
+    SED_PEAT,
+    SED_LATERITE,
+    SED_CALICHE,
+    SED_REGOLITH,
+
+    // Metamorphic
+    MET_SLATE,
+    MET_PHYLLITE,
+    MET_SCHIST,
+    MET_GNEISS,
+    MET_QUARTZITE,
+    MET_MARBLE,
+    MET_AMPHIBOLITE,
+    MET_ECLOGITE,
+    MET_BLUESCHIST,
+    MET_HORNFELS,
+    MET_SERPENTINITE,
+    MET_MYLONITE,
+
+    // Deep Earth
+    DEEP_LITHMAN,
+    DEEP_ASTHEN,
+    DEEP_TRANS,
+    DEEP_LOWMAN,
+    DEEP_CMB,
+    DEEP_OUTCORE,
+    DEEP_INCORE,
+}
+
+public enum SoilOrder
+{
+    NONE = 0,
+    ENTISOL,
+    INCEPTISOL,
+    MOLLISOL,
+    ALFISOL,
+    ULTISOL,
+    OXISOL,
+    SPODOSOL,
+    HISTOSOL,
+    ARIDISOL,
+    VERTISOL,
+    ANDISOL,
+    GELISOL,
+}
+
+public enum CloudGenus
+{
+    NONE = 0,
+    CIRRUS,
+    CIRROCUMULUS,
+    CIRROSTRATUS,
+    ALTOCUMULUS,
+    ALTOSTRATUS,
+    NIMBOSTRATUS,
+    STRATOCUMULUS,
+    STRATUS,
+    CUMULUS,
+    CUMULONIMBUS,
+}
+
+public enum DeformationType
+{
+    UNDEFORMED = 0,
+    FOLDED,
+    FAULTED,
+    METAMORPHOSED,
+    OVERTURNED,
+}
+
+public enum BoundaryType
+{
+    NONE = 0,
+    CONVERGENT = 1,
+    DIVERGENT = 2,
+    TRANSFORM = 3,
+}
+
+public enum VolcanoType
+{
+    SHIELD = 0,
+    STRATOVOLCANO = 1,
+    CINDER_CONE = 2,
+    CALDERA = 3,
+    FLOOD_BASALT = 4,
+    SUBMARINE_RIDGE = 5,
+}
