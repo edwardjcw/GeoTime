@@ -44,6 +44,7 @@ public enum RockType
     SED_LATERITE,
     SED_CALICHE,
     SED_REGOLITH,
+    SED_OIL_SHALE,
 
     // Metamorphic
     MET_SLATE,

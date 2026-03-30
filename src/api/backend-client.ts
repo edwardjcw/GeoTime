@@ -34,6 +34,9 @@ export interface CellInspection {
   temperature: number;
   precipitation: number;
   biomass: number;
+  biomatterDensity: number;
+  organicCarbon: number;
+  reefPresent: boolean;
 }
 
 export interface CrossSectionProfile {
@@ -141,6 +144,14 @@ export async function getBiomassMap(): Promise<number[]> {
   return get('/api/state/biomassmap');
 }
 
+export async function getBiomatterMap(): Promise<number[]> {
+  return get('/api/state/biomattermap');
+}
+
+export async function getOrganicCarbonMap(): Promise<number[]> {
+  return get('/api/state/organiccarbonmap');
+}
+
 export async function getPlates(): Promise<unknown[]> {
   return get('/api/state/plates');
 }
@@ -188,6 +199,14 @@ export async function getPrecipitationMapBinary(): Promise<ArrayBuffer> {
 
 export async function getBiomassMapBinary(): Promise<ArrayBuffer> {
   return getBinary('/api/state/biomassmap/binary');
+}
+
+export async function getBiomatterMapBinary(): Promise<ArrayBuffer> {
+  return getBinary('/api/state/biomattermap/binary');
+}
+
+export async function getOrganicCarbonMapBinary(): Promise<ArrayBuffer> {
+  return getBinary('/api/state/organiccarbonmap/binary');
 }
 
 // ── Snapshot Management ─────────────────────────────────────────────────────

@@ -43,7 +43,7 @@ cd backend
 dotnet restore
 dotnet build
 dotnet run --project GeoTime.Api   # Starts API server on http://localhost:5000
-dotnet test                         # Run 75 unit tests
+dotnet test                         # Run 156 unit tests
 ```
 
 ### Frontend (TypeScript/Vite)
@@ -70,7 +70,7 @@ VITE_API_BASE=http://localhost:5000 npm run dev
 - `GeoTime.Core/Engines/` — All geological simulation engines (tectonic, erosion, glacial, weathering, pedogenesis, climate, weather, vegetation, biomatter, cross-section)
 - `GeoTime.Core/SimulationOrchestrator.cs` — Top-level simulation manager
 - `GeoTime.Api/Program.cs` — REST API endpoints
-- `GeoTime.Tests/` — 75 xUnit tests across 11 test files
+- `GeoTime.Tests/` — 156 xUnit tests across 17 test files
 
 ### Frontend (`src/`)
 - `src/api/backend-client.ts` — REST API client for backend communication
@@ -92,6 +92,8 @@ VITE_API_BASE=http://localhost:5000 npm run dev
 | GET | `/api/state/temperaturemap` | Get temperature map |
 | GET | `/api/state/precipitationmap` | Get precipitation map |
 | GET | `/api/state/biomassmap` | Get biomass map |
+| GET | `/api/state/biomattermap` | Get biomatter density map |
+| GET | `/api/state/organiccarbonmap` | Get organic carbon map |
 | GET | `/api/state/plates` | Get plate info |
 | GET | `/api/state/hotspots` | Get hotspot info |
 | GET | `/api/state/atmosphere` | Get atmospheric composition |

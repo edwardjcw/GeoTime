@@ -27,6 +27,8 @@ public sealed class SimulationState
     public byte[] CloudTypeMap { get; }
     public float[] CloudCoverMap { get; }
     public float[] BiomassMap { get; }
+    public float[] BiomatterMap { get; }
+    public float[] OrganicCarbonMap { get; }
 
     public SimulationState(int gridSize = GridConstants.GRID_SIZE)
     {
@@ -47,6 +49,8 @@ public sealed class SimulationState
         CloudTypeMap = new byte[CellCount];
         CloudCoverMap = new float[CellCount];
         BiomassMap = new float[CellCount];
+        BiomatterMap = new float[CellCount];
+        OrganicCarbonMap = new float[CellCount];
     }
 }
 
@@ -110,6 +114,7 @@ public sealed class AtmosphericComposition
     public double O2 { get; set; }
     public double CO2 { get; set; }
     public double H2O { get; set; }
+    public double CH4 { get; set; }
 }
 
 /// <summary>Boundary cell between two plates.</summary>

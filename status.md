@@ -342,6 +342,76 @@
 
 ---
 
+## Phase 7 — Biomatter ✅ (Backend)
+
+**Goal**: Simple non-plant biomatter that reshapes ocean chemistry, sedimentation, atmosphere, and produces petroleum source rocks. Feature-flagged, building on vegetation from Phase 6.
+
+### AGENT-GEO: Biomatter Engine
+- [x] `BiomatterEngine` in `GeoTime.Core/Engines/` with feature flag (`backend/GeoTime.Core/Engines/BiomatterEngine.cs`)
+- [x] Cyanobacteria: oxygenic photosynthesis in shallow marine (> 10°C), OXYGENATION_EVENT at threshold
+- [x] Marine plankton (phytoplankton): Gaussian temperature bell curve (optimal 20°C), photic zone depth factor
+- [x] Reef organisms: warm shallow marine (18–30°C, < 50m), carbonate reef growth modifying heightMap
+- [x] Benthic organisms: deep marine biomatter with bioturbation
+- [x] Fungi & decomposers: terrestrial cells with soil > 0.1m, proportional to vegetation biomass (0.2×)
+- [x] Microbial mats / stromatolites: shallow tidal carbonate deposition
+
+### AGENT-GEO: Petroleum Source Rocks
+- [x] Organic carbon burial: marine plankton die in anoxic basins → `OrganicCarbonMap` accumulation
+- [x] Kerogen formation: buried organic carbon at depth > 2km, temp 60–120°C → `SED_OIL_SHALE` stratigraphy
+- [x] PETROLEUM_DEPOSIT event logged on first conversion per tick
+
+### AGENT-GEO: Biogenic Sedimentation
+- [x] Coccolith ooze → SED_CHALK (deep marine, high plankton productivity)
+- [x] Radiolarian/diatom ooze → SED_CHERT / SED_DIATOMITE (cold nutrient-rich zones)
+- [x] Reef limestone → SED_LIMESTONE (warm shallow marine with reef)
+- [x] Stromatolite carbonate → SED_LIMESTONE (shallow tidal, microbial mats)
+- [x] Phosphorite → SED_PHOSPHORITE (high organic concentration, upwelling)
+- [x] Banded iron formation → SED_IRONSTONE (low O₂, cyanobacteria active)
+
+### AGENT-ATMO: Atmosphere Feedback
+- [x] O₂ production from cyanobacteria + phytoplankton photosynthesis
+- [x] CH₄ production from anaerobic microbes in deep anoxic ocean
+- [x] CO₂ drawdown via biological pump (plankton fix CO₂, organic matter sinks)
+- [x] CH₄ oxidation when O₂ present (natural decay)
+- [x] O₂ gating rules: < 0.1% anaerobic only; > 0.1% aerobic marine; > 2% terrestrial
+- [x] OXYGENATION_EVENT fired once when atmospheric O₂ crosses 2% threshold
+
+### Models & State
+- [x] `SED_OIL_SHALE` added to `RockType` enum (`backend/GeoTime.Core/Models/Enums.cs`)
+- [x] `CH4` field added to `AtmosphericComposition` (`backend/GeoTime.Core/Models/SimulationModels.cs`)
+- [x] `BiomatterMap` (float[]) added to `SimulationState` — non-plant biomatter kg C/m²
+- [x] `OrganicCarbonMap` (float[]) added to `SimulationState` — buried organic carbon kg C/m²
+- [x] `CellInspection` expanded: `BiomatterDensity`, `OrganicCarbon`, `ReefPresent` fields
+
+### API Endpoints
+- [x] `GET /api/state/biomattermap` — JSON array of biomatter density
+- [x] `GET /api/state/organiccarbonmap` — JSON array of organic carbon
+- [x] `GET /api/state/biomattermap/binary` — MessagePack binary
+- [x] `GET /api/state/organiccarbonmap/binary` — MessagePack binary
+- [x] Cell inspection (`GET /api/state/inspect/:cellIndex`) returns biomatter fields
+
+### Orchestration & Serialization
+- [x] `BiomatterEngine` integrated into `SimulationOrchestrator` (parallel tick with vegetation)
+- [x] State serialization updated: `BiomatterMap` + `OrganicCarbonMap` included in snapshot bytes
+- [x] Frontend `backend-client.ts` updated with new endpoints, types, `CellInspection` fields
+
+### Testing
+- [x] 30 BiomatterEngine unit tests (`backend/GeoTime.Tests/BiomatterTests.cs`)
+  - Temperature factor: 3 tests (at optimal, far from optimal, always positive)
+  - Light factor: 4 tests (land=0, shallow=1, deep<1, very deep→0)
+  - Reef factor: 5 tests (land, too deep, too cold, too hot, ideal)
+  - Marine productivity: 4 tests (land, low O₂, good conditions, optimal vs cold)
+  - Cyanobacteria productivity: 4 tests (land, deep, cold, warm shallow)
+  - Fungi productivity: 4 tests (low O₂, cold, no soil, proportional to vegetation)
+  - Engine lifecycle: 10 tests (disabled, uninitialized, zero delta, marine, reef, terrestrial, O₂ feedback, oxygenation event, organic carbon, biogenic sedimentation, CH₄, caps, BIF)
+- [x] 12 API integration tests (`backend/GeoTime.Tests/ApiIntegrationTests.cs`)
+  - BiomatterMap JSON + binary endpoints
+  - OrganicCarbonMap JSON + binary endpoints
+  - Cell inspection with biomatter fields
+- [x] **Total: 156 backend tests** (up from 114)
+
+---
+
 ## Architecture Notes for Future Agents
 
 ### Project Structure

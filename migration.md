@@ -95,8 +95,44 @@ This document tracks the migration of GeoTime's simulation logic from the browse
 
 ## Future Work
 - [ ] Add authentication/rate limiting for multi-user deployments
-- [ ] Biomatter engine: migrate simple non-plant biomatter system (microbes, plankton, reef organisms) to backend — ocean chemistry, biogenic sedimentation, atmosphere O₂/CH₄ feedback, petroleum source-rock pipeline (see Phase 7 of implementation plan)
-- [ ] Add `biomatterMap` and `organicCarbonMap` state arrays and REST endpoints (`GET /api/state/biomattermap`, `GET /api/state/organiccarbonmap`)
-- [ ] Add `BiomatterEngine` to `GeoTime.Core/Engines/` with cyanobacteria, plankton, reef, fungi productivity models
-- [ ] Add `SED_OIL_SHALE` to `RockType` enum for petroleum source rocks
-- [ ] Expand `CellInspection` model with biomatter density, organic carbon, and reef presence fields
+
+## ✅ Phase 12: Biomatter Engine (Complete)
+
+Migrated the Phase 7 biomatter system from the implementation plan to the C# backend. This adds simple non-plant organisms that reshape ocean chemistry, sedimentation, atmosphere, and produce petroleum source rocks.
+
+- [x] Add `SED_OIL_SHALE` to `RockType` enum for petroleum source rocks
+- [x] Add `CH4` field to `AtmosphericComposition` for methane tracking
+- [x] Add `BiomatterMap` and `OrganicCarbonMap` state arrays to `SimulationState`
+- [x] Create `BiomatterEngine` in `GeoTime.Core/Engines/` with:
+  - Cyanobacteria productivity (shallow marine, > 10°C, O₂ production)
+  - Marine plankton productivity (temperature bell curve, photic zone)
+  - Reef organism model (18–30°C, < 50m depth, height growth)
+  - Fungi/decomposer model (terrestrial, proportional to vegetation biomass)
+  - Benthic organisms (deep marine biomatter, bioturbation)
+  - Microbial mat/stromatolite carbonate deposition
+- [x] Implement biogenic sedimentation pipeline:
+  - Coccolith ooze → SED_CHALK (deep marine, high plankton)
+  - Radiolarian/diatom ooze → SED_CHERT / SED_DIATOMITE (cold, upwelling)
+  - Reef limestone → SED_LIMESTONE (warm shallow marine)
+  - Stromatolite carbonate → SED_LIMESTONE (shallow tidal)
+  - Phosphorite → SED_PHOSPHORITE (high organic concentration)
+  - Banded iron formation → SED_IRONSTONE (low O₂, cyanobacteria)
+- [x] Implement petroleum source-rock pipeline:
+  - Organic carbon burial in anoxic marine basins
+  - Kerogen formation (oil window: 60–120°C, depth > 2km) → SED_OIL_SHALE
+- [x] Implement atmosphere O₂/CH₄/CO₂ feedback:
+  - O₂ production from cyanobacteria + phytoplankton
+  - CH₄ production from anaerobic microbes
+  - CO₂ drawdown from biological pump
+  - CH₄ oxidation when O₂ present
+  - OXYGENATION_EVENT when O₂ exceeds 2%
+- [x] O₂ gating rules: < 0.1% anaerobic only, > 0.1% aerobic marine, > 2% terrestrial
+- [x] Integrate `BiomatterEngine` into `SimulationOrchestrator` (parallel tick with vegetation)
+- [x] Update state serialization/deserialization for `BiomatterMap` + `OrganicCarbonMap`
+- [x] Expand `CellInspection` model with biomatter density, organic carbon, reef presence
+- [x] Add REST endpoints: `GET /api/state/biomattermap`, `GET /api/state/organiccarbonmap`
+- [x] Add MessagePack binary endpoints: `/api/state/biomattermap/binary`, `/api/state/organiccarbonmap/binary`
+- [x] Update frontend `backend-client.ts` with new endpoints, types, and `CellInspection` fields
+- [x] Add 30 BiomatterEngine unit tests (productivity models, engine ticks, caps, BIF)
+- [x] Add 12 API integration tests (JSON + binary endpoints, inspect cell fields)
+- [x] All 156 tests pass (up from 114)
