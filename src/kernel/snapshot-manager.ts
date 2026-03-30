@@ -14,6 +14,64 @@ export interface Snapshot {
   timeMa: number;
   /** Copy of all state buffer data at snapshot time. */
   bufferData: ArrayBuffer;
+  /** Whether this is a full keyframe or a delta snapshot. */
+  isKeyframe: boolean;
+}
+
+/** Sparse delta — stores only cells that changed since the last keyframe. */
+export interface DeltaSnapshot {
+  /** Simulation time (Ma) when this snapshot was taken. */
+  timeMa: number;
+  /** Changed byte ranges: [offset, data] pairs. */
+  changes: Array<{ offset: number; data: Uint8Array }>;
+  /** Whether this is a full keyframe or a delta snapshot. */
+  isKeyframe: false;
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Compare two buffers and produce a sparse delta.
+ * Only stores 256-byte blocks that differ.
+ */
+export function computeDelta(
+  prev: ArrayBuffer,
+  curr: ArrayBuffer,
+): Array<{ offset: number; data: Uint8Array }> {
+  const BLOCK_SIZE = 256;
+  const prevView = new Uint8Array(prev);
+  const currView = new Uint8Array(curr);
+  const len = Math.min(prevView.length, currView.length);
+  const changes: Array<{ offset: number; data: Uint8Array }> = [];
+
+  for (let off = 0; off < len; off += BLOCK_SIZE) {
+    const end = Math.min(off + BLOCK_SIZE, len);
+    let differs = false;
+    for (let j = off; j < end; j++) {
+      if (prevView[j] !== currView[j]) {
+        differs = true;
+        break;
+      }
+    }
+    if (differs) {
+      changes.push({ offset: off, data: currView.slice(off, end) });
+    }
+  }
+
+  return changes;
+}
+
+/**
+ * Apply a delta to a buffer.
+ */
+export function applyDelta(
+  buffer: ArrayBuffer,
+  changes: Array<{ offset: number; data: Uint8Array }>,
+): void {
+  const view = new Uint8Array(buffer);
+  for (const { offset, data } of changes) {
+    view.set(data, offset);
+  }
 }
 
 // ─── SnapshotManager ────────────────────────────────────────────────────────
@@ -30,9 +88,19 @@ export class SnapshotManager {
   /** Time of the last snapshot taken. */
   private lastSnapshotTime: number = -Infinity;
 
-  constructor(interval = 10, maxSnapshots = 500) {
+  /** Number of delta snapshots between keyframes. */
+  private readonly deltasBetweenKeyframes: number;
+
+  /** Counter for delta snapshots since last keyframe. */
+  private deltaSinceKeyframe = 0;
+
+  /** Reference buffer for computing deltas (last keyframe). */
+  private lastKeyframeBuffer: ArrayBuffer | null = null;
+
+  constructor(interval = 10, maxSnapshots = 500, deltasBetweenKeyframes = 5) {
     this.interval = interval;
     this.maxSnapshots = maxSnapshots;
+    this.deltasBetweenKeyframes = deltasBetweenKeyframes;
   }
 
   /**
@@ -53,8 +121,10 @@ export class SnapshotManager {
     const copy = new ArrayBuffer(buffer.byteLength);
     new Uint8Array(copy).set(new Uint8Array(buffer));
 
-    this.snapshots.push({ timeMa, bufferData: copy });
+    this.snapshots.push({ timeMa, bufferData: copy, isKeyframe: true });
     this.lastSnapshotTime = timeMa;
+    this.lastKeyframeBuffer = copy;
+    this.deltaSinceKeyframe = 0;
 
     // Keep sorted by time
     this.snapshots.sort((a, b) => a.timeMa - b.timeMa);
@@ -111,5 +181,7 @@ export class SnapshotManager {
   clear(): void {
     this.snapshots = [];
     this.lastSnapshotTime = -Infinity;
+    this.lastKeyframeBuffer = null;
+    this.deltaSinceKeyframe = 0;
   }
 }

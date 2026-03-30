@@ -12,6 +12,7 @@ import { TectonicEngine } from './geo/tectonic-engine';
 import { SurfaceEngine } from './geo/surface-engine';
 import { AtmosphereEngine } from './geo/atmosphere-engine';
 import { CrossSectionEngine } from './geo/cross-section-engine';
+import { VegetationEngine } from './geo/vegetation-engine';
 import { renderCrossSection, exportCrossSectionPNG } from './render/cross-section-renderer';
 import { AppShell } from './ui/app-shell';
 import type { StateBufferViews, LatLon } from './shared/types';
@@ -40,7 +41,7 @@ let stateViews: StateBufferViews = createStateBufferLayout(
 // ── Core systems ────────────────────────────────────────────────────────────
 
 const bus = new EventBus();
-const clock = new SimClock(bus);
+const clock = new SimClock(bus, { maxFrameBudget: 0.05 });
 const eventLog = new EventLog();
 const snapshotManager = new SnapshotManager(10, 500);
 const shell = new AppShell(appEl);
@@ -51,6 +52,7 @@ const renderer = new GlobeRenderer(viewportEl);
 let tectonicEngine: TectonicEngine | null = null;
 let surfaceEngine: SurfaceEngine | null = null;
 let atmosphereEngine: AtmosphereEngine | null = null;
+let vegetationEngine: VegetationEngine | null = null;
 
 // Phase 5: Cross-Section Engine (persistent, re-initialised on planet generation)
 const crossSectionEngine = new CrossSectionEngine(bus);
@@ -98,6 +100,12 @@ function generatePlanet(seed: number): void {
   crossSectionEngine.clear();
   crossSectionEngine.initialize(stateViews, tectonicEngine.stratigraphy);
 
+  // Initialize Phase 6 vegetation engine (feature-flagged)
+  vegetationEngine = new VegetationEngine(bus, eventLog, seed, {
+    minTickInterval: 1.0,
+  });
+  vegetationEngine.initialize(stateViews);
+
   // Take initial snapshot
   snapshotManager.takeSnapshot(-4500, buffer);
 
@@ -118,10 +126,24 @@ function generatePlanet(seed: number): void {
   drawPoints = [];
 
   bus.emit('PLANET_GENERATED', { seed, timeMa: clock.t });
+
+  // Encode seed in URL fragment for sharing
+  window.location.hash = `seed=${seed}`;
 }
 
-// Generate the first planet
-generatePlanet(randomSeed());
+// Parse seed from URL fragment if available
+function seedFromURL(): number | null {
+  const hash = window.location.hash;
+  const match = hash.match(/seed=(\d+)/);
+  if (match) {
+    const val = Number(match[1]);
+    if (val > 0 && val <= 0xffff_fffe) return val;
+  }
+  return null;
+}
+
+// Generate the first planet (from URL seed or random)
+generatePlanet(seedFromURL() ?? randomSeed());
 
 // ── Cross-Section Draw Mode ─────────────────────────────────────────────────
 
@@ -234,6 +256,11 @@ function loop(now: number): void {
       // Run Phase 4 atmosphere processes
       if (atmosphereEngine) {
         atmosphereEngine.tick(clock.t, deltaMa);
+      }
+
+      // Run Phase 6 vegetation processes
+      if (vegetationEngine) {
+        vegetationEngine.tick(clock.t, deltaMa);
       }
 
       tectonicAccum = 0;
