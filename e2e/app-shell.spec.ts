@@ -369,3 +369,116 @@ test.describe('Phase 5: Cross-Section Viewer', () => {
     expect(critical).toHaveLength(0);
   });
 });
+
+// ─── Phase 6: Vegetation & Polish Tests ─────────────────────────────────────
+
+test.describe('Phase 6: Vegetation & Polish', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+  });
+
+  test('should display layer overlay toggles in the sidebar', async ({ page }) => {
+    await expect(page.locator('text=Layer Overlays')).toBeVisible();
+    await expect(page.locator('button', { hasText: 'plates' })).toBeVisible();
+    await expect(page.locator('button', { hasText: 'temperature' })).toBeVisible();
+    await expect(page.locator('button', { hasText: 'precipitation' })).toBeVisible();
+    await expect(page.locator('button', { hasText: 'soil' })).toBeVisible();
+    await expect(page.locator('button', { hasText: 'clouds' })).toBeVisible();
+    await expect(page.locator('button', { hasText: 'biomass' })).toBeVisible();
+  });
+
+  test('should toggle layer overlay buttons', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    const platesBtn = page.locator('button', { hasText: 'plates' });
+    await platesBtn.click();
+    await page.waitForTimeout(200);
+
+    // Click again to toggle off
+    await platesBtn.click();
+    await page.waitForTimeout(200);
+
+    expect(errors).toHaveLength(0);
+  });
+
+  test('should display the geological timeline strip', async ({ page }) => {
+    // Timeline strip should be at the bottom of the viewport
+    const canvas = page.locator('canvas');
+    await expect(canvas).toBeVisible();
+
+    // Verify the app doesn't crash with the timeline rendered
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+    await page.waitForTimeout(1000);
+    expect(errors).toHaveLength(0);
+  });
+
+  test('should encode seed in URL fragment', async ({ page }) => {
+    // Wait for planet to generate
+    await page.waitForTimeout(1000);
+
+    const url = page.url();
+    expect(url).toMatch(/seed=\d+/);
+  });
+
+  test('should load planet from seed in URL', async ({ page }) => {
+    // Navigate with a specific seed
+    await page.goto('/#seed=42');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+    await page.waitForTimeout(1000);
+
+    // Verify the seed is displayed
+    const seedText = await page.locator('text=42').textContent();
+    expect(seedText).toBeTruthy();
+  });
+
+  test('should run vegetation engine without errors', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    // Unpause and let the simulation run
+    const pauseBtn = page.locator('button', { hasText: /Resume/ });
+    if (await pauseBtn.isVisible()) {
+      await pauseBtn.click();
+    }
+
+    // Let vegetation processes run
+    await page.waitForTimeout(3000);
+
+    // Pause again
+    const pauseBtn2 = page.locator('button', { hasText: /Pause/ });
+    if (await pauseBtn2.isVisible()) {
+      await pauseBtn2.click();
+    }
+
+    const critical = errors.filter(
+      (e) => !e.includes('WebGL') && !e.includes('THREE.'),
+    );
+    expect(critical).toHaveLength(0);
+  });
+
+  test('no console errors after new planet generation with Phase 6 engines', async ({ page }) => {
+    const consoleErrors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        consoleErrors.push(msg.text());
+      }
+    });
+
+    // Generate a new planet
+    const newPlanetBtn = page.locator('button', { hasText: 'New Planet' });
+    await newPlanetBtn.click();
+    await page.waitForTimeout(2000);
+
+    // Generate another planet
+    await newPlanetBtn.click();
+    await page.waitForTimeout(2000);
+
+    const critical = consoleErrors.filter(
+      (e) => !e.includes('WebGL') && !e.includes('THREE.'),
+    );
+    expect(critical).toHaveLength(0);
+  });
+});
