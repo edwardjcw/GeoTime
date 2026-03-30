@@ -1,6 +1,6 @@
 # GeoTime — Planetary Geological Simulation Engine
 ## Comprehensive Implementation Plan v1.2
-**Multi-Agent Architecture · Earth-Analog Iteration**
+**Multi-Agent Architecture · Earth-Analog Iteration · C# .NET Backend**
 
 ---
 
@@ -19,6 +19,7 @@
 11. [Recommended Technology Stack](#11-recommended-technology-stack)
 12. [Risk Register](#12-risk-register)
 13. [Per-Agent Briefing Notes](#13-per-agent-briefing-notes)
+14. [Backend Migration](#14-backend-migration)
 
 ---
 
@@ -1103,4 +1104,72 @@ The biomatter system introduces one new rock type to the geological layer catalo
 
 *End of GeoTime Implementation Plan v1.2*
 
-*6 Agents · 7 Domains · 7 Phases · 21 Weeks · 1 Planet at a Time*
+*6 Agents · 7 Domains · 7 Phases + Backend Migration · 21 Weeks · 1 Planet at a Time*
+
+---
+
+## 14. Backend Migration
+
+All simulation logic has been migrated from the TypeScript frontend to a C# .NET backend. The frontend is now display-only, communicating with the backend via REST, MessagePack binary endpoints, and WebSocket streaming. See `migration.md` for detailed phase-by-phase migration status.
+
+### Architecture
+
+```
+┌──────────────────────────────┐     ┌──────────────────────────────────┐
+│       TypeScript Frontend    │     │       C# .NET Backend            │
+│                              │     │                                  │
+│  Three.js Globe Rendering    │     │  SimulationOrchestrator          │
+│  Canvas 2D Cross-Section     │────▶│   ├── TectonicEngine             │
+│  UI Shell (app-shell.ts)     │REST │   ├── SurfaceEngine (parallel)   │
+│  backend-client.ts           │WS   │   ├── AtmosphereEngine (parallel)│
+│                              │────▶│   ├── VegetationEngine (parallel)│
+│  No simulation logic         │     │   └── CrossSectionEngine         │
+└──────────────────────────────┘     │                                  │
+                                     │  Kernel Services                 │
+                                     │   ├── EventBus                   │
+                                     │   ├── EventLog                   │
+                                     │   ├── SimClock                   │
+                                     │   ├── SnapshotManager            │
+                                     │   └── SnapshotDeltaCompressor    │
+                                     └──────────────────────────────────┘
+```
+
+### Communication Protocols
+
+| Protocol | Usage | Endpoint Pattern |
+|----------|-------|-----------------|
+| REST (JSON) | Commands & queries | `POST /api/planet/generate`, `GET /api/state/*` |
+| MessagePack (binary) | Large array transfers | `GET /api/state/*/binary` |
+| SignalR (WebSocket) | Real-time streaming | Hub at `/hubs/simulation` |
+
+### Phase 11 Features (Completed)
+
+1. **WebSocket Support (SignalR)**: `SimulationHub` provides real-time streaming of simulation ticks, state updates, and map data. Clients connect to `/hubs/simulation` and receive incremental updates during multi-step advances.
+
+2. **MessagePack Binary Serialization**: All large array endpoints (`heightmap`, `platemap`, `temperaturemap`, `precipitationmap`, `biomassmap`) have `/binary` variants returning MessagePack-encoded data with `application/x-msgpack` content type.
+
+3. **Backend Snapshot Management with Delta Compression**: `SnapshotDeltaCompressor` computes sparse 256-byte block deltas between snapshots. API endpoints: `POST /api/snapshots/take`, `GET /api/snapshots`, `POST /api/snapshots/restore`, `GET /api/snapshots/delta`.
+
+4. **Integration Tests**: 26 integration tests using `WebApplicationFactory` covering all REST endpoints, binary endpoints, and snapshot management.
+
+5. **Parallel Engine Ticks**: `SimulationOrchestrator.AdvanceSimulation` runs SurfaceEngine, AtmosphereEngine, and VegetationEngine in parallel via `Task.WhenAll` after TectonicEngine completes.
+
+### Test Summary
+
+| Test Suite | Count | Framework |
+|-----------|-------|-----------|
+| PRNG | 5 | xUnit |
+| Simplex Noise | 4 | xUnit |
+| Planet Generator | 5 | xUnit |
+| Kernel Services | 11 | xUnit |
+| Stratigraphy | 6 | xUnit |
+| Boundary Classifier | 4 | xUnit |
+| Pedogenesis | 9 | xUnit |
+| Weathering | 5 | xUnit |
+| Vegetation | 6 | xUnit |
+| Cross-Section | 8 | xUnit |
+| Simulation Orchestrator | 8 | xUnit |
+| Delta Compressor | 5 | xUnit |
+| State Serialization | 4 | xUnit |
+| API Integration | 26 | xUnit + WebApplicationFactory |
+| **Total Backend** | **106** | |
