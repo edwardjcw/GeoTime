@@ -95,3 +95,8 @@ This document tracks the migration of GeoTime's simulation logic from the browse
 
 ## Future Work
 - [ ] Add authentication/rate limiting for multi-user deployments
+- [ ] Biomatter engine: migrate simple non-plant biomatter system (microbes, plankton, reef organisms) to backend — ocean chemistry, biogenic sedimentation, atmosphere O₂/CH₄ feedback, petroleum source-rock pipeline (see Phase 7 of implementation plan)
+- [ ] Add `biomatterMap` and `organicCarbonMap` state arrays and REST endpoints (`GET /api/state/biomattermap`, `GET /api/state/organiccarbonmap`)
+- [ ] Add `BiomatterEngine` to `GeoTime.Core/Engines/` with cyanobacteria, plankton, reef, fungi productivity models
+- [ ] Add `SED_OIL_SHALE` to `RockType` enum for petroleum source rocks
+- [ ] Expand `CellInspection` model with biomatter density, organic carbon, and reef presence fields
