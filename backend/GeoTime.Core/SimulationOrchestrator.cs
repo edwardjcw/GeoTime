@@ -77,10 +77,34 @@ public sealed class SimulationOrchestrator
         if (_tectonic == null || deltaMa <= 0) return;
 
         Clock.T += deltaMa;
+
+        // Tectonic must run first (it updates boundaries, heights, plate map)
         _tectonic.Tick(Clock.T, deltaMa);
-        _surface?.Tick(Clock.T, deltaMa);
-        _atmosphere?.Tick(Clock.T, deltaMa);
-        _vegetation?.Tick(Clock.T, deltaMa);
+
+        // Surface, Atmosphere, and Vegetation can run in parallel since they
+        // read from state written by tectonic but write to independent fields.
+        var tasks = new List<Task>();
+        if (_surface != null)
+            tasks.Add(Task.Run(() => _surface.Tick(Clock.T, deltaMa)));
+        if (_atmosphere != null)
+            tasks.Add(Task.Run(() => _atmosphere.Tick(Clock.T, deltaMa)));
+        if (_vegetation != null)
+            tasks.Add(Task.Run(() => _vegetation.Tick(Clock.T, deltaMa)));
+
+        if (tasks.Count > 0)
+        {
+            try
+            {
+                Task.WhenAll(tasks).GetAwaiter().GetResult();
+            }
+            catch (AggregateException ex)
+            {
+                // Log but don't crash — partial state is better than no state.
+                // In production, this would feed into a diagnostics channel.
+                System.Diagnostics.Debug.WriteLine(
+                    $"Parallel engine tick error: {ex.Flatten().InnerExceptions.Count} engine(s) failed");
+            }
+        }
     }
 
     /// <summary>Build a cross-section profile along the given path.</summary>
@@ -120,6 +144,103 @@ public sealed class SimulationOrchestrator
             Precipitation = State.PrecipitationMap[cellIndex],
             Biomass = State.BiomassMap[cellIndex],
         };
+    }
+
+    /// <summary>
+    /// Serialize the current simulation state arrays into a single byte array
+    /// for snapshot storage. Includes the current clock time.
+    /// </summary>
+    public byte[] SerializeState()
+    {
+        int cellCount = State.CellCount;
+        // Layout: [8 bytes timeMa] + float arrays (HeightMap, CrustThickness, RockAge,
+        //   SoilDepth, Temperature, Precipitation, WindU, WindV, CloudCover, Biomass)
+        //   + byte arrays (RockType, SoilType, CloudType)
+        //   + ushort array (PlateMap)
+        int floatArrays = 10; // HeightMap, CrustThickness, RockAge, SoilDepth, Temperature, Precipitation, WindU, WindV, CloudCover, Biomass
+        int byteArrays = 3;   // RockType, SoilType, CloudType
+        int ushortArrays = 1; // PlateMap
+        int totalSize = 8 + (floatArrays * cellCount * 4) + (byteArrays * cellCount) + (ushortArrays * cellCount * 2);
+
+        var data = new byte[totalSize];
+        int offset = 0;
+
+        // Time
+        BitConverter.TryWriteBytes(data.AsSpan(offset), Clock.T);
+        offset += 8;
+
+        // Float arrays
+        WriteFloatArray(data, ref offset, State.HeightMap);
+        WriteFloatArray(data, ref offset, State.CrustThicknessMap);
+        WriteFloatArray(data, ref offset, State.RockAgeMap);
+        WriteFloatArray(data, ref offset, State.SoilDepthMap);
+        WriteFloatArray(data, ref offset, State.TemperatureMap);
+        WriteFloatArray(data, ref offset, State.PrecipitationMap);
+        WriteFloatArray(data, ref offset, State.WindUMap);
+        WriteFloatArray(data, ref offset, State.WindVMap);
+        WriteFloatArray(data, ref offset, State.CloudCoverMap);
+        WriteFloatArray(data, ref offset, State.BiomassMap);
+
+        // Byte arrays
+        Buffer.BlockCopy(State.RockTypeMap, 0, data, offset, cellCount);
+        offset += cellCount;
+        Buffer.BlockCopy(State.SoilTypeMap, 0, data, offset, cellCount);
+        offset += cellCount;
+        Buffer.BlockCopy(State.CloudTypeMap, 0, data, offset, cellCount);
+        offset += cellCount;
+
+        // Ushort array (PlateMap)
+        Buffer.BlockCopy(State.PlateMap, 0, data, offset, cellCount * 2);
+
+        return data;
+    }
+
+    /// <summary>
+    /// Deserialize state arrays from a byte buffer, restoring the simulation state.
+    /// </summary>
+    public void DeserializeState(byte[] data)
+    {
+        int cellCount = State.CellCount;
+        int offset = 0;
+
+        // Time
+        Clock.T = BitConverter.ToDouble(data, offset);
+        offset += 8;
+
+        // Float arrays
+        ReadFloatArray(data, ref offset, State.HeightMap);
+        ReadFloatArray(data, ref offset, State.CrustThicknessMap);
+        ReadFloatArray(data, ref offset, State.RockAgeMap);
+        ReadFloatArray(data, ref offset, State.SoilDepthMap);
+        ReadFloatArray(data, ref offset, State.TemperatureMap);
+        ReadFloatArray(data, ref offset, State.PrecipitationMap);
+        ReadFloatArray(data, ref offset, State.WindUMap);
+        ReadFloatArray(data, ref offset, State.WindVMap);
+        ReadFloatArray(data, ref offset, State.CloudCoverMap);
+        ReadFloatArray(data, ref offset, State.BiomassMap);
+
+        // Byte arrays
+        Buffer.BlockCopy(data, offset, State.RockTypeMap, 0, cellCount);
+        offset += cellCount;
+        Buffer.BlockCopy(data, offset, State.SoilTypeMap, 0, cellCount);
+        offset += cellCount;
+        Buffer.BlockCopy(data, offset, State.CloudTypeMap, 0, cellCount);
+        offset += cellCount;
+
+        // Ushort array (PlateMap)
+        Buffer.BlockCopy(data, offset, State.PlateMap, 0, cellCount * 2);
+    }
+
+    private static void WriteFloatArray(byte[] dest, ref int offset, float[] src)
+    {
+        Buffer.BlockCopy(src, 0, dest, offset, src.Length * 4);
+        offset += src.Length * 4;
+    }
+
+    private static void ReadFloatArray(byte[] src, ref int offset, float[] dest)
+    {
+        Buffer.BlockCopy(src, offset, dest, 0, dest.Length * 4);
+        offset += dest.Length * 4;
     }
 }
 

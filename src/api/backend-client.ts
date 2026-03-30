@@ -2,6 +2,7 @@
 // Communicates with the C# .NET backend for all simulation calculations.
 // The frontend only handles display (Three.js rendering, UI) and sends
 // commands to the backend.
+// Supports REST, binary (MessagePack) endpoints, and WebSocket streaming.
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:5000';
 
@@ -71,6 +72,17 @@ export interface GeoLogEntry {
   location?: { lat: number; lon: number };
 }
 
+export interface SnapshotInfo {
+  count: number;
+  times: number[];
+}
+
+export interface SimulationTickEvent {
+  timeMa: number;
+  step: number;
+  totalSteps: number;
+}
+
 async function post<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
@@ -87,7 +99,15 @@ async function get<T>(path: string): Promise<T> {
   return res.json();
 }
 
-// ── Public API ──────────────────────────────────────────────────────────────
+async function getBinary(path: string): Promise<ArrayBuffer> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { Accept: 'application/x-msgpack' },
+  });
+  if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
+  return res.arrayBuffer();
+}
+
+// ── Public API (REST) ───────────────────────────────────────────────────────
 
 export async function generatePlanet(seed: number = 0): Promise<GenerateResult> {
   return post('/api/planet/generate', { seed });
@@ -146,4 +166,165 @@ export async function getCrossSection(
   points: Array<{ lat: number; lon: number }>,
 ): Promise<CrossSectionProfile> {
   return post('/api/crosssection', { points });
+}
+
+// ── Binary (MessagePack) Endpoints ──────────────────────────────────────────
+
+export async function getHeightMapBinary(): Promise<ArrayBuffer> {
+  return getBinary('/api/state/heightmap/binary');
+}
+
+export async function getPlateMapBinary(): Promise<ArrayBuffer> {
+  return getBinary('/api/state/platemap/binary');
+}
+
+export async function getTemperatureMapBinary(): Promise<ArrayBuffer> {
+  return getBinary('/api/state/temperaturemap/binary');
+}
+
+export async function getPrecipitationMapBinary(): Promise<ArrayBuffer> {
+  return getBinary('/api/state/precipitationmap/binary');
+}
+
+export async function getBiomassMapBinary(): Promise<ArrayBuffer> {
+  return getBinary('/api/state/biomassmap/binary');
+}
+
+// ── Snapshot Management ─────────────────────────────────────────────────────
+
+export async function takeSnapshot(): Promise<{ timeMa: number; snapshotCount: number }> {
+  return post('/api/snapshots/take');
+}
+
+export async function listSnapshots(): Promise<SnapshotInfo> {
+  return get('/api/snapshots');
+}
+
+export async function restoreSnapshot(
+  targetTimeMa: number,
+): Promise<{ restoredTimeMa: number; targetTimeMa: number }> {
+  return post('/api/snapshots/restore', { targetTimeMa });
+}
+
+export async function getSnapshotDelta(
+  fromTimeMa: number,
+  toTimeMa: number,
+): Promise<ArrayBuffer> {
+  return getBinary(`/api/snapshots/delta?fromTimeMa=${fromTimeMa}&toTimeMa=${toTimeMa}`);
+}
+
+// ── WebSocket (SignalR) Client ───────────────────────────────────────────────
+
+export type SimulationEventHandler = {
+  onTick?: (event: SimulationTickEvent) => void;
+  onAdvanceComplete?: (event: { timeMa: number }) => void;
+  onPlanetGenerated?: (event: GenerateResult) => void;
+  onHeightMapData?: (data: number[]) => void;
+  onTemperatureMapData?: (data: number[]) => void;
+  onPrecipitationMapData?: (data: number[]) => void;
+  onBiomassMapData?: (data: number[]) => void;
+  onPlateMapData?: (data: number[]) => void;
+  onConnected?: (event: { timeMa: number; seed: number }) => void;
+  onDisconnected?: () => void;
+};
+
+/**
+ * Creates a WebSocket connection to the simulation hub for real-time streaming.
+ * Uses the SignalR text protocol over WebSocket for broad compatibility.
+ */
+export function createSimulationSocket(handlers: SimulationEventHandler) {
+  const WS_BASE = API_BASE.replace(/^http/, 'ws');
+  const url = `${WS_BASE}/hubs/simulation`;
+  let ws: WebSocket | null = null;
+  let connected = false;
+
+  function connect() {
+    ws = new WebSocket(url);
+
+    ws.onopen = () => {
+      // Send SignalR handshake (JSON protocol)
+      ws?.send(JSON.stringify({ protocol: 'json', version: 1 }) + '\x1e');
+    };
+
+    ws.onmessage = (event) => {
+      const messages = (event.data as string).split('\x1e').filter(Boolean);
+      for (const raw of messages) {
+        try {
+          const msg = JSON.parse(raw);
+          if (msg.type === undefined && !connected) {
+            // Handshake response
+            connected = true;
+            return;
+          }
+          if (msg.type === 1 && msg.target) {
+            // Invocation message
+            const args = msg.arguments ?? [];
+            switch (msg.target) {
+              case 'Connected':
+                handlers.onConnected?.(args[0]);
+                break;
+              case 'SimulationTick':
+                handlers.onTick?.(args[0]);
+                break;
+              case 'SimulationAdvanceComplete':
+                handlers.onAdvanceComplete?.(args[0]);
+                break;
+              case 'PlanetGenerated':
+                handlers.onPlanetGenerated?.(args[0]);
+                break;
+              case 'HeightMapData':
+                handlers.onHeightMapData?.(args[0]);
+                break;
+              case 'TemperatureMapData':
+                handlers.onTemperatureMapData?.(args[0]);
+                break;
+              case 'PrecipitationMapData':
+                handlers.onPrecipitationMapData?.(args[0]);
+                break;
+              case 'BiomassMapData':
+                handlers.onBiomassMapData?.(args[0]);
+                break;
+              case 'PlateMapData':
+                handlers.onPlateMapData?.(args[0]);
+                break;
+            }
+          }
+        } catch {
+          // Ignore malformed messages
+        }
+      }
+    };
+
+    ws.onclose = () => {
+      connected = false;
+      handlers.onDisconnected?.();
+    };
+  }
+
+  function invoke(method: string, ...args: unknown[]) {
+    if (!ws || !connected) return;
+    ws.send(
+      JSON.stringify({ type: 1, target: method, arguments: args }) + '\x1e',
+    );
+  }
+
+  return {
+    connect,
+    disconnect: () => {
+      ws?.close();
+      ws = null;
+      connected = false;
+    },
+    get isConnected() {
+      return connected;
+    },
+    generatePlanet: (seed: number) => invoke('GeneratePlanet', seed),
+    advanceSimulation: (deltaMa: number, steps = 1) =>
+      invoke('AdvanceSimulation', deltaMa, steps),
+    requestHeightMap: () => invoke('RequestHeightMap'),
+    requestTemperatureMap: () => invoke('RequestTemperatureMap'),
+    requestPrecipitationMap: () => invoke('RequestPrecipitationMap'),
+    requestBiomassMap: () => invoke('RequestBiomassMap'),
+    requestPlateMap: () => invoke('RequestPlateMap'),
+  };
 }

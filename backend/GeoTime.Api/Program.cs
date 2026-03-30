@@ -1,10 +1,14 @@
+using GeoTime.Api;
 using GeoTime.Core;
+using GeoTime.Core.Kernel;
 using GeoTime.Core.Models;
+using MessagePack;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 builder.Services.AddSingleton<SimulationOrchestrator>();
+builder.Services.AddSignalR();
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
     p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
 
@@ -16,6 +20,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
+
+// ── SignalR Hub ────────────────────────────────────────────────────────────────
+
+app.MapHub<SimulationHub>("/hubs/simulation");
 
 // ── API Endpoints ─────────────────────────────────────────────────────────────
 
@@ -93,6 +101,82 @@ app.MapPost("/api/crosssection", (CrossSectionRequest req, SimulationOrchestrato
     return profile != null ? Results.Ok(profile) : Results.BadRequest("No active simulation or insufficient path points");
 }).WithName("GetCrossSection");
 
+// ── MessagePack Binary Endpoints ──────────────────────────────────────────────
+
+app.MapGet("/api/state/heightmap/binary", (SimulationOrchestrator sim) =>
+{
+    byte[] packed = MessagePackSerializer.Serialize(sim.State.HeightMap);
+    return Results.Bytes(packed, "application/x-msgpack");
+}).WithName("GetHeightMapBinary");
+
+app.MapGet("/api/state/platemap/binary", (SimulationOrchestrator sim) =>
+{
+    byte[] packed = MessagePackSerializer.Serialize(sim.State.PlateMap);
+    return Results.Bytes(packed, "application/x-msgpack");
+}).WithName("GetPlateMapBinary");
+
+app.MapGet("/api/state/temperaturemap/binary", (SimulationOrchestrator sim) =>
+{
+    byte[] packed = MessagePackSerializer.Serialize(sim.State.TemperatureMap);
+    return Results.Bytes(packed, "application/x-msgpack");
+}).WithName("GetTemperatureMapBinary");
+
+app.MapGet("/api/state/precipitationmap/binary", (SimulationOrchestrator sim) =>
+{
+    byte[] packed = MessagePackSerializer.Serialize(sim.State.PrecipitationMap);
+    return Results.Bytes(packed, "application/x-msgpack");
+}).WithName("GetPrecipitationMapBinary");
+
+app.MapGet("/api/state/biomassmap/binary", (SimulationOrchestrator sim) =>
+{
+    byte[] packed = MessagePackSerializer.Serialize(sim.State.BiomassMap);
+    return Results.Bytes(packed, "application/x-msgpack");
+}).WithName("GetBiomassMapBinary");
+
+// ── Snapshot Management Endpoints ─────────────────────────────────────────────
+
+app.MapPost("/api/snapshots/take", (SimulationOrchestrator sim) =>
+{
+    var data = sim.SerializeState();
+    sim.Snapshots.TakeSnapshot(sim.GetCurrentTime(), data);
+    return Results.Ok(new
+    {
+        timeMa = sim.GetCurrentTime(),
+        snapshotCount = sim.Snapshots.Count,
+    });
+}).WithName("TakeSnapshot");
+
+app.MapGet("/api/snapshots", (SimulationOrchestrator sim) =>
+{
+    var times = sim.Snapshots.GetSnapshotTimes();
+    return Results.Ok(new { count = times.Count, times });
+}).WithName("ListSnapshots");
+
+app.MapPost("/api/snapshots/restore", (RestoreSnapshotRequest req, SimulationOrchestrator sim) =>
+{
+    var snap = sim.Snapshots.FindNearestBefore(req.TargetTimeMa);
+    if (snap == null) return Results.NotFound("No snapshot found before the target time");
+
+    sim.DeserializeState(snap.BufferData);
+    return Results.Ok(new
+    {
+        restoredTimeMa = snap.TimeMa,
+        targetTimeMa = req.TargetTimeMa,
+    });
+}).WithName("RestoreSnapshot");
+
+app.MapGet("/api/snapshots/delta", (double fromTimeMa, double toTimeMa, SimulationOrchestrator sim) =>
+{
+    var fromSnap = sim.Snapshots.FindNearestBefore(fromTimeMa + 0.001);
+    var toSnap = sim.Snapshots.FindNearestBefore(toTimeMa + 0.001);
+    if (fromSnap == null || toSnap == null)
+        return Results.NotFound("One or both snapshots not found");
+
+    var delta = SnapshotDeltaCompressor.ComputeDelta(fromSnap.BufferData, toSnap.BufferData);
+    byte[] packed = MessagePackSerializer.Serialize(delta);
+    return Results.Bytes(packed, "application/x-msgpack");
+}).WithName("GetSnapshotDelta");
+
 app.Run();
 
 // ── Request DTOs ──────────────────────────────────────────────────────────────
@@ -101,3 +185,10 @@ record GenerateRequest(uint Seed = 0);
 record AdvanceRequest(double DeltaMa);
 record PointDto(double Lat, double Lon);
 record CrossSectionRequest(List<PointDto> Points);
+record RestoreSnapshotRequest(double TargetTimeMa);
+
+// ── Make Program class accessible for integration tests ──
+namespace GeoTime.Api
+{
+    public partial class Program { }
+}

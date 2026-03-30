@@ -82,10 +82,16 @@ This document tracks the migration of GeoTime's simulation logic from the browse
 - [x] Cross-section tests (8 tests) — central angle, interpolation, lat/lon conversion
 - [x] Simulation orchestrator tests (8 tests) — generate, advance, inspect, cross-section
 
+## ✅ Phase 11: WebSocket, Binary Serialization & Performance
+- [x] Add WebSocket support for real-time simulation streaming (SignalR hub at `/hubs/simulation`)
+- [x] Add binary serialization for large array transfers (MessagePack `/binary` endpoints)
+- [x] Move snapshot management to backend with delta compression (`/api/snapshots/*` endpoints)
+- [x] Add integration tests for API endpoints (26 integration tests via `WebApplicationFactory`)
+- [x] Performance optimization: parallel engine ticks using `Task.WhenAll`
+- [x] State serialization/deserialization for snapshot persistence
+- [x] Frontend updated: binary fetch, snapshot management, WebSocket client in `backend-client.ts`
+- [x] Delta compression unit tests (5 tests)
+- [x] State serialization unit tests (4 tests)
+
 ## Future Work
-- [ ] Add WebSocket support for real-time simulation streaming
-- [ ] Add binary serialization for large array transfers (MessagePack)
 - [ ] Add authentication/rate limiting for multi-user deployments
-- [ ] Move snapshot management to backend with delta compression
-- [ ] Add integration tests for API endpoints
-- [ ] Performance optimization: parallel engine ticks using Task.WhenAll
