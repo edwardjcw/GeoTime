@@ -9,7 +9,7 @@ import { GlobeRenderer } from './render/globe-renderer';
 import { renderCrossSection, exportCrossSectionPNG } from './render/cross-section-renderer';
 import { AppShell } from './ui/app-shell';
 import * as api from './api/backend-client';
-import type { LatLon } from './shared/types';
+import type { CrossSectionProfile as SharedCrossSectionProfile, LatLon } from './shared/types';
 
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 
@@ -105,7 +105,7 @@ shell.onLabelToggle((visible) => {
     const canvas = shell.getCrossSectionCanvas();
     const panelEl = canvas.parentElement;
     const w = panelEl ? panelEl.clientWidth : 960;
-    renderCrossSection(lastCrossSectionProfile as never, {
+    renderCrossSection(lastCrossSectionProfile as unknown as SharedCrossSectionProfile, {
       width: w,
       height: 280,
       showLabels: visible,
