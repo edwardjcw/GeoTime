@@ -80,7 +80,7 @@ const biomeVertexShader = /* glsl */ `
 varying vec2 vUv;
 void main() {
   vUv = uv;
-  vec3 pos = position * 1.001;
+  vec3 pos = position * 1.0003;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 }
 `;
@@ -101,7 +101,7 @@ varying vec2 vUv;
 void main() {
   vUv = uv;
   // Slight offset outward to avoid z-fighting with the terrain mesh
-  vec3 pos = position * 1.002;
+  vec3 pos = position * 1.0005;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 }
 `;
@@ -301,12 +301,12 @@ export class GlobeRenderer {
         depthWrite: false,
       });
 
-      // Reuse globe geometry for the overlay
+      // Reuse globe geometry for the overlay (hidden by default)
       this.plateMesh = new THREE.Mesh(
         this.globeMesh.geometry,
         this.plateMaterial,
       );
-      this.scene.add(this.plateMesh);
+      this.plateMesh.visible = false;
     } else {
       this.plateMaterial!.uniforms.uPlateMap.value = this.plateTexture;
     }
@@ -384,10 +384,60 @@ export class GlobeRenderer {
         this.globeMesh.geometry,
         this.biomeMaterial,
       );
-      this.scene.add(this.biomeMesh);
+      this.biomeMesh.visible = false;
     } else {
       this.biomeMaterial!.uniforms.uBiomeMap.value = this.biomeTexture;
     }
+  }
+
+  /** Show or hide the plate overlay. */
+  setPlateOverlayVisible(visible: boolean): void {
+    if (this.plateMesh) {
+      this.plateMesh.visible = visible;
+      if (visible && !this.plateMesh.parent) {
+        this.scene.add(this.plateMesh);
+      }
+    }
+  }
+
+  /** Show or hide the biome/climate overlay. */
+  setBiomeOverlayVisible(visible: boolean): void {
+    if (this.biomeMesh) {
+      this.biomeMesh.visible = visible;
+      if (visible && !this.biomeMesh.parent) {
+        this.scene.add(this.biomeMesh);
+      }
+    }
+  }
+
+  /**
+   * Raycast from screen coordinates to the globe surface and return lat/lon.
+   * @param x - Screen X coordinate relative to container.
+   * @param y - Screen Y coordinate relative to container.
+   * @param containerWidth  - Container pixel width.
+   * @param containerHeight - Container pixel height.
+   * @returns { lat, lon } in degrees or null if the ray misses the globe.
+   */
+  screenToLatLon(
+    x: number,
+    y: number,
+    containerWidth: number,
+    containerHeight: number,
+  ): { lat: number; lon: number } | null {
+    const ndc = new THREE.Vector2(
+      (x / containerWidth) * 2 - 1,
+      -(y / containerHeight) * 2 + 1,
+    );
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(ndc, this.camera);
+    const hits = raycaster.intersectObject(this.globeMesh);
+    if (hits.length === 0) return null;
+
+    const point = hits[0].point;
+    const r = point.length();
+    const lat = Math.asin(Math.max(-1, Math.min(1, point.y / r))) * (180 / Math.PI);
+    const lon = Math.atan2(point.z, point.x) * (180 / Math.PI);
+    return { lat, lon };
   }
 
   /** Release all GPU resources. */

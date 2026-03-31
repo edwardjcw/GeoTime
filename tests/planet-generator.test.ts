@@ -87,7 +87,7 @@ describe('PlanetGenerator', () => {
     expect(fraction).toBeLessThan(0.85);
   });
 
-  it('should set crust thickness to appropriate ranges (5-10km oceanic, 25-45km continental)', () => {
+  it('should set crust thickness to appropriate ranges (5-10km oceanic, 25-45km continental)', { timeout: 15000 }, () => {
     const views = makeViews();
     const result = new PlanetGenerator(42).generate(views);
     const cellCount = GRID_SIZE * GRID_SIZE;

@@ -91,6 +91,20 @@ let drawModeActive = false;
 let drawPoints: LatLon[] = [];
 let lastCrossSectionProfile: api.CrossSectionProfile | null = null;
 
+/** Render a cross-section profile into the panel canvas. */
+function renderCrossSectionToPanel(profile: api.CrossSectionProfile, showLabels: boolean): void {
+  const canvas = shell.getCrossSectionCanvas();
+  const panelEl = canvas.parentElement;
+  const w = panelEl ? panelEl.clientWidth : 960;
+  // The API and shared types have compatible shapes; cast via unknown for safety
+  renderCrossSection(profile as unknown as SharedCrossSectionProfile, {
+    width: w,
+    height: 280,
+    showLabels,
+    showLegend: true,
+  }, canvas);
+}
+
 shell.onDrawMode(() => {
   drawModeActive = !drawModeActive;
   shell.setDrawMode(drawModeActive);
@@ -102,15 +116,7 @@ shell.onDrawMode(() => {
 shell.onLabelToggle((visible) => {
   // Re-render if a profile is active
   if (lastCrossSectionProfile) {
-    const canvas = shell.getCrossSectionCanvas();
-    const panelEl = canvas.parentElement;
-    const w = panelEl ? panelEl.clientWidth : 960;
-    renderCrossSection(lastCrossSectionProfile as unknown as SharedCrossSectionProfile, {
-      width: w,
-      height: 280,
-      showLabels: visible,
-      showLegend: true,
-    }, canvas);
+    renderCrossSectionToPanel(lastCrossSectionProfile, visible);
   }
 });
 
@@ -128,6 +134,72 @@ shell.onCloseCrossSection(() => {
   drawModeActive = false;
   shell.setDrawMode(false);
   drawPoints = [];
+});
+
+// ── Layer overlay toggle handling ────────────────────────────────────────────
+
+async function fetchAndApplyClimateOverlay(): Promise<void> {
+  const [tempData, precipData] = await Promise.all([
+    api.getTemperatureMap(),
+    api.getPrecipitationMap(),
+  ]);
+  renderer.updateClimateMap(
+    new Float32Array(tempData),
+    new Float32Array(precipData),
+    GRID_SIZE,
+  );
+}
+
+shell.onLayerToggle(async (layer: string, active: boolean) => {
+  try {
+    if (layer === 'plates') {
+      if (active) {
+        const plateData = await api.getPlateMap();
+        renderer.updatePlateMap(new Uint16Array(plateData), GRID_SIZE);
+      }
+      renderer.setPlateOverlayVisible(active);
+    } else {
+      // temperature, precipitation, soil, clouds, biomass all use the climate overlay
+      if (active) {
+        await fetchAndApplyClimateOverlay();
+      }
+      renderer.setBiomeOverlayVisible(active);
+    }
+  } catch (err) {
+    console.error(`Failed to toggle layer ${layer}:`, err);
+  }
+});
+
+// ── Globe click handling for cross-section draw mode ────────────────────────
+
+shell.onInspectClick((x: number, y: number) => {
+  if (!drawModeActive) return;
+
+  const viewportEl = shell.getViewportElement();
+  const latLon = renderer.screenToLatLon(
+    x,
+    y,
+    viewportEl.clientWidth,
+    viewportEl.clientHeight,
+  );
+  if (!latLon) return;
+
+  drawPoints.push(latLon);
+
+  if (drawPoints.length >= 2) {
+    // Have enough points, request cross-section from backend
+    api.getCrossSection(drawPoints)
+      .then((profile) => {
+        lastCrossSectionProfile = profile;
+        shell.showCrossSection();
+        renderCrossSectionToPanel(profile, shell.areLabelsVisible());
+        drawModeActive = false;
+        shell.setDrawMode(false);
+      })
+      .catch((err) => {
+        console.error('Cross-section request failed:', err);
+      });
+  }
 });
 
 // ── Wire UI callbacks ───────────────────────────────────────────────────────

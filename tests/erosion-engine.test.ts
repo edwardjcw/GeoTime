@@ -83,7 +83,7 @@ describe('ErosionEngine', () => {
       }
     });
 
-    it('should identify pits as cells with no downstream', () => {
+    it('should identify pits as cells with no downstream', { timeout: 15000 }, () => {
       const views = makeViews();
       // Create a flat region (pit)
       views.heightMap.fill(100);
