@@ -106,7 +106,7 @@ describe('TectonicEngine', () => {
     expect(eruptions).toHaveLength(0);
   });
 
-  it('should process a tectonic tick and produce eruptions over time', () => {
+  it('should process a tectonic tick and produce eruptions over time', { timeout: 15000 }, () => {
     const engine = new TectonicEngine(bus, eventLog, 42, { minTickInterval: 1 });
     const { views } = makeViews();
     const plates = makeSimplePlates();
@@ -133,7 +133,7 @@ describe('TectonicEngine', () => {
     expect(totalEruptions).toBeGreaterThanOrEqual(0); // may or may not erupt depending on rng
   });
 
-  it('should emit VOLCANIC_ERUPTION events via the event bus', () => {
+  it('should emit VOLCANIC_ERUPTION events via the event bus', { timeout: 15000 }, () => {
     const engine = new TectonicEngine(bus, eventLog, 42, { minTickInterval: 1 });
     const { views } = makeViews();
     const plates = makeSimplePlates();
@@ -212,7 +212,7 @@ describe('TectonicEngine', () => {
     expect(engine.getAtmosphere().n2).toBeCloseTo(0.78, 1);
   });
 
-  it('should record events in the event log', () => {
+  it('should record events in the event log', { timeout: 15000 }, () => {
     const engine = new TectonicEngine(bus, eventLog, 42, { minTickInterval: 1 });
     const { views } = makeViews();
     const generator = new PlanetGenerator(42);

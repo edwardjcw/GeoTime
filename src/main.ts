@@ -130,6 +130,105 @@ shell.onCloseCrossSection(() => {
   drawPoints = [];
 });
 
+// ── Layer overlay toggle handling ────────────────────────────────────────────
+
+shell.onLayerToggle(async (layer: string, active: boolean) => {
+  try {
+    if (layer === 'plates') {
+      if (active) {
+        const plateData = await api.getPlateMap();
+        renderer.updatePlateMap(new Uint16Array(plateData), GRID_SIZE);
+      }
+      renderer.setPlateOverlayVisible(active);
+    } else if (layer === 'temperature' || layer === 'precipitation') {
+      if (active) {
+        const [tempData, precipData] = await Promise.all([
+          api.getTemperatureMap(),
+          api.getPrecipitationMap(),
+        ]);
+        renderer.updateClimateMap(
+          new Float32Array(tempData),
+          new Float32Array(precipData),
+          GRID_SIZE,
+        );
+      }
+      renderer.setBiomeOverlayVisible(active);
+    } else if (layer === 'biomass') {
+      if (active) {
+        const [tempData, precipData] = await Promise.all([
+          api.getTemperatureMap(),
+          api.getPrecipitationMap(),
+        ]);
+        renderer.updateClimateMap(
+          new Float32Array(tempData),
+          new Float32Array(precipData),
+          GRID_SIZE,
+        );
+      }
+      renderer.setBiomeOverlayVisible(active);
+    } else if (layer === 'soil' || layer === 'clouds') {
+      if (active) {
+        const [tempData, precipData] = await Promise.all([
+          api.getTemperatureMap(),
+          api.getPrecipitationMap(),
+        ]);
+        renderer.updateClimateMap(
+          new Float32Array(tempData),
+          new Float32Array(precipData),
+          GRID_SIZE,
+        );
+      }
+      renderer.setBiomeOverlayVisible(active);
+    }
+  } catch (err) {
+    console.error(`Failed to toggle layer ${layer}:`, err);
+  }
+});
+
+// ── Globe click handling for cross-section draw mode ────────────────────────
+
+shell.onInspectClick((x: number, y: number) => {
+  if (!drawModeActive) return;
+
+  const viewportEl = shell.getViewportElement();
+  const latLon = renderer.screenToLatLon(
+    x,
+    y,
+    viewportEl.clientWidth,
+    viewportEl.clientHeight,
+  );
+  if (!latLon) return;
+
+  drawPoints.push(latLon);
+
+  if (drawPoints.length >= 2) {
+    // Have enough points, request cross-section from backend
+    api.getCrossSection(drawPoints)
+      .then((profile) => {
+        lastCrossSectionProfile = profile;
+        shell.showCrossSection();
+        const canvas = shell.getCrossSectionCanvas();
+        const panelEl = canvas.parentElement;
+        const w = panelEl ? panelEl.clientWidth : 960;
+        renderCrossSection(
+          profile as unknown as SharedCrossSectionProfile,
+          {
+            width: w,
+            height: 280,
+            showLabels: shell.areLabelsVisible(),
+            showLegend: true,
+          },
+          canvas,
+        );
+        drawModeActive = false;
+        shell.setDrawMode(false);
+      })
+      .catch((err) => {
+        console.error('Cross-section request failed:', err);
+      });
+  }
+});
+
 // ── Wire UI callbacks ───────────────────────────────────────────────────────
 
 shell.onNewPlanet(() => {
