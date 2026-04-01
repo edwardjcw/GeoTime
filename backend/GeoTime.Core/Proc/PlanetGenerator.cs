@@ -6,25 +6,21 @@ namespace GeoTime.Core.Proc;
 /// Generates initial conditions for a terrestrial planet: tectonic plates,
 /// heightfield, crust properties, mantle plume hotspots, and atmosphere.
 /// </summary>
-public sealed class PlanetGenerator
+public sealed class PlanetGenerator(uint seed)
 {
     private const double TWO_PI = 2 * Math.PI;
     private const double DEG2RAD = Math.PI / 180.0;
 
-    private readonly uint _seed;
-
-    public PlanetGenerator(uint seed) => _seed = seed;
-
     public PlanetGeneratorResult Generate(SimulationState state)
     {
-        var rng = new Xoshiro256ss(_seed);
+        var rng = new Xoshiro256ss(seed);
         var noise = new SimplexNoise(rng);
-        int gs = state.GridSize;
+        var gs = state.GridSize;
 
-        int numPlates = rng.NextInt(10, 16);
+        var numPlates = rng.NextInt(10, 16);
         var plates = GeneratePlates(rng, numPlates, state);
         GenerateHeightMap(noise, state);
-        double seaLevel = FindSeaLevel(state.HeightMap, 0.70);
+        var seaLevel = FindSeaLevel(state.HeightMap, 0.70);
         NormaliseHeightMap(state.HeightMap, seaLevel);
         ClassifyPlatesAndCrust(plates, state, rng);
         var hotspots = GenerateHotspots(rng);
@@ -39,7 +35,7 @@ public sealed class PlanetGenerator
             Plates = plates,
             Hotspots = hotspots,
             Atmosphere = atmosphere,
-            Seed = _seed,
+            Seed = seed,
         };
     }
 
@@ -48,45 +44,45 @@ public sealed class PlanetGenerator
 
     private static (double x, double y, double z) LatLonToXYZ(double lat, double lon)
     {
-        double cosLat = Math.Cos(lat);
+        var cosLat = Math.Cos(lat);
         return (cosLat * Math.Cos(lon), cosLat * Math.Sin(lon), Math.Sin(lat));
     }
 
     private static double GreatCircleDist(double lat1, double lon1, double lat2, double lon2)
     {
         double dLat = lat2 - lat1, dLon = lon2 - lon1;
-        double a = Math.Pow(Math.Sin(dLat / 2), 2)
-                 + Math.Cos(lat1) * Math.Cos(lat2) * Math.Pow(Math.Sin(dLon / 2), 2);
+        var a = Math.Pow(Math.Sin(dLat / 2), 2)
+                + Math.Cos(lat1) * Math.Cos(lat2) * Math.Pow(Math.Sin(dLon / 2), 2);
         return 2 * Math.Asin(Math.Min(1, Math.Sqrt(a)));
     }
 
-    private List<PlateInfo> GeneratePlates(Xoshiro256ss rng, int numPlates, SimulationState state)
+    private static List<PlateInfo> GeneratePlates(Xoshiro256ss rng, int numPlates, SimulationState state)
     {
-        int gs = state.GridSize;
-        int cellCount = gs * gs;
+        var gs = state.GridSize;
+        var cellCount = gs * gs;
         var centersLat = new double[numPlates];
         var centersLon = new double[numPlates];
 
-        for (int p = 0; p < numPlates; p++)
+        for (var p = 0; p < numPlates; p++)
         {
             centersLat[p] = Math.Asin(rng.NextFloat(-1, 1));
             centersLon[p] = rng.NextFloat(-Math.PI, Math.PI);
         }
 
         // Lloyd relaxation — 3 iterations
-        for (int iter = 0; iter < 3; iter++)
+        for (var iter = 0; iter < 3; iter++)
         {
-            for (int row = 0; row < gs; row++)
+            for (var row = 0; row < gs; row++)
             {
-                double lat = RowToLat(row, gs);
-                for (int col = 0; col < gs; col++)
+                var lat = RowToLat(row, gs);
+                for (var col = 0; col < gs; col++)
                 {
-                    double lon = ColToLon(col, gs);
-                    int bestPlate = 0;
-                    double bestDist = double.PositiveInfinity;
-                    for (int p = 0; p < numPlates; p++)
+                    var lon = ColToLon(col, gs);
+                    var bestPlate = 0;
+                    var bestDist = double.PositiveInfinity;
+                    for (var p = 0; p < numPlates; p++)
                     {
-                        double d = GreatCircleDist(lat, lon, centersLat[p], centersLon[p]);
+                        var d = GreatCircleDist(lat, lon, centersLat[p], centersLon[p]);
                         if (d < bestDist) { bestDist = d; bestPlate = p; }
                     }
                     state.PlateMap[row * gs + col] = (ushort)bestPlate;
@@ -98,12 +94,12 @@ public sealed class PlanetGenerator
             var sumZ = new double[numPlates];
             var count = new double[numPlates];
 
-            for (int row = 0; row < gs; row++)
+            for (var row = 0; row < gs; row++)
             {
-                double lat = RowToLat(row, gs);
-                for (int col = 0; col < gs; col++)
+                var lat = RowToLat(row, gs);
+                for (var col = 0; col < gs; col++)
                 {
-                    double lon = ColToLon(col, gs);
+                    var lon = ColToLon(col, gs);
                     int p = state.PlateMap[row * gs + col];
                     var (cx, cy, cz) = LatLonToXYZ(lat, lon);
                     sumX[p] += cx; sumY[p] += cy; sumZ[p] += cz;
@@ -111,13 +107,13 @@ public sealed class PlanetGenerator
                 }
             }
 
-            for (int p = 0; p < numPlates; p++)
+            for (var p = 0; p < numPlates; p++)
             {
                 if (count[p] == 0) continue;
-                double mx = sumX[p] / count[p];
-                double my = sumY[p] / count[p];
-                double mz = sumZ[p] / count[p];
-                double r = Math.Sqrt(mx * mx + my * my + mz * mz);
+                var mx = sumX[p] / count[p];
+                var my = sumY[p] / count[p];
+                var mz = sumZ[p] / count[p];
+                var r = Math.Sqrt(mx * mx + my * my + mz * mz);
                 if (r < 1e-12) continue;
                 centersLat[p] = Math.Asin(Math.Clamp(mz / r, -1, 1));
                 centersLon[p] = Math.Atan2(my, mx);
@@ -125,17 +121,17 @@ public sealed class PlanetGenerator
         }
 
         // Final plate assignment
-        for (int row = 0; row < gs; row++)
+        for (var row = 0; row < gs; row++)
         {
-            double lat = RowToLat(row, gs);
-            for (int col = 0; col < gs; col++)
+            var lat = RowToLat(row, gs);
+            for (var col = 0; col < gs; col++)
             {
-                double lon = ColToLon(col, gs);
-                int bestPlate = 0;
-                double bestDist = double.PositiveInfinity;
-                for (int p = 0; p < numPlates; p++)
+                var lon = ColToLon(col, gs);
+                var bestPlate = 0;
+                var bestDist = double.PositiveInfinity;
+                for (var p = 0; p < numPlates; p++)
                 {
-                    double d = GreatCircleDist(lat, lon, centersLat[p], centersLon[p]);
+                    var d = GreatCircleDist(lat, lon, centersLat[p], centersLon[p]);
                     if (d < bestDist) { bestDist = d; bestPlate = p; }
                 }
                 state.PlateMap[row * gs + col] = (ushort)bestPlate;
@@ -143,10 +139,10 @@ public sealed class PlanetGenerator
         }
 
         var areaCount = new double[numPlates];
-        for (int i = 0; i < cellCount; i++) areaCount[state.PlateMap[i]]++;
+        for (var i = 0; i < cellCount; i++) areaCount[state.PlateMap[i]]++;
 
         var plates = new List<PlateInfo>();
-        for (int p = 0; p < numPlates; p++)
+        for (var p = 0; p < numPlates; p++)
         {
             plates.Add(new PlateInfo
             {
@@ -166,16 +162,16 @@ public sealed class PlanetGenerator
         return plates;
     }
 
-    private void GenerateHeightMap(SimplexNoise noise, SimulationState state)
+    private static void GenerateHeightMap(SimplexNoise noise, SimulationState state)
     {
-        int gs = state.GridSize;
+        var gs = state.GridSize;
         const double scale = 3.0;
-        for (int row = 0; row < gs; row++)
+        for (var row = 0; row < gs; row++)
         {
-            double lat = RowToLat(row, gs);
-            for (int col = 0; col < gs; col++)
+            var lat = RowToLat(row, gs);
+            for (var col = 0; col < gs; col++)
             {
-                double lon = ColToLon(col, gs);
+                var lon = ColToLon(col, gs);
                 var (nx, ny, nz) = LatLonToXYZ(lat, lon);
                 state.HeightMap[row * gs + col] = (float)noise.Fbm(nx * scale, ny * scale, nz * scale, 4);
             }
@@ -185,12 +181,12 @@ public sealed class PlanetGenerator
     private static double FindSeaLevel(float[] heightMap, double targetFraction)
     {
         double lo = -1, hi = 1;
-        int total = heightMap.Length;
-        for (int i = 0; i < 32; i++)
+        var total = heightMap.Length;
+        for (var i = 0; i < 32; i++)
         {
-            double mid = (lo + hi) / 2;
-            int below = 0;
-            for (int j = 0; j < total; j++) if (heightMap[j] <= mid) below++;
+            var mid = (lo + hi) / 2;
+            var below = 0;
+            for (var j = 0; j < total; j++) if (heightMap[j] <= mid) below++;
             if ((double)below / total < targetFraction) lo = mid; else hi = mid;
         }
         return (lo + hi) / 2;
@@ -198,17 +194,17 @@ public sealed class PlanetGenerator
 
     private static void NormaliseHeightMap(float[] heightMap, double seaLevel)
     {
-        for (int i = 0; i < heightMap.Length; i++)
+        for (var i = 0; i < heightMap.Length; i++)
             heightMap[i] -= (float)seaLevel;
     }
 
     private static void ClassifyPlatesAndCrust(List<PlateInfo> plates, SimulationState state, Xoshiro256ss rng)
     {
-        int cellCount = state.CellCount;
+        var cellCount = state.CellCount;
         var sumH = new double[plates.Count];
         var countH = new double[plates.Count];
 
-        for (int i = 0; i < cellCount; i++)
+        for (var i = 0; i < cellCount; i++)
         {
             sumH[state.PlateMap[i]] += state.HeightMap[i];
             countH[state.PlateMap[i]]++;
@@ -216,7 +212,7 @@ public sealed class PlanetGenerator
         foreach (var plate in plates)
             plate.IsOceanic = countH[plate.Id] > 0 && sumH[plate.Id] / countH[plate.Id] < 0;
 
-        for (int i = 0; i < cellCount; i++)
+        for (var i = 0; i < cellCount; i++)
         {
             var plate = plates[state.PlateMap[i]];
             if (plate.IsOceanic)
@@ -235,9 +231,9 @@ public sealed class PlanetGenerator
 
     private static List<HotspotInfo> GenerateHotspots(Xoshiro256ss rng)
     {
-        int count = rng.NextInt(2, 5);
+        var count = rng.NextInt(2, 5);
         var hotspots = new List<HotspotInfo>();
-        for (int i = 0; i < count; i++)
+        for (var i = 0; i < count; i++)
         {
             hotspots.Add(new HotspotInfo
             {

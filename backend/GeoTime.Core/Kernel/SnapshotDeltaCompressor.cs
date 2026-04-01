@@ -17,26 +17,23 @@ public static class SnapshotDeltaCompressor
     public static List<DeltaBlock> ComputeDelta(byte[] from, byte[] to)
     {
         var changes = new List<DeltaBlock>();
-        int len = Math.Min(from.Length, to.Length);
+        var len = Math.Min(from.Length, to.Length);
 
-        for (int off = 0; off < len; off += BLOCK_SIZE)
+        for (var off = 0; off < len; off += BLOCK_SIZE)
         {
-            int end = Math.Min(off + BLOCK_SIZE, len);
-            bool differs = false;
-            for (int j = off; j < end; j++)
+            var end = Math.Min(off + BLOCK_SIZE, len);
+            var differs = false;
+            for (var j = off; j < end; j++)
             {
-                if (from[j] != to[j])
-                {
-                    differs = true;
-                    break;
-                }
+                if (from[j] == to[j]) continue;
+                differs = true;
+                break;
             }
-            if (differs)
-            {
-                var data = new byte[end - off];
-                Buffer.BlockCopy(to, off, data, 0, data.Length);
-                changes.Add(new DeltaBlock { Offset = off, Data = data });
-            }
+
+            if (!differs) continue;
+            var data = new byte[end - off];
+            Buffer.BlockCopy(to, off, data, 0, data.Length);
+            changes.Add(new DeltaBlock { Offset = off, Data = data });
         }
 
         return changes;
@@ -62,5 +59,5 @@ public sealed class DeltaBlock
     public int Offset { get; set; }
 
     [Key(1)]
-    public byte[] Data { get; set; } = Array.Empty<byte>();
+    public byte[] Data { get; set; } = [];
 }

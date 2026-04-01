@@ -1,5 +1,4 @@
 using GeoTime.Core;
-using GeoTime.Core.Models;
 
 namespace GeoTime.Tests;
 
@@ -50,10 +49,7 @@ public class SimulationOrchestratorTests
     {
         var sim = new SimulationOrchestrator(64);
         sim.GeneratePlanet(42);
-        var profile = sim.GetCrossSection(new List<LatLon>
-        {
-            new(0, 0), new(45, 90)
-        });
+        var profile = sim.GetCrossSection([new(0, 0), new(45, 90)]);
         Assert.NotNull(profile);
         Assert.NotEmpty(profile.Samples);
         Assert.True(profile.TotalDistanceKm > 0);
@@ -64,7 +60,7 @@ public class SimulationOrchestratorTests
     {
         var sim = new SimulationOrchestrator(64);
         sim.GeneratePlanet(42);
-        Assert.Null(sim.GetCrossSection(new List<LatLon> { new(0, 0) }));
+        Assert.Null(sim.GetCrossSection([new(0, 0)]));
     }
 
     [Fact]
@@ -93,13 +89,13 @@ public class SimulationOrchestratorTests
         var sim = new SimulationOrchestrator(64);
         sim.GeneratePlanet(42);
 
-        float[] initialHeights = (float[])sim.State.HeightMap.Clone();
-        for (int i = 0; i < 5; i++)
+        var initialHeights = (float[])sim.State.HeightMap.Clone();
+        for (var i = 0; i < 5; i++)
             sim.AdvanceSimulation(1.0);
 
         // After several ticks, at least some cells should have changed
-        bool anyChanged = false;
-        for (int i = 0; i < sim.State.CellCount; i++)
+        var anyChanged = false;
+        for (var i = 0; i < sim.State.CellCount; i++)
             if (Math.Abs(sim.State.HeightMap[i] - initialHeights[i]) > 1e-6)
             { anyChanged = true; break; }
         Assert.True(anyChanged, "Simulation should modify height map");

@@ -8,26 +8,19 @@ namespace GeoTime.Api;
 /// Clients can request planet generation, advance simulation, and receive
 /// state updates pushed from the server.
 /// </summary>
-public sealed class SimulationHub : Hub
+public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
 {
-    private readonly SimulationOrchestrator _sim;
-
-    public SimulationHub(SimulationOrchestrator sim)
-    {
-        _sim = sim;
-    }
-
     /// <summary>Generate a new planet and broadcast the result to all clients.</summary>
     public async Task GeneratePlanet(uint seed)
     {
-        uint actualSeed = seed > 0 ? seed : (uint)Random.Shared.Next(1, int.MaxValue);
-        var result = _sim.GeneratePlanet(actualSeed);
+        var actualSeed = seed > 0 ? seed : (uint)Random.Shared.Next(1, int.MaxValue);
+        var result = sim.GeneratePlanet(actualSeed);
         await Clients.All.SendAsync("PlanetGenerated", new
         {
             seed = result.Seed,
             plateCount = result.Plates.Count,
             hotspotCount = result.Hotspots.Count,
-            timeMa = _sim.GetCurrentTime(),
+            timeMa = sim.GetCurrentTime(),
         });
     }
 
@@ -39,13 +32,13 @@ public sealed class SimulationHub : Hub
     {
         if (deltaMa <= 0 || steps < 1) return;
 
-        double stepSize = deltaMa / steps;
-        for (int i = 0; i < steps; i++)
+        var stepSize = deltaMa / steps;
+        for (var i = 0; i < steps; i++)
         {
-            _sim.AdvanceSimulation(stepSize);
+            sim.AdvanceSimulation(stepSize);
             await Clients.Caller.SendAsync("SimulationTick", new
             {
-                timeMa = _sim.GetCurrentTime(),
+                timeMa = sim.GetCurrentTime(),
                 step = i + 1,
                 totalSteps = steps,
             });
@@ -53,7 +46,7 @@ public sealed class SimulationHub : Hub
 
         await Clients.Caller.SendAsync("SimulationAdvanceComplete", new
         {
-            timeMa = _sim.GetCurrentTime(),
+            timeMa = sim.GetCurrentTime(),
         });
     }
 
@@ -63,31 +56,31 @@ public sealed class SimulationHub : Hub
     /// </summary>
     public async Task RequestHeightMap()
     {
-        await Clients.Caller.SendAsync("HeightMapData", _sim.State.HeightMap);
+        await Clients.Caller.SendAsync("HeightMapData", sim.State.HeightMap);
     }
 
     /// <summary>Stream the current temperature map to the caller.</summary>
     public async Task RequestTemperatureMap()
     {
-        await Clients.Caller.SendAsync("TemperatureMapData", _sim.State.TemperatureMap);
+        await Clients.Caller.SendAsync("TemperatureMapData", sim.State.TemperatureMap);
     }
 
     /// <summary>Stream the current precipitation map to the caller.</summary>
     public async Task RequestPrecipitationMap()
     {
-        await Clients.Caller.SendAsync("PrecipitationMapData", _sim.State.PrecipitationMap);
+        await Clients.Caller.SendAsync("PrecipitationMapData", sim.State.PrecipitationMap);
     }
 
     /// <summary>Stream the current biomass map to the caller.</summary>
     public async Task RequestBiomassMap()
     {
-        await Clients.Caller.SendAsync("BiomassMapData", _sim.State.BiomassMap);
+        await Clients.Caller.SendAsync("BiomassMapData", sim.State.BiomassMap);
     }
 
     /// <summary>Stream the current plate map to the caller.</summary>
     public async Task RequestPlateMap()
     {
-        int[] plateMap = Array.ConvertAll(_sim.State.PlateMap, v => (int)v);
+        var plateMap = Array.ConvertAll(sim.State.PlateMap, v => (int)v);
         await Clients.Caller.SendAsync("PlateMapData", plateMap);
     }
 
@@ -95,8 +88,8 @@ public sealed class SimulationHub : Hub
     {
         await Clients.Caller.SendAsync("Connected", new
         {
-            timeMa = _sim.GetCurrentTime(),
-            seed = _sim.GetCurrentSeed(),
+            timeMa = sim.GetCurrentTime(),
+            seed = sim.GetCurrentSeed(),
         });
         await base.OnConnectedAsync();
     }

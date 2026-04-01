@@ -8,11 +8,11 @@ public class BoundaryClassifierTests
     [Fact]
     public void Classify_FindsBoundaries()
     {
-        int gs = 8;
+        var gs = 8;
         var plateMap = new ushort[gs * gs];
         // Left half = plate 0, right half = plate 1
-        for (int row = 0; row < gs; row++)
-            for (int col = 0; col < gs; col++)
+        for (var row = 0; row < gs; row++)
+            for (var col = 0; col < gs; col++)
                 plateMap[row * gs + col] = (ushort)(col < gs / 2 ? 0 : 1);
 
         var plates = new List<PlateInfo>
@@ -22,7 +22,7 @@ public class BoundaryClassifierTests
         };
 
         var classifier = new BoundaryClassifier();
-        var boundaries = classifier.Classify(plateMap, plates, gs);
+        var boundaries = BoundaryClassifier.Classify(plateMap, plates, gs);
         Assert.NotEmpty(boundaries);
         Assert.All(boundaries, b => Assert.True(b.Plate1 != b.Plate2));
     }
@@ -30,7 +30,7 @@ public class BoundaryClassifierTests
     [Fact]
     public void GetNeighborIndices_ReturnsValidIndices()
     {
-        int gs = 8;
+        var gs = 8;
         var neighbors = BoundaryClassifier.GetNeighborIndices(0, 0, gs);
         Assert.NotEmpty(neighbors);
         Assert.All(neighbors, n => Assert.InRange(n, 0, gs * gs - 1));
@@ -39,7 +39,7 @@ public class BoundaryClassifierTests
     [Fact]
     public void GetNeighborIndices_WrapsLongitude()
     {
-        int gs = 8;
+        var gs = 8;
         var neighbors = BoundaryClassifier.GetNeighborIndices(4, 0, gs);
         // Should include column gs-1 (left wrap)
         Assert.Contains(4 * gs + (gs - 1), neighbors);

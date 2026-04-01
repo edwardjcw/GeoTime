@@ -144,8 +144,8 @@ public sealed class EruptionRecord
 /// <summary>Result of planet generation.</summary>
 public sealed class PlanetGeneratorResult
 {
-    public List<PlateInfo> Plates { get; set; } = new();
-    public List<HotspotInfo> Hotspots { get; set; } = new();
+    public List<PlateInfo> Plates { get; set; } = [];
+    public List<HotspotInfo> Hotspots { get; set; } = [];
     public AtmosphericComposition Atmosphere { get; set; } = new();
     public uint Seed { get; set; }
 }
@@ -161,7 +161,7 @@ public sealed class CrossSectionSample
     public double CrustThicknessKm { get; set; }
     public SoilOrder SoilType { get; set; }
     public double SoilDepthM { get; set; }
-    public List<StratigraphicLayer> Layers { get; set; } = new();
+    public List<StratigraphicLayer> Layers { get; set; } = [];
 }
 
 /// <summary>Deep earth zone.</summary>
@@ -176,10 +176,10 @@ public sealed class DeepEarthZone
 /// <summary>Cross-section profile.</summary>
 public sealed class CrossSectionProfile
 {
-    public List<CrossSectionSample> Samples { get; set; } = new();
+    public List<CrossSectionSample> Samples { get; set; } = [];
     public double TotalDistanceKm { get; set; }
-    public List<LatLon> PathPoints { get; set; } = new();
-    public List<DeepEarthZone> DeepEarthZones { get; set; } = new();
+    public List<LatLon> PathPoints { get; set; } = [];
+    public List<DeepEarthZone> DeepEarthZones { get; set; } = [];
 }
 
 /// <summary>Geological event log entry.</summary>

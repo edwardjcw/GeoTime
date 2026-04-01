@@ -5,18 +5,15 @@ namespace GeoTime.Core.Kernel;
 /// <summary>
 /// Records significant geological events with timestamps.
 /// </summary>
-public sealed class EventLog
+public sealed class EventLog(int maxEntries = 10_000)
 {
-    private readonly List<GeoLogEntry> _entries = new();
-    private readonly int _maxEntries;
-
-    public EventLog(int maxEntries = 10_000) => _maxEntries = maxEntries;
+    private readonly List<GeoLogEntry> _entries = [];
 
     public void Record(GeoLogEntry entry)
     {
         _entries.Add(entry);
-        if (_entries.Count > _maxEntries)
-            _entries.RemoveRange(0, _entries.Count - _maxEntries);
+        if (_entries.Count > maxEntries)
+            _entries.RemoveRange(0, _entries.Count - maxEntries);
     }
 
     public IReadOnlyList<GeoLogEntry> GetAll() => _entries;

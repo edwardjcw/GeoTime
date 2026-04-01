@@ -1,5 +1,3 @@
-using GeoTime.Core.Models;
-
 namespace GeoTime.Core.Kernel;
 
 /// <summary>
@@ -13,7 +11,7 @@ public sealed class EventBus
     {
         if (!_listeners.TryGetValue(type, out var list))
         {
-            list = new List<Action<object>>();
+            list = [];
             _listeners[type] = list;
         }
         list.Add(callback);
@@ -27,9 +25,9 @@ public sealed class EventBus
 
     public void Emit(string type, object payload)
     {
-        if (_listeners.TryGetValue(type, out var list))
-            foreach (var cb in list.ToList())
-                cb(payload);
+        if (!_listeners.TryGetValue(type, out var list)) return;
+        foreach (var cb in list.ToList())
+            cb(payload);
     }
 
     public void Clear() => _listeners.Clear();

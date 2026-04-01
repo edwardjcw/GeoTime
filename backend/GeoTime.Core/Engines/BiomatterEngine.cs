@@ -9,7 +9,13 @@ namespace GeoTime.Core.Engines;
 /// Drives ocean chemistry, biogenic sedimentation, atmosphere O₂/CH₄ feedback,
 /// and petroleum source-rock formation. Feature-flagged.
 /// </summary>
-public sealed class BiomatterEngine
+public sealed class BiomatterEngine(
+    EventBus bus,
+    EventLog log,
+    uint seed,
+    int gridSize,
+    double minTick = 1.0,
+    bool enabled = true)
 {
     // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -100,11 +106,7 @@ public sealed class BiomatterEngine
 
     // ── Fields ────────────────────────────────────────────────────────────────
 
-    private readonly EventBus _bus;
-    private readonly EventLog _eventLog;
-    private readonly Xoshiro256ss _rng;
-    private readonly int _gs;
-    private readonly double _minTick;
+    private readonly Xoshiro256ss _rng = new(seed);
 
     private SimulationState? _state;
     private AtmosphericComposition? _atmo;
@@ -112,20 +114,9 @@ public sealed class BiomatterEngine
     private double _accumulator;
     private bool _oxygenationFired;
 
-    public bool Enabled { get; }
+    public bool Enabled { get; } = enabled;
 
     // ── Constructor ───────────────────────────────────────────────────────────
-
-    public BiomatterEngine(EventBus bus, EventLog log, uint seed, int gridSize,
-        double minTick = 1.0, bool enabled = true)
-    {
-        _bus = bus;
-        _eventLog = log;
-        _rng = new Xoshiro256ss(seed);
-        _gs = gridSize;
-        _minTick = minTick;
-        Enabled = enabled;
-    }
 
     public void Initialize(SimulationState state, AtmosphericComposition atmo, StratigraphyStack strat)
     {
@@ -143,10 +134,10 @@ public sealed class BiomatterEngine
         if (!Enabled || _state == null || _atmo == null || deltaMa <= 0) return null;
         _accumulator += deltaMa;
         BiomatterTickResult? last = null;
-        while (_accumulator >= _minTick)
+        while (_accumulator >= minTick)
         {
-            _accumulator -= _minTick;
-            last = Process(timeMa - _accumulator, _minTick);
+            _accumulator -= minTick;
+            last = Process(timeMa - _accumulator, minTick);
         }
         return last;
     }
@@ -156,15 +147,15 @@ public sealed class BiomatterEngine
     /// <summary>Temperature factor: Gaussian bell curve centered on optimal temp.</summary>
     public static double TemperatureFactor(double tempC, double optimal, double sigma)
     {
-        double d = tempC - optimal;
+        var d = tempC - optimal;
         return Math.Exp(-(d * d) / (2 * sigma * sigma));
     }
 
-    /// <summary>Light factor: 1.0 in photic zone (depth < 200m), decreases deeper.</summary>
+    /// <summary>Light factor: 1.0 in photic zone (depth less than 200m), decreases deeper.</summary>
     public static double LightFactor(double heightM)
     {
         if (heightM >= 0) return 0; // land cell
-        double depth = -heightM;
+        var depth = -heightM;
         if (depth <= 200) return 1.0;
         return Math.Max(0, 1.0 - (depth - 200) / 4800); // tapers to 0 at 5000m
     }
@@ -176,9 +167,9 @@ public sealed class BiomatterEngine
         if (heightM < REEF_MAX_DEPTH) return 0; // too deep
         if (tempC < REEF_MIN_TEMP || tempC > REEF_MAX_TEMP) return 0;
         // Peak at 24°C
-        double tOpt = (REEF_MIN_TEMP + REEF_MAX_TEMP) / 2;
-        double tRange = (REEF_MAX_TEMP - REEF_MIN_TEMP) / 2;
-        double tFactor = 1.0 - Math.Abs(tempC - tOpt) / tRange;
+        var tOpt = (REEF_MIN_TEMP + REEF_MAX_TEMP) / 2;
+        var tRange = (REEF_MAX_TEMP - REEF_MIN_TEMP) / 2;
+        var tFactor = 1.0 - Math.Abs(tempC - tOpt) / tRange;
         return Math.Max(0, tFactor);
     }
 
@@ -187,8 +178,8 @@ public sealed class BiomatterEngine
     {
         if (heightM >= 0) return 0; // land
         if (o2Level < AEROBIC_MARINE_O2) return 0; // below aerobic threshold
-        double tFactor = TemperatureFactor(tempC, PLANKTON_OPTIMAL_TEMP, PLANKTON_TEMP_SIGMA);
-        double lFactor = LightFactor(heightM);
+        var tFactor = TemperatureFactor(tempC, PLANKTON_OPTIMAL_TEMP, PLANKTON_TEMP_SIGMA);
+        var lFactor = LightFactor(heightM);
         return BASE_MARINE_RATE * tFactor * lFactor;
     }
 
@@ -216,39 +207,39 @@ public sealed class BiomatterEngine
     {
         var sv = _state!;
         var atmo = _atmo!;
-        int cc = _gs * _gs;
+        var cc = gridSize * gridSize;
 
         double totalBiomatter = 0;
         double totalOrgCarbon = 0;
-        int marineCells = 0;
-        int reefCells = 0;
-        int cyanoCells = 0;
-        int fungiCells = 0;
-        int oilShaleLayers = 0;
-        int biogenicLayers = 0;
+        var marineCells = 0;
+        var reefCells = 0;
+        var cyanoCells = 0;
+        var fungiCells = 0;
+        var oilShaleLayers = 0;
+        var biogenicLayers = 0;
 
         double o2Production = 0;
         double ch4Production = 0;
         double co2Drawdown = 0;
 
-        for (int i = 0; i < cc; i++)
+        for (var i = 0; i < cc; i++)
         {
             double h = sv.HeightMap[i];
             double temp = sv.TemperatureMap[i];
             double biomatter = sv.BiomatterMap[i];
             double orgCarbon = sv.OrganicCarbonMap[i];
 
-            bool isOcean = h < 0;
-            bool isShallow = isOcean && -h <= 200;
+            var isOcean = h < 0;
+            var isShallow = isOcean && -h <= 200;
 
             if (isOcean)
             {
                 // ── Marine biomatter ──────────────────────────────────────
-                double marineP = MarineProductivity(temp, h, atmo.O2);
-                double cyanoP = CyanobacteriaProductivity(temp, h);
-                double reef = ReefFactor(temp, h);
+                var marineP = MarineProductivity(temp, h, atmo.O2);
+                var cyanoP = CyanobacteriaProductivity(temp, h);
+                var reef = ReefFactor(temp, h);
 
-                double totalP = marineP + cyanoP;
+                var totalP = marineP + cyanoP;
                 biomatter = Math.Min(MAX_MARINE_BIOMATTER,
                     biomatter + totalP * deltaMa);
 
@@ -268,7 +259,7 @@ public sealed class BiomatterEngine
                 // ── Organic carbon burial (anoxic basins) ─────────────────
                 if (!isShallow && biomatter > 0.5)
                 {
-                    double burial = ORGANIC_CARBON_RATE * biomatter * deltaMa;
+                    var burial = ORGANIC_CARBON_RATE * biomatter * deltaMa;
                     orgCarbon = Math.Min(50.0, orgCarbon + burial);
                 }
 
@@ -276,7 +267,7 @@ public sealed class BiomatterEngine
                 if (reef > 0.1)
                 {
                     reefCells++;
-                    double heightBump = reef * REEF_GROWTH_RATE * deltaMa;
+                    var heightBump = reef * REEF_GROWTH_RATE * deltaMa;
                     sv.HeightMap[i] = (float)Math.Min(-1, h + heightBump);
                 }
 
@@ -290,7 +281,7 @@ public sealed class BiomatterEngine
                 // ── Terrestrial biomatter (fungi & decomposers) ───────────
                 double soilD = sv.SoilDepthMap[i];
                 double vegBio = sv.BiomassMap[i];
-                double fungiP = FungiProductivity(temp, soilD, vegBio, atmo.O2);
+                var fungiP = FungiProductivity(temp, soilD, vegBio, atmo.O2);
 
                 if (fungiP > 0)
                 {
@@ -318,19 +309,31 @@ public sealed class BiomatterEngine
         UpdateAtmosphere(atmo, o2Production, ch4Production, co2Drawdown, deltaMa);
 
         // ── Events ────────────────────────────────────────────────────────────
-        double meanProductivity = cc > 0 ? totalBiomatter / cc : 0;
-        _bus.Emit("BIOMATTER_UPDATE", new { totalBiomatter, meanProductivity });
+        var meanProductivity = cc > 0 ? totalBiomatter / cc : 0;
+        bus.Emit("BIOMATTER_UPDATE", new { totalBiomatter, meanProductivity });
 
-        if (!_oxygenationFired && atmo.O2 >= OXYGENATION_THRESHOLD)
-        {
-            _oxygenationFired = true;
-            _bus.Emit("OXYGENATION_EVENT", new { o2Level = atmo.O2 });
-            _eventLog.Record(new GeoLogEntry
+        if (_oxygenationFired || !(atmo.O2 >= OXYGENATION_THRESHOLD))
+            return new BiomatterTickResult
             {
-                TimeMa = timeMa, Type = "OXYGENATION_EVENT",
-                Description = $"Atmospheric O₂ reached {atmo.O2 * 100:F2}%"
-            });
-        }
+                TotalBiomatter = totalBiomatter,
+                TotalOrganicCarbon = totalOrgCarbon,
+                MarineCells = marineCells,
+                ReefCells = reefCells,
+                CyanobacteriaCells = cyanoCells,
+                FungiCells = fungiCells,
+                OilShaleLayers = oilShaleLayers,
+                BiogenicLayers = biogenicLayers,
+                AtmosphericO2 = atmo.O2,
+                AtmosphericCH4 = atmo.CH4,
+            };
+        
+        _oxygenationFired = true;
+        bus.Emit("OXYGENATION_EVENT", new { o2Level = atmo.O2 });
+        log.Record(new GeoLogEntry
+        {
+            TimeMa = timeMa, Type = "OXYGENATION_EVENT",
+            Description = $"Atmospheric O₂ reached {atmo.O2 * 100:F2}%"
+        });
 
         return new BiomatterTickResult
         {
@@ -353,12 +356,12 @@ public sealed class BiomatterEngine
         double temp, double height, double marineP, double cyanoP, double reef,
         bool isShallow, double o2Level)
     {
-        int deposited = 0;
+        var deposited = 0;
 
         // Coccolith ooze → SED_CHALK (deep marine, high plankton productivity)
         if (!isShallow && marineP > 0.2)
         {
-            double thickness = CHALK_DEPOSITION_RATE * marineP * deltaMa;
+            var thickness = CHALK_DEPOSITION_RATE * marineP * deltaMa;
             if (thickness > 0.001)
             {
                 _strat!.PushLayer(cellIndex, new StratigraphicLayer
@@ -374,8 +377,8 @@ public sealed class BiomatterEngine
         // Radiolarian/diatom ooze → SED_CHERT or SED_DIATOMITE (cold nutrient-rich)
         if (temp < 10 && marineP > 0.1)
         {
-            double rate = temp < 5 ? DIATOMITE_DEPOSITION_RATE : CHERT_DEPOSITION_RATE;
-            double thickness = rate * marineP * deltaMa;
+            var rate = temp < 5 ? DIATOMITE_DEPOSITION_RATE : CHERT_DEPOSITION_RATE;
+            var thickness = rate * marineP * deltaMa;
             if (thickness > 0.001)
             {
                 _strat!.PushLayer(cellIndex, new StratigraphicLayer
@@ -391,7 +394,7 @@ public sealed class BiomatterEngine
         // Reef limestone → SED_LIMESTONE (warm shallow marine with reef)
         if (reef > 0.1)
         {
-            double thickness = REEF_LIMESTONE_RATE * reef * deltaMa;
+            var thickness = REEF_LIMESTONE_RATE * reef * deltaMa;
             if (thickness > 0.001)
             {
                 _strat!.PushLayer(cellIndex, new StratigraphicLayer
@@ -404,53 +407,55 @@ public sealed class BiomatterEngine
             }
         }
 
-        // Stromatolite carbonate → SED_LIMESTONE (shallow tidal, microbial mats)
-        if (isShallow && cyanoP > 0.05)
+        switch (isShallow)
         {
-            double thickness = STROMATOLITE_RATE * cyanoP * deltaMa;
-            if (thickness > 0.001)
+            // Stromatolite carbonate → SED_LIMESTONE (shallow tidal, microbial mats)
+            case true when cyanoP > 0.05:
             {
-                _strat!.PushLayer(cellIndex, new StratigraphicLayer
+                var thickness = STROMATOLITE_RATE * cyanoP * deltaMa;
+                if (thickness > 0.001)
                 {
-                    RockType = RockType.SED_LIMESTONE,
-                    AgeDeposited = timeMa,
-                    Thickness = thickness,
-                });
-                deposited++;
-            }
-        }
+                    _strat!.PushLayer(cellIndex, new StratigraphicLayer
+                    {
+                        RockType = RockType.SED_LIMESTONE,
+                        AgeDeposited = timeMa,
+                        Thickness = thickness,
+                    });
+                    deposited++;
+                }
 
-        // Phosphorite → SED_PHOSPHORITE (high biomatter, moderate depth)
-        if (!isShallow && marineP > 0.3)
-        {
-            double thickness = PHOSPHORITE_RATE * marineP * deltaMa;
-            if (thickness > 0.001)
+                break;
+            }
+            // Phosphorite → SED_PHOSPHORITE (high biomatter, moderate depth)
+            case false when marineP > 0.3:
             {
-                _strat!.PushLayer(cellIndex, new StratigraphicLayer
+                var thickness = PHOSPHORITE_RATE * marineP * deltaMa;
+                if (thickness > 0.001)
                 {
-                    RockType = RockType.SED_PHOSPHORITE,
-                    AgeDeposited = timeMa,
-                    Thickness = thickness,
-                });
-                deposited++;
+                    _strat!.PushLayer(cellIndex, new StratigraphicLayer
+                    {
+                        RockType = RockType.SED_PHOSPHORITE,
+                        AgeDeposited = timeMa,
+                        Thickness = thickness,
+                    });
+                    deposited++;
+                }
+
+                break;
             }
         }
 
         // Banded iron formation → SED_IRONSTONE (low O₂, cyanobacteria active)
-        if (o2Level < OXYGENATION_THRESHOLD && cyanoP > 0.02)
+        if (!(o2Level < OXYGENATION_THRESHOLD) || !(cyanoP > 0.02)) return deposited;
+        var thickness1 = BIF_RATE * cyanoP * deltaMa;
+        if (!(thickness1 > 0.001)) return deposited;
+        _strat!.PushLayer(cellIndex, new StratigraphicLayer
         {
-            double thickness = BIF_RATE * cyanoP * deltaMa;
-            if (thickness > 0.001)
-            {
-                _strat!.PushLayer(cellIndex, new StratigraphicLayer
-                {
-                    RockType = RockType.SED_IRONSTONE,
-                    AgeDeposited = timeMa,
-                    Thickness = thickness,
-                });
-                deposited++;
-            }
-        }
+            RockType = RockType.SED_IRONSTONE,
+            AgeDeposited = timeMa,
+            Thickness = thickness1,
+        });
+        deposited++;
 
         return deposited;
     }
@@ -459,19 +464,19 @@ public sealed class BiomatterEngine
 
     private int ProcessPetroleumConversion(double timeMa, int cellCount)
     {
-        int conversions = 0;
+        var conversions = 0;
 
-        for (int i = 0; i < cellCount; i++)
+        for (var i = 0; i < cellCount; i++)
         {
             double orgCarbon = _state!.OrganicCarbonMap[i];
             if (orgCarbon < 1.0) continue;
 
             // Estimate burial depth from stratigraphy total thickness
-            double burialDepth = _strat!.GetTotalThickness(i);
+            var burialDepth = _strat!.GetTotalThickness(i);
             if (burialDepth < OIL_WINDOW_MIN_DEPTH) continue;
 
             // Estimate temperature from burial depth (geothermal gradient ~25°C/km)
-            double burialTemp = 15 + burialDepth / 1000 * 25;
+            var burialTemp = 15 + burialDepth / 1000 * 25;
             if (burialTemp < OIL_WINDOW_MIN_TEMP || burialTemp > OIL_WINDOW_MAX_TEMP) continue;
 
             // Convert organic carbon to oil shale
@@ -486,15 +491,13 @@ public sealed class BiomatterEngine
             _state.OrganicCarbonMap[i] = (float)(orgCarbon * 0.8);
             conversions++;
 
-            if (conversions == 1) // Log first conversion per tick
+            if (conversions != 1) continue; // Log first conversion per tick
+            bus.Emit("PETROLEUM_DEPOSIT", new { cellIndex = i, burialDepth, burialTemp });
+            log.Record(new GeoLogEntry
             {
-                _bus.Emit("PETROLEUM_DEPOSIT", new { cellIndex = i, burialDepth, burialTemp });
-                _eventLog.Record(new GeoLogEntry
-                {
-                    TimeMa = timeMa, Type = "PETROLEUM_DEPOSIT",
-                    Description = $"Oil shale at depth {burialDepth:F0}m, {burialTemp:F0}°C"
-                });
-            }
+                TimeMa = timeMa, Type = "PETROLEUM_DEPOSIT",
+                Description = $"Oil shale at depth {burialDepth:F0}m, {burialTemp:F0}°C"
+            });
         }
 
         return conversions;
@@ -515,9 +518,9 @@ public sealed class BiomatterEngine
         atmo.CO2 = Math.Max(0.0001, atmo.CO2 - co2Drawdown * CO2_DRAWDOWN_RATE);
 
         // CH₄ oxidation (naturally decays when O₂ is present)
-        if (atmo.O2 > 0.01 && atmo.CH4 > 0)
+        if (atmo is { O2: > 0.01, CH4: > 0 })
         {
-            double oxidation = atmo.CH4 * 0.01 * deltaMa;
+            var oxidation = atmo.CH4 * 0.01 * deltaMa;
             atmo.CH4 = Math.Max(0, atmo.CH4 - oxidation);
         }
     }

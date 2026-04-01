@@ -18,7 +18,7 @@ public class KernelTests
     public void EventBus_Off_RemovesListener()
     {
         var bus = new EventBus();
-        int count = 0;
+        var count = 0;
         Action<object> cb = _ => count++;
         bus.On("TEST", cb);
         bus.Emit("TEST", "a");
@@ -31,7 +31,7 @@ public class KernelTests
     public void EventBus_Clear_RemovesAllListeners()
     {
         var bus = new EventBus();
-        int count = 0;
+        var count = 0;
         bus.On("TEST", _ => count++);
         bus.Clear();
         bus.Emit("TEST", "a");
@@ -67,7 +67,7 @@ public class KernelTests
     public void EventLog_TrimOldest()
     {
         var log = new EventLog(5);
-        for (int i = 0; i < 10; i++)
+        for (var i = 0; i < 10; i++)
             log.Record(new GeoTime.Core.Models.GeoLogEntry { TimeMa = i, Type = "T", Description = $"{i}" });
         Assert.Equal(5, log.Length);
     }
