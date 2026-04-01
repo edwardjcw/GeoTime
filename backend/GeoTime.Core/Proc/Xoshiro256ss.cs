@@ -19,8 +19,8 @@ public sealed class Xoshiro256ss
 
     private static (ulong value, ulong next) SplitMix64(ulong state)
     {
-        ulong next = state + 0x9E3779B97F4A7C15UL;
-        ulong z = next;
+        var next = state + 0x9E3779B97F4A7C15UL;
+        var z = next;
         z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL;
         z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL;
         z ^= z >> 31;
@@ -29,8 +29,8 @@ public sealed class Xoshiro256ss
 
     private ulong NextU64()
     {
-        ulong result = RotateLeft(_s1 * 5, 7) * 9;
-        ulong t = _s1 << 17;
+        var result = RotateLeft(_s1 * 5, 7) * 9;
+        var t = _s1 << 17;
 
         _s2 ^= _s0;
         _s3 ^= _s1;
@@ -48,7 +48,7 @@ public sealed class Xoshiro256ss
     /// <summary>Return a double in [0, 1).</summary>
     public double Next()
     {
-        ulong v = NextU64();
+        var v = NextU64();
         return (v >> 11) * (1.0 / (1UL << 53));
     }
 

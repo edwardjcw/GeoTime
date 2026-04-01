@@ -12,7 +12,7 @@ public class SimplexNoiseTests
         for (double x = -5; x <= 5; x += 0.5)
             for (double y = -5; y <= 5; y += 0.5)
             {
-                double v = noise.Noise3D(x, y, 0);
+                var v = noise.Noise3D(x, y, 0);
                 Assert.InRange(v, -2.0, 2.0); // simplex noise * 32 fits in this range
             }
     }
@@ -35,7 +35,7 @@ public class SimplexNoiseTests
         var noise = new SimplexNoise(rng);
         for (double x = -3; x <= 3; x += 1)
         {
-            double v = noise.Fbm(x, 0, 0, 4);
+            var v = noise.Fbm(x, 0, 0, 4);
             Assert.InRange(v, -2.0, 2.0);
         }
     }
@@ -45,8 +45,8 @@ public class SimplexNoiseTests
     {
         var rng = new Xoshiro256ss(42);
         var noise = new SimplexNoise(rng);
-        double v1 = noise.Fbm(0, 0, 0, 1);
-        double v4 = noise.Fbm(0, 0, 0, 4);
+        var v1 = noise.Fbm(0, 0, 0, 1);
+        var v4 = noise.Fbm(0, 0, 0, 4);
         // Multiple octaves may give different result than single octave
         // (not necessarily though at origin, but the test verifies it runs)
         Assert.IsType<double>(v1);

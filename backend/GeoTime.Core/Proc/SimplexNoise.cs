@@ -21,13 +21,13 @@ public sealed class SimplexNoise
     public SimplexNoise(Xoshiro256ss rng)
     {
         var p = new byte[256];
-        for (int i = 0; i < 256; i++) p[i] = (byte)i;
-        for (int i = 255; i > 0; i--)
+        for (var i = 0; i < 256; i++) p[i] = (byte)i;
+        for (var i = 255; i > 0; i--)
         {
-            int j = rng.NextInt(0, i);
+            var j = rng.NextInt(0, i);
             (p[i], p[j]) = (p[j], p[i]);
         }
-        for (int i = 0; i < 512; i++)
+        for (var i = 0; i < 512; i++)
         {
             _perm[i] = p[i & 255];
             _permMod12[i] = (byte)(_perm[i] % 12);
@@ -37,15 +37,15 @@ public sealed class SimplexNoise
     /// <summary>Return simplex noise in [-1, 1] for a 3D coordinate.</summary>
     public double Noise3D(double x, double y, double z)
     {
-        double s = (x + y + z) * F3;
-        int i = (int)Math.Floor(x + s);
-        int j = (int)Math.Floor(y + s);
-        int k = (int)Math.Floor(z + s);
+        var s = (x + y + z) * F3;
+        var i = (int)Math.Floor(x + s);
+        var j = (int)Math.Floor(y + s);
+        var k = (int)Math.Floor(z + s);
 
-        double t = (i + j + k) * G3;
-        double x0 = x - (i - t);
-        double y0 = y - (j - t);
-        double z0 = z - (k - t);
+        var t = (i + j + k) * G3;
+        var x0 = x - (i - t);
+        var y0 = y - (j - t);
+        var z0 = z - (k - t);
 
         int i1, j1, k1, i2, j2, k2;
         if (x0 >= y0)
@@ -71,17 +71,17 @@ public sealed class SimplexNoise
         int gi2 = _permMod12[ii + i2 + _perm[jj + j2 + _perm[kk + k2]]];
         int gi3 = _permMod12[ii + 1  + _perm[jj + 1  + _perm[kk + 1]]];
 
-        double n0 = Contrib(gi0, x0, y0, z0);
-        double n1 = Contrib(gi1, x1, y1, z1);
-        double n2 = Contrib(gi2, x2, y2, z2);
-        double n3 = Contrib(gi3, x3, y3, z3);
+        var n0 = Contrib(gi0, x0, y0, z0);
+        var n1 = Contrib(gi1, x1, y1, z1);
+        var n2 = Contrib(gi2, x2, y2, z2);
+        var n3 = Contrib(gi3, x3, y3, z3);
 
         return 32.0 * (n0 + n1 + n2 + n3);
     }
 
     private static double Contrib(int gi, double x, double y, double z)
     {
-        double t = 0.6 - x*x - y*y - z*z;
+        var t = 0.6 - x*x - y*y - z*z;
         if (t < 0) return 0;
         t *= t;
         var g = Grad3[gi];
@@ -93,7 +93,7 @@ public sealed class SimplexNoise
                       double lacunarity = 2, double persistence = 0.5)
     {
         double value = 0, amplitude = 1, frequency = 1, maxAmplitude = 0;
-        for (int i = 0; i < octaves; i++)
+        for (var i = 0; i < octaves; i++)
         {
             value += amplitude * Noise3D(x*frequency, y*frequency, z*frequency);
             maxAmplitude += amplitude;

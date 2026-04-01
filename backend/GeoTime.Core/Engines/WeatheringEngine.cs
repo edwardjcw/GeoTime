@@ -4,7 +4,7 @@ using GeoTime.Core.Proc;
 namespace GeoTime.Core.Engines;
 
 /// <summary>Aeolian and chemical weathering engine.</summary>
-public sealed class WeatheringEngine
+public sealed class WeatheringEngine(int gridSize)
 {
     private const double CHEM_BASE = 0.005;
     private const double CHEM_TEMP_FACTOR = 0.07;
@@ -19,19 +19,13 @@ public sealed class WeatheringEngine
     private const double PRODUCT_DENSITY = 0.3;
     private const double LOESS_FRACTION = 0.5;
 
-    private readonly int _gs;
-    public WeatheringEngine(int gridSize) => _gs = gridSize;
-
-    public RockType GetWeatheringProduct(RockType parent, double temp, double precip)
+    public static RockType GetWeatheringProduct(RockType parent, double temp, double precip)
     {
         if (temp > TROPICAL_TEMP && precip > 1000) return RockType.SED_LATERITE;
-        if (precip < ARID_PRECIP) return RockType.SED_CALICHE;
-        if (parent is RockType.SED_LIMESTONE or RockType.SED_DOLOSTONE or RockType.SED_CHALK)
-            return RockType.SED_REGOLITH;
-        return RockType.SED_REGOLITH;
+        return precip < ARID_PRECIP ? RockType.SED_CALICHE : RockType.SED_REGOLITH;
     }
 
-    public double ChemicalWeatheringRate(double temp, double precip)
+    public static double ChemicalWeatheringRate(double temp, double precip)
     {
         if (temp < CHEM_MIN_TEMP) return 0;
         return CHEM_BASE * Math.Exp(CHEM_TEMP_FACTOR * (temp - 15)) * (1 + precip * CHEM_PRECIP_FACTOR);
@@ -40,25 +34,25 @@ public sealed class WeatheringEngine
     public WeatheringResult Tick(double timeMa, double deltaMa, SimulationState state,
         StratigraphyStack strat, Xoshiro256ss rng)
     {
-        int cc = _gs * _gs;
+        var cc = gridSize * gridSize;
         double chemW = 0, aeolW = 0, totalDepo = 0;
-        int affected = 0;
+        var affected = 0;
 
-        for (int i = 0; i < cc; i++)
+        for (var i = 0; i < cc; i++)
         {
             if (state.HeightMap[i] <= 0) continue;
             double temp = state.TemperatureMap[i], precip = state.PrecipitationMap[i];
             double wu = state.WindUMap[i], wv = state.WindVMap[i];
-            double ws2 = wu * wu + wv * wv;
+            var ws2 = wu * wu + wv * wv;
 
-            double chemRate = ChemicalWeatheringRate(temp, precip);
-            double chemAmt = Math.Min(chemRate * deltaMa, MAX_WEATHERING);
+            var chemRate = ChemicalWeatheringRate(temp, precip);
+            var chemAmt = Math.Min(chemRate * deltaMa, MAX_WEATHERING);
             if (chemAmt > 0.001)
             {
                 var top = strat.GetTopLayer(i);
                 var parent = top?.RockType ?? RockType.IGN_GRANITE;
                 var product = GetWeatheringProduct(parent, temp, precip);
-                double eroded = strat.ErodeTop(i, chemAmt);
+                var eroded = strat.ErodeTop(i, chemAmt);
                 if (eroded > 0)
                 {
                     strat.PushLayer(i, new StratigraphicLayer
@@ -71,40 +65,30 @@ public sealed class WeatheringEngine
                 }
             }
 
-            if (precip < ARID_PRECIP && ws2 > WIND_THRESHOLD)
+            if (!(precip < ARID_PRECIP) || !(ws2 > WIND_THRESHOLD)) continue;
+            var excess = Math.Sqrt(ws2) - Math.Sqrt(WIND_THRESHOLD);
+            var aeolAmt = Math.Min(AEOLIAN_RATE * excess * deltaMa, MAX_WEATHERING);
+            if (!(aeolAmt > 0.001)) continue;
+            var erodeTop = strat.ErodeTop(i, aeolAmt);
+            if (!(erodeTop > 0)) continue;
+            state.HeightMap[i] -= (float)erodeTop;
+            aeolW += erodeTop; affected++;
+            int row = i / gridSize, col = i % gridSize;
+            var wm = Math.Sqrt(ws2);
+            var dCol = wm > 0 ? (int)Math.Round(wu / wm) : 0;
+            var dRow = wm > 0 ? (int)Math.Round(wv / wm) : 0;
+            var dr = Math.Clamp(row + dRow, 0, gridSize - 1);
+            var dc = (col + dCol + gridSize) % gridSize;
+            var di = dr * gridSize + dc;
+            if (di == i) continue;
+            var loess = Math.Min(erodeTop * LOESS_FRACTION, LOESS_RATE * deltaMa);
+            if (!(loess > 0.001)) continue;
+            state.HeightMap[di] += (float)loess;
+            totalDepo += loess;
+            strat.PushLayer(di, new StratigraphicLayer
             {
-                double excess = Math.Sqrt(ws2) - Math.Sqrt(WIND_THRESHOLD);
-                double aeolAmt = Math.Min(AEOLIAN_RATE * excess * deltaMa, MAX_WEATHERING);
-                if (aeolAmt > 0.001)
-                {
-                    double eroded = strat.ErodeTop(i, aeolAmt);
-                    if (eroded > 0)
-                    {
-                        state.HeightMap[i] -= (float)eroded;
-                        aeolW += eroded; affected++;
-                        int row = i / _gs, col = i % _gs;
-                        double wm = Math.Sqrt(ws2);
-                        int dCol = wm > 0 ? (int)Math.Round(wu / wm) : 0;
-                        int dRow = wm > 0 ? (int)Math.Round(wv / wm) : 0;
-                        int dr = Math.Clamp(row + dRow, 0, _gs - 1);
-                        int dc = (col + dCol + _gs) % _gs;
-                        int di = dr * _gs + dc;
-                        if (di != i)
-                        {
-                            double loess = Math.Min(eroded * LOESS_FRACTION, LOESS_RATE * deltaMa);
-                            if (loess > 0.001)
-                            {
-                                state.HeightMap[di] += (float)loess;
-                                totalDepo += loess;
-                                strat.PushLayer(di, new StratigraphicLayer
-                                {
-                                    RockType = RockType.SED_LOESS, AgeDeposited = timeMa, Thickness = loess,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
+                RockType = RockType.SED_LOESS, AgeDeposited = timeMa, Thickness = loess,
+            });
         }
         return new WeatheringResult { ChemicalWeathered = chemW, AeolianEroded = aeolW, TotalDeposited = totalDepo, CellsAffected = affected };
     }

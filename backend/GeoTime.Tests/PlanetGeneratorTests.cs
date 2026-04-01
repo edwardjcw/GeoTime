@@ -40,8 +40,8 @@ public class PlanetGeneratorTests
         var gen = new PlanetGenerator(42);
         gen.Generate(state);
 
-        float min = state.HeightMap.Min();
-        float max = state.HeightMap.Max();
+        var min = state.HeightMap.Min();
+        var max = state.HeightMap.Max();
         Assert.True(max > min, "Height map should have variation");
     }
 
@@ -64,7 +64,7 @@ public class PlanetGeneratorTests
         new PlanetGenerator(42).Generate(state1);
         new PlanetGenerator(42).Generate(state2);
 
-        for (int i = 0; i < state1.CellCount; i++)
+        for (var i = 0; i < state1.CellCount; i++)
             Assert.Equal(state1.HeightMap[i], state2.HeightMap[i]);
     }
 }

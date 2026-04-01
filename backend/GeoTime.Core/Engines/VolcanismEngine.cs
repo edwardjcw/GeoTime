@@ -14,7 +14,7 @@ public sealed class VolcanismEngine
     private static double RowToLat(int row, int gs) => Math.PI / 2 - (double)row / gs * Math.PI;
     private static double ColToLon(int col, int gs) => (double)col / gs * TWO_PI - Math.PI;
 
-    public List<EruptionRecord> Tick(double timeMa, double deltaMa,
+    public static List<EruptionRecord> Tick(double timeMa, double deltaMa,
         List<BoundaryCell> boundaries, List<HotspotInfo> hotspots,
         List<PlateInfo> plates, SimulationState state,
         StratigraphyStack stratigraphy, Xoshiro256ss rng)
@@ -26,24 +26,22 @@ public sealed class VolcanismEngine
         return eruptions;
     }
 
-    private void ProcessSubduction(double timeMa, double deltaMa,
+    private static void ProcessSubduction(double timeMa, double deltaMa,
         List<BoundaryCell> boundaries, List<PlateInfo> plates, SimulationState state,
         StratigraphyStack stratigraphy, Xoshiro256ss rng, List<EruptionRecord> eruptions)
     {
-        int gs = state.GridSize;
-        double prob = Math.Min(0.02 * deltaMa, 0.5);
-        foreach (var b in boundaries)
+        var gs = state.GridSize;
+        var prob = Math.Min(0.02 * deltaMa, 0.5);
+        foreach (var b in boundaries.Where(b => b.Type == BoundaryType.CONVERGENT)
+                     .Where(b => plates[b.Plate1].IsOceanic || plates[b.Plate2].IsOceanic)
+                     .Where(b => !(rng.Next() > prob)))
         {
-            if (b.Type != BoundaryType.CONVERGENT) continue;
-            if (!plates[b.Plate1].IsOceanic && !plates[b.Plate2].IsOceanic) continue;
-            if (rng.Next() > prob) continue;
-
             int row = b.CellIndex / gs, col = b.CellIndex % gs;
             double lat = RowToLat(row, gs) / DEG2RAD, lon = ColToLon(col, gs) / DEG2RAD;
-            double intensity = 0.3 + rng.Next() * 0.7;
+            var intensity = 0.3 + rng.Next() * 0.7;
             var rockType = rng.Next() > 0.5 ? RockType.IGN_ANDESITE : RockType.IGN_DACITE;
-            double heightAdded = intensity * 200 * deltaMa;
-            double co2 = intensity * 0.1 * deltaMa;
+            var heightAdded = intensity * 200 * deltaMa;
+            var co2 = intensity * 0.1 * deltaMa;
 
             state.HeightMap[b.CellIndex] += (float)heightAdded;
             state.CrustThicknessMap[b.CellIndex] += (float)(heightAdded / 1000);
@@ -63,22 +61,20 @@ public sealed class VolcanismEngine
         }
     }
 
-    private void ProcessRidge(double timeMa, double deltaMa,
+    private static void ProcessRidge(double timeMa, double deltaMa,
         List<BoundaryCell> boundaries, List<PlateInfo> plates, SimulationState state,
         StratigraphyStack stratigraphy, Xoshiro256ss rng, List<EruptionRecord> eruptions)
     {
-        int gs = state.GridSize;
-        double prob = Math.Min(0.05 * deltaMa, 0.8);
-        foreach (var b in boundaries)
+        var gs = state.GridSize;
+        var prob = Math.Min(0.05 * deltaMa, 0.8);
+        foreach (var b in boundaries.Where(b => b.Type == BoundaryType.DIVERGENT)
+                     .Where(b => plates[b.Plate1].IsOceanic && plates[b.Plate2].IsOceanic)
+                     .Where(b => !(rng.Next() > prob)))
         {
-            if (b.Type != BoundaryType.DIVERGENT) continue;
-            if (!plates[b.Plate1].IsOceanic || !plates[b.Plate2].IsOceanic) continue;
-            if (rng.Next() > prob) continue;
-
             int row = b.CellIndex / gs, col = b.CellIndex % gs;
             double lat = RowToLat(row, gs) / DEG2RAD, lon = ColToLon(col, gs) / DEG2RAD;
-            double intensity = 0.1 + rng.Next() * 0.3;
-            double heightAdded = intensity * 50 * deltaMa;
+            var intensity = 0.1 + rng.Next() * 0.3;
+            var heightAdded = intensity * 50 * deltaMa;
 
             state.HeightMap[b.CellIndex] += (float)heightAdded;
             stratigraphy.PushLayer(b.CellIndex, new StratigraphicLayer
@@ -95,24 +91,23 @@ public sealed class VolcanismEngine
         }
     }
 
-    private void ProcessHotspot(double timeMa, double deltaMa,
+    private static void ProcessHotspot(double timeMa, double deltaMa,
         List<HotspotInfo> hotspots, SimulationState state,
         StratigraphyStack stratigraphy, Xoshiro256ss rng, List<EruptionRecord> eruptions)
     {
-        int gs = state.GridSize;
-        foreach (var hs in hotspots)
+        var gs = state.GridSize;
+        foreach (var hs in hotspots.Select(hs => new { hs, prob = Math.Min(0.1 * hs.Strength * deltaMa, 0.9) })
+                     .Where(@t => !(rng.Next() > @t.prob))
+                     .Select(@t => @t.hs))
         {
-            double prob = Math.Min(0.1 * hs.Strength * deltaMa, 0.9);
-            if (rng.Next() > prob) continue;
-
             double latRad = hs.Lat * DEG2RAD, lonRad = hs.Lon * DEG2RAD;
-            int row = Math.Clamp((int)Math.Round((Math.PI / 2 - latRad) / Math.PI * gs), 0, gs - 1);
-            int col = Math.Clamp((int)Math.Round((lonRad + Math.PI) / TWO_PI * gs), 0, gs - 1);
-            int ci = row * gs + col;
+            var row = Math.Clamp((int)Math.Round((Math.PI / 2 - latRad) / Math.PI * gs), 0, gs - 1);
+            var col = Math.Clamp((int)Math.Round((lonRad + Math.PI) / TWO_PI * gs), 0, gs - 1);
+            var ci = row * gs + col;
 
-            bool isOceanic = state.HeightMap[ci] < 0;
-            double intensity = hs.Strength * (0.5 + rng.Next() * 0.5);
-            double heightAdded = intensity * 150 * deltaMa;
+            var isOceanic = state.HeightMap[ci] < 0;
+            var intensity = hs.Strength * (0.5 + rng.Next() * 0.5);
+            var heightAdded = intensity * 150 * deltaMa;
 
             state.HeightMap[ci] += (float)heightAdded;
             state.CrustThicknessMap[ci] += (float)(heightAdded / 1000);

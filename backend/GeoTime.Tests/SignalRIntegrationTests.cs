@@ -4,19 +4,13 @@ using Microsoft.AspNetCore.SignalR.Client;
 
 namespace GeoTime.Tests;
 
-public class SignalRIntegrationTests : IClassFixture<WebApplicationFactory<GeoTime.Api.Program>>
+public class SignalRIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> factory)
+    : IClassFixture<WebApplicationFactory<GeoTime.Api.Program>>
 {
-    private readonly WebApplicationFactory<GeoTime.Api.Program> _factory;
-
-    public SignalRIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> factory)
-    {
-        _factory = factory;
-    }
-
     [Fact]
     public async Task Hub_Connect_ReceivesConnectedEvent()
     {
-        var server = _factory.Server;
+        var server = factory.Server;
         var connection = new HubConnectionBuilder()
             .WithUrl(
                 new Uri(server.BaseAddress, "/hubs/simulation"),
@@ -37,10 +31,10 @@ public class SignalRIntegrationTests : IClassFixture<WebApplicationFactory<GeoTi
     public async Task Hub_GeneratePlanet_BroadcastsEvent()
     {
         // First generate via REST so the singleton has state
-        var httpClient = _factory.CreateClient();
+        var httpClient = factory.CreateClient();
         await httpClient.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
 
-        var server = _factory.Server;
+        var server = factory.Server;
         var connection = new HubConnectionBuilder()
             .WithUrl(
                 new Uri(server.BaseAddress, "/hubs/simulation"),
@@ -62,10 +56,10 @@ public class SignalRIntegrationTests : IClassFixture<WebApplicationFactory<GeoTi
     [Fact]
     public async Task Hub_AdvanceSimulation_ReceivesTickAndComplete()
     {
-        var httpClient = _factory.CreateClient();
+        var httpClient = factory.CreateClient();
         await httpClient.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
 
-        var server = _factory.Server;
+        var server = factory.Server;
         var connection = new HubConnectionBuilder()
             .WithUrl(
                 new Uri(server.BaseAddress, "/hubs/simulation"),
@@ -92,10 +86,10 @@ public class SignalRIntegrationTests : IClassFixture<WebApplicationFactory<GeoTi
     [Fact]
     public async Task Hub_RequestHeightMap_ReceivesData()
     {
-        var httpClient = _factory.CreateClient();
+        var httpClient = factory.CreateClient();
         await httpClient.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
 
-        var server = _factory.Server;
+        var server = factory.Server;
         var connection = new HubConnectionBuilder()
             .WithUrl(
                 new Uri(server.BaseAddress, "/hubs/simulation"),
@@ -105,7 +99,7 @@ public class SignalRIntegrationTests : IClassFixture<WebApplicationFactory<GeoTi
         var tcs = new TaskCompletionSource<bool>();
         connection.On<float[]>("HeightMapData", data =>
         {
-            if (data != null && data.Length > 0)
+            if (data is { Length: > 0 })
                 tcs.TrySetResult(true);
         });
 

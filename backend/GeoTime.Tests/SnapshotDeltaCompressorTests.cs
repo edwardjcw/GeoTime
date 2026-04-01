@@ -9,7 +9,7 @@ public class SnapshotDeltaCompressorTests
     {
         var a = new byte[512];
         var b = new byte[512];
-        for (int i = 0; i < 512; i++) a[i] = b[i] = (byte)(i % 256);
+        for (var i = 0; i < 512; i++) a[i] = b[i] = (byte)(i % 256);
 
         var delta = SnapshotDeltaCompressor.ComputeDelta(a, b);
         Assert.Empty(delta);
@@ -46,7 +46,7 @@ public class SnapshotDeltaCompressorTests
     {
         var original = new byte[512];
         var modified = new byte[512];
-        for (int i = 0; i < 512; i++) original[i] = (byte)(i % 256);
+        for (var i = 0; i < 512; i++) original[i] = (byte)(i % 256);
         modified[100] = 0xFF;
         modified[300] = 0xAB;
 

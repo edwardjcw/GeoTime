@@ -87,6 +87,7 @@ public sealed class SimulationOrchestrator
 
         // Surface, Atmosphere, and Vegetation can run in parallel since they
         // read from state written by tectonic but write to independent fields.
+        // Biomatter must run after Surface because both write to StratigraphyStack.
         var tasks = new List<Task>();
         if (_surface != null)
             tasks.Add(Task.Run(() => _surface.Tick(Clock.T, deltaMa)));
@@ -94,8 +95,6 @@ public sealed class SimulationOrchestrator
             tasks.Add(Task.Run(() => _atmosphere.Tick(Clock.T, deltaMa)));
         if (_vegetation != null)
             tasks.Add(Task.Run(() => _vegetation.Tick(Clock.T, deltaMa)));
-        if (_biomatter != null)
-            tasks.Add(Task.Run(() => _biomatter.Tick(Clock.T, deltaMa)));
 
         if (tasks.Count > 0)
         {
@@ -111,6 +110,9 @@ public sealed class SimulationOrchestrator
                     $"Parallel engine tick error: {ex.Flatten().InnerExceptions.Count} engine(s) failed");
             }
         }
+
+        // Biomatter runs after Surface to avoid concurrent modification of StratigraphyStack.
+        _biomatter?.Tick(Clock.T, deltaMa);
     }
 
     /// <summary>Build a cross-section profile along the given path.</summary>
@@ -139,9 +141,9 @@ public sealed class SimulationOrchestrator
 
         double h = State.HeightMap[cellIndex];
         double temp = State.TemperatureMap[cellIndex];
-        bool reefPresent = h < 0 && h >= BiomatterEngine.REEF_MAX_DEPTH
-            && temp >= BiomatterEngine.REEF_MIN_TEMP && temp <= BiomatterEngine.REEF_MAX_TEMP
-            && State.BiomatterMap[cellIndex] > 0;
+        var reefPresent = h is < 0 and >= BiomatterEngine.REEF_MAX_DEPTH
+                          && temp is >= BiomatterEngine.REEF_MIN_TEMP and <= BiomatterEngine.REEF_MAX_TEMP
+                          && State.BiomatterMap[cellIndex] > 0;
 
         return new CellInspection
         {
@@ -168,19 +170,19 @@ public sealed class SimulationOrchestrator
     /// </summary>
     public byte[] SerializeState()
     {
-        int cellCount = State.CellCount;
+        var cellCount = State.CellCount;
         // Layout: [8 bytes timeMa] + float arrays (HeightMap, CrustThickness, RockAge,
         //   SoilDepth, Temperature, Precipitation, WindU, WindV, CloudCover, Biomass,
         //   BiomatterMap, OrganicCarbonMap)
         //   + byte arrays (RockType, SoilType, CloudType)
         //   + ushort array (PlateMap)
-        int floatArrays = 12; // HeightMap, CrustThickness, RockAge, SoilDepth, Temperature, Precipitation, WindU, WindV, CloudCover, Biomass, BiomatterMap, OrganicCarbonMap
-        int byteArrays = 3;   // RockType, SoilType, CloudType
-        int ushortArrays = 1; // PlateMap
-        int totalSize = 8 + (floatArrays * cellCount * 4) + (byteArrays * cellCount) + (ushortArrays * cellCount * 2);
+        const int floatArrays = 12; // HeightMap, CrustThickness, RockAge, SoilDepth, Temperature, Precipitation, WindU, WindV, CloudCover, Biomass, BiomatterMap, OrganicCarbonMap
+        const int byteArrays = 3;   // RockType, SoilType, CloudType
+        const int ushortArrays = 1; // PlateMap
+        var totalSize = 8 + floatArrays * cellCount * 4 + byteArrays * cellCount + ushortArrays * cellCount * 2;
 
         var data = new byte[totalSize];
-        int offset = 0;
+        var offset = 0;
 
         // Time
         BitConverter.TryWriteBytes(data.AsSpan(offset), Clock.T);
@@ -219,8 +221,8 @@ public sealed class SimulationOrchestrator
     /// </summary>
     public void DeserializeState(byte[] data)
     {
-        int cellCount = State.CellCount;
-        int offset = 0;
+        var cellCount = State.CellCount;
+        var offset = 0;
 
         // Time
         Clock.T = BitConverter.ToDouble(data, offset);

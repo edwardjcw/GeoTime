@@ -1,4 +1,3 @@
-using GeoTime.Core.Models;
 using GeoTime.Core.Engines;
 
 namespace GeoTime.Tests;
@@ -14,7 +13,7 @@ public class VegetationTests
     [Fact]
     public void ComputeNPP_PositiveWithGoodConditions()
     {
-        double npp = VegetationEngine.ComputeNPP(25, 1500);
+        var npp = VegetationEngine.ComputeNPP(25, 1500);
         Assert.True(npp > 0);
         Assert.True(npp <= 3000);
     }
@@ -22,8 +21,8 @@ public class VegetationTests
     [Fact]
     public void NppToBiomassRate_ScalesLinearly()
     {
-        double r1 = VegetationEngine.NppToBiomassRate(1000);
-        double r2 = VegetationEngine.NppToBiomassRate(2000);
+        var r1 = VegetationEngine.NppToBiomassRate(1000);
+        var r2 = VegetationEngine.NppToBiomassRate(2000);
         Assert.True(r2 > r1);
     }
 
@@ -36,15 +35,15 @@ public class VegetationTests
     [Fact]
     public void ComputeFireProbability_IncreasesWithDryness()
     {
-        double wet = VegetationEngine.ComputeFireProbability(800, 20);
-        double dry = VegetationEngine.ComputeFireProbability(100, 20);
+        var wet = VegetationEngine.ComputeFireProbability(800, 20);
+        var dry = VegetationEngine.ComputeFireProbability(100, 20);
         Assert.True(dry > wet);
     }
 
     [Fact]
     public void ComputeFireProbability_CappedAtOne()
     {
-        double p = VegetationEngine.ComputeFireProbability(10, 40);
+        var p = VegetationEngine.ComputeFireProbability(10, 40);
         Assert.True(p <= 1.0);
     }
 }

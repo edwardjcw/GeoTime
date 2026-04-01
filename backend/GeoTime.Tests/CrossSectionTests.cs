@@ -8,14 +8,14 @@ public class CrossSectionTests
     [Fact]
     public void CentralAngle_SamePoint_ReturnsZero()
     {
-        double angle = CrossSectionEngine.CentralAngle(45, 90, 45, 90);
+        var angle = CrossSectionEngine.CentralAngle(45, 90, 45, 90);
         Assert.Equal(0, angle, 10);
     }
 
     [Fact]
     public void CentralAngle_OppositePoints()
     {
-        double angle = CrossSectionEngine.CentralAngle(0, 0, 0, 180);
+        var angle = CrossSectionEngine.CentralAngle(0, 0, 0, 180);
         Assert.InRange(angle, Math.PI - 0.01, Math.PI + 0.01);
     }
 
@@ -34,7 +34,7 @@ public class CrossSectionTests
     [Fact]
     public void LatToRow_BoundaryCases()
     {
-        int gs = 512;
+        var gs = 512;
         Assert.Equal(0, CrossSectionEngine.LatToRow(90, gs));
         Assert.Equal(gs - 1, CrossSectionEngine.LatToRow(-90, gs));
     }
@@ -42,7 +42,7 @@ public class CrossSectionTests
     [Fact]
     public void LonToCol_BoundaryCases()
     {
-        int gs = 512;
+        var gs = 512;
         Assert.Equal(0, CrossSectionEngine.LonToCol(-180, gs));
         Assert.Equal(gs - 1, CrossSectionEngine.LonToCol(180, gs));
     }
@@ -54,7 +54,7 @@ public class CrossSectionTests
         {
             new(0, 0), new(0, 90),
         };
-        double dist = CrossSectionEngine.ComputePathDistanceKm(pts);
+        var dist = CrossSectionEngine.ComputePathDistanceKm(pts);
         Assert.True(dist > 0);
         // Quarter of Earth circumference ≈ 10_018 km
         Assert.InRange(dist, 9000, 11000);

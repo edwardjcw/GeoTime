@@ -3,33 +3,23 @@ namespace GeoTime.Core.Kernel;
 /// <summary>
 /// Manages keyframe snapshots of the simulation state for time-scrubbing.
 /// </summary>
-public sealed class SnapshotManager
+public sealed class SnapshotManager(double interval = 10, int maxSnapshots = 500)
 {
     public sealed class Snapshot
     {
         public double TimeMa { get; set; }
-        public byte[] BufferData { get; set; } = Array.Empty<byte>();
+        public byte[] BufferData { get; set; } = [];
     }
 
-    private readonly List<Snapshot> _snapshots = new();
-    public double Interval { get; }
-    private readonly int _maxSnapshots;
+    private readonly List<Snapshot> _snapshots = [];
+    public double Interval { get; } = interval;
     private double _lastSnapshotTime = double.NegativeInfinity;
-
-    public SnapshotManager(double interval = 10, int maxSnapshots = 500)
-    {
-        Interval = interval;
-        _maxSnapshots = maxSnapshots;
-    }
 
     public bool MaybeTakeSnapshot(double timeMa, byte[] stateData)
     {
-        if (timeMa - _lastSnapshotTime >= Interval)
-        {
-            TakeSnapshot(timeMa, stateData);
-            return true;
-        }
-        return false;
+        if (!(timeMa - _lastSnapshotTime >= Interval)) return false;
+        TakeSnapshot(timeMa, stateData);
+        return true;
     }
 
     public void TakeSnapshot(double timeMa, byte[] stateData)
@@ -39,7 +29,7 @@ public sealed class SnapshotManager
         _snapshots.Add(new Snapshot { TimeMa = timeMa, BufferData = copy });
         _lastSnapshotTime = timeMa;
         _snapshots.Sort((a, b) => a.TimeMa.CompareTo(b.TimeMa));
-        while (_snapshots.Count > _maxSnapshots)
+        while (_snapshots.Count > maxSnapshots)
             _snapshots.RemoveAt(0);
     }
 

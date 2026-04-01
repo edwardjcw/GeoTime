@@ -10,7 +10,7 @@ public class WeatheringTests
     {
         var engine = new WeatheringEngine(8);
         Assert.Equal(RockType.SED_LATERITE,
-            engine.GetWeatheringProduct(RockType.IGN_GRANITE, 25, 1500));
+            WeatheringEngine.GetWeatheringProduct(RockType.IGN_GRANITE, 25, 1500));
     }
 
     [Fact]
@@ -18,7 +18,7 @@ public class WeatheringTests
     {
         var engine = new WeatheringEngine(8);
         Assert.Equal(RockType.SED_CALICHE,
-            engine.GetWeatheringProduct(RockType.IGN_GRANITE, 30, 100));
+            WeatheringEngine.GetWeatheringProduct(RockType.IGN_GRANITE, 30, 100));
     }
 
     [Fact]
@@ -26,22 +26,22 @@ public class WeatheringTests
     {
         var engine = new WeatheringEngine(8);
         Assert.Equal(RockType.SED_REGOLITH,
-            engine.GetWeatheringProduct(RockType.SED_LIMESTONE, 15, 800));
+            WeatheringEngine.GetWeatheringProduct(RockType.SED_LIMESTONE, 15, 800));
     }
 
     [Fact]
     public void ChemicalWeatheringRate_BelowMinTemp_ReturnsZero()
     {
         var engine = new WeatheringEngine(8);
-        Assert.Equal(0, engine.ChemicalWeatheringRate(-15, 500));
+        Assert.Equal(0, WeatheringEngine.ChemicalWeatheringRate(-15, 500));
     }
 
     [Fact]
     public void ChemicalWeatheringRate_WarmWet_HigherThanColdDry()
     {
         var engine = new WeatheringEngine(8);
-        double warmWet = engine.ChemicalWeatheringRate(25, 1500);
-        double coldDry = engine.ChemicalWeatheringRate(5, 200);
+        var warmWet = WeatheringEngine.ChemicalWeatheringRate(25, 1500);
+        var coldDry = WeatheringEngine.ChemicalWeatheringRate(5, 200);
         Assert.True(warmWet > coldDry);
     }
 }

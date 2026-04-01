@@ -16,13 +16,13 @@ public sealed class BoundaryClassifier
 
     public static (double vLat, double vLon) PlateVelocityAt(PlateInfo plate, double lat, double lon)
     {
-        double poleLat = plate.AngularVelocity.Lat * DEG2RAD;
-        double poleLon = plate.AngularVelocity.Lon * DEG2RAD;
-        double omega = plate.AngularVelocity.Rate;
-        double dLon = lon - poleLon;
-        double vLat = omega * Math.Cos(poleLat) * Math.Sin(dLon);
-        double vLon = omega * (Math.Sin(poleLat) * Math.Cos(lat)
-                     - Math.Cos(poleLat) * Math.Sin(lat) * Math.Cos(dLon));
+        var poleLat = plate.AngularVelocity.Lat * DEG2RAD;
+        var poleLon = plate.AngularVelocity.Lon * DEG2RAD;
+        var omega = plate.AngularVelocity.Rate;
+        var dLon = lon - poleLon;
+        var vLat = omega * Math.Cos(poleLat) * Math.Sin(dLon);
+        var vLon = omega * (Math.Sin(poleLat) * Math.Cos(lat)
+                            - Math.Cos(poleLat) * Math.Sin(lat) * Math.Cos(dLon));
         return (vLat, vLon);
     }
 
@@ -31,45 +31,45 @@ public sealed class BoundaryClassifier
         var n = new List<int>(4);
         if (row > 0) n.Add((row - 1) * gs + col);
         if (row < gs - 1) n.Add((row + 1) * gs + col);
-        n.Add(row * gs + ((col - 1 + gs) % gs));
-        n.Add(row * gs + ((col + 1) % gs));
+        n.Add(row * gs + (col - 1 + gs) % gs);
+        n.Add(row * gs + (col + 1) % gs);
         return n.ToArray();
     }
 
-    public List<BoundaryCell> Classify(ushort[] plateMap, List<PlateInfo> plates, int gridSize)
+    public static List<BoundaryCell> Classify(ushort[] plateMap, List<PlateInfo> plates, int gridSize)
     {
         var boundaries = new List<BoundaryCell>();
-        for (int row = 0; row < gridSize; row++)
+        for (var row = 0; row < gridSize; row++)
         {
-            for (int col = 0; col < gridSize; col++)
+            for (var col = 0; col < gridSize; col++)
             {
-                int idx = row * gridSize + col;
+                var idx = row * gridSize + col;
                 int myPlate = plateMap[idx];
                 var neighbors = GetNeighborIndices(row, col, gridSize);
 
-                foreach (int nIdx in neighbors)
+                foreach (var nIdx in neighbors)
                 {
                     int neighborPlate = plateMap[nIdx];
                     if (neighborPlate == myPlate) continue;
 
-                    double lat = RowToLat(row, gridSize);
-                    double lon = ColToLon(col, gridSize);
+                    var lat = RowToLat(row, gridSize);
+                    var lon = ColToLon(col, gridSize);
                     var (v1Lat, v1Lon) = PlateVelocityAt(plates[myPlate], lat, lon);
                     var (v2Lat, v2Lon) = PlateVelocityAt(plates[neighborPlate], lat, lon);
 
                     double dvLat = v1Lat - v2Lat, dvLon = v1Lon - v2Lon;
-                    double relSpeed = Math.Sqrt(dvLat * dvLat + dvLon * dvLon);
+                    var relSpeed = Math.Sqrt(dvLat * dvLat + dvLon * dvLon);
 
                     int nRow = nIdx / gridSize, nCol = nIdx % gridSize;
                     double nLat = RowToLat(nRow, gridSize), nLon = ColToLon(nCol, gridSize);
                     double normalLat = nLat - lat, normalLon = nLon - lon;
-                    double normalLen = Math.Sqrt(normalLat * normalLat + normalLon * normalLon);
+                    var normalLen = Math.Sqrt(normalLat * normalLat + normalLon * normalLon);
 
                     var boundaryType = BoundaryType.TRANSFORM;
                     if (normalLen > 1e-10)
                     {
-                        double dot = (dvLat * normalLat + dvLon * normalLon) / normalLen;
-                        double threshold = relSpeed * 0.3;
+                        var dot = (dvLat * normalLat + dvLon * normalLon) / normalLen;
+                        var threshold = relSpeed * 0.3;
                         if (dot < -threshold) boundaryType = BoundaryType.CONVERGENT;
                         else if (dot > threshold) boundaryType = BoundaryType.DIVERGENT;
                     }

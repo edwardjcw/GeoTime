@@ -21,7 +21,7 @@ public class StratigraphyTests
     public void PushLayer_MergesWhenExceedsMax()
     {
         var stack = new StratigraphyStack();
-        for (int i = 0; i < StratigraphyStack.MAX_LAYERS_PER_CELL + 10; i++)
+        for (var i = 0; i < StratigraphyStack.MAX_LAYERS_PER_CELL + 10; i++)
             stack.PushLayer(0, new StratigraphicLayer
             {
                 RockType = RockType.SED_SANDSTONE, Thickness = 10, AgeDeposited = i,
@@ -37,7 +37,7 @@ public class StratigraphyTests
         {
             RockType = RockType.IGN_GRANITE, Thickness = 100, AgeDeposited = -4000,
         });
-        double eroded = stack.ErodeTop(0, 40);
+        var eroded = stack.ErodeTop(0, 40);
         Assert.Equal(40, eroded);
         Assert.Equal(60, stack.GetTotalThickness(0));
     }
@@ -50,7 +50,7 @@ public class StratigraphyTests
         {
             RockType = RockType.IGN_GRANITE, Thickness = 50, AgeDeposited = -4000,
         });
-        double eroded = stack.ErodeTop(0, 100);
+        var eroded = stack.ErodeTop(0, 100);
         Assert.Equal(50, eroded);
         Assert.Empty(stack.GetLayers(0));
     }

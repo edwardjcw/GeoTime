@@ -29,7 +29,7 @@ app.MapHub<SimulationHub>("/hubs/simulation");
 
 app.MapPost("/api/planet/generate", (GenerateRequest req, SimulationOrchestrator sim) =>
 {
-    uint seed = req.Seed > 0 ? req.Seed : (uint)(Random.Shared.Next(1, int.MaxValue));
+    var seed = req.Seed > 0 ? req.Seed : (uint)Random.Shared.Next(1, int.MaxValue);
     var result = sim.GeneratePlanet(seed);
     return Results.Ok(new
     {
@@ -113,43 +113,43 @@ app.MapPost("/api/crosssection", (CrossSectionRequest req, SimulationOrchestrato
 
 app.MapGet("/api/state/heightmap/binary", (SimulationOrchestrator sim) =>
 {
-    byte[] packed = MessagePackSerializer.Serialize(sim.State.HeightMap);
+    var packed = MessagePackSerializer.Serialize(sim.State.HeightMap);
     return Results.Bytes(packed, "application/x-msgpack");
 }).WithName("GetHeightMapBinary");
 
 app.MapGet("/api/state/platemap/binary", (SimulationOrchestrator sim) =>
 {
-    byte[] packed = MessagePackSerializer.Serialize(sim.State.PlateMap);
+    var packed = MessagePackSerializer.Serialize(sim.State.PlateMap);
     return Results.Bytes(packed, "application/x-msgpack");
 }).WithName("GetPlateMapBinary");
 
 app.MapGet("/api/state/temperaturemap/binary", (SimulationOrchestrator sim) =>
 {
-    byte[] packed = MessagePackSerializer.Serialize(sim.State.TemperatureMap);
+    var packed = MessagePackSerializer.Serialize(sim.State.TemperatureMap);
     return Results.Bytes(packed, "application/x-msgpack");
 }).WithName("GetTemperatureMapBinary");
 
 app.MapGet("/api/state/precipitationmap/binary", (SimulationOrchestrator sim) =>
 {
-    byte[] packed = MessagePackSerializer.Serialize(sim.State.PrecipitationMap);
+    var packed = MessagePackSerializer.Serialize(sim.State.PrecipitationMap);
     return Results.Bytes(packed, "application/x-msgpack");
 }).WithName("GetPrecipitationMapBinary");
 
 app.MapGet("/api/state/biomassmap/binary", (SimulationOrchestrator sim) =>
 {
-    byte[] packed = MessagePackSerializer.Serialize(sim.State.BiomassMap);
+    var packed = MessagePackSerializer.Serialize(sim.State.BiomassMap);
     return Results.Bytes(packed, "application/x-msgpack");
 }).WithName("GetBiomassMapBinary");
 
 app.MapGet("/api/state/biomattermap/binary", (SimulationOrchestrator sim) =>
 {
-    byte[] packed = MessagePackSerializer.Serialize(sim.State.BiomatterMap);
+    var packed = MessagePackSerializer.Serialize(sim.State.BiomatterMap);
     return Results.Bytes(packed, "application/x-msgpack");
 }).WithName("GetBiomatterMapBinary");
 
 app.MapGet("/api/state/organiccarbonmap/binary", (SimulationOrchestrator sim) =>
 {
-    byte[] packed = MessagePackSerializer.Serialize(sim.State.OrganicCarbonMap);
+    var packed = MessagePackSerializer.Serialize(sim.State.OrganicCarbonMap);
     return Results.Bytes(packed, "application/x-msgpack");
 }).WithName("GetOrganicCarbonMapBinary");
 
@@ -193,7 +193,7 @@ app.MapGet("/api/snapshots/delta", (double fromTimeMa, double toTimeMa, Simulati
         return Results.NotFound("One or both snapshots not found");
 
     var delta = SnapshotDeltaCompressor.ComputeDelta(fromSnap.BufferData, toSnap.BufferData);
-    byte[] packed = MessagePackSerializer.Serialize(delta);
+    var packed = MessagePackSerializer.Serialize(delta);
     return Results.Bytes(packed, "application/x-msgpack");
 }).WithName("GetSnapshotDelta");
 

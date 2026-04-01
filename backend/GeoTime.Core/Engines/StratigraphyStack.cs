@@ -23,16 +23,14 @@ public sealed class StratigraphyStack
     public double GetTotalThickness(int cellIndex)
     {
         if (!_stacks.TryGetValue(cellIndex, out var s)) return 0;
-        double total = 0;
-        foreach (var l in s) total += l.Thickness;
-        return total;
+        return s.Sum(l => l.Thickness);
     }
 
     public void PushLayer(int cellIndex, StratigraphicLayer layer)
     {
         if (!_stacks.TryGetValue(cellIndex, out var stack))
         {
-            stack = new List<StratigraphicLayer>();
+            stack = [];
             _stacks[cellIndex] = stack;
         }
         stack.Add(layer.Clone());

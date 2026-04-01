@@ -5,14 +5,10 @@ using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace GeoTime.Tests;
 
-public class ApiIntegrationTests : IClassFixture<WebApplicationFactory<GeoTime.Api.Program>>
+public class ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> factory)
+    : IClassFixture<WebApplicationFactory<GeoTime.Api.Program>>
 {
-    private readonly HttpClient _client;
-
-    public ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> factory)
-    {
-        _client = factory.CreateClient();
-    }
+    private readonly HttpClient _client = factory.CreateClient();
 
     // ── Planet Generation ─────────────────────────────────────────────────────
 
