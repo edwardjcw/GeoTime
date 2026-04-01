@@ -8,6 +8,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 builder.Services.AddSingleton<SimulationOrchestrator>();
+builder.Services.AddSingleton<CameraStateService>();
 builder.Services.AddSignalR();
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
     p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
@@ -196,6 +197,81 @@ app.MapGet("/api/snapshots/delta", (double fromTimeMa, double toTimeMa, Simulati
     var packed = MessagePackSerializer.Serialize(delta);
     return Results.Bytes(packed, "application/x-msgpack");
 }).WithName("GetSnapshotDelta");
+
+// ── Unreal Engine Integration Endpoints ──────────────────────────────────────
+
+// Terrain metadata required by the UE Landscape system and camera manager.
+app.MapGet("/api/unreal/terrain-meta", (SimulationOrchestrator sim) =>
+{
+    var meta = new TerrainMeta
+    {
+        GridSize         = sim.State.GridSize,
+        CellCount        = sim.State.CellCount,
+        CellSizeCm       = 60_000.0f,   // 600 m per cell → 60 000 cm in UE units
+        MaxHeightCm      = 2_000_000.0f, // 20 km max elevation → 2 000 000 cm
+        MinHeightCm      = -1_100_000.0f, // 11 km ocean depth → -1 100 000 cm
+        FirstPersonThresholdKm = CameraMode.FirstPersonThresholdKm,
+    };
+    return Results.Ok(meta);
+}).WithName("GetTerrainMeta");
+
+// Raw float32 heightmap bytes – one float per cell, row-major, suitable for
+// UE's Landscape bulk import (FLandscapeHeightmapFileFormat).
+app.MapGet("/api/unreal/heightmap-raw", (SimulationOrchestrator sim) =>
+{
+    var bytes = new byte[sim.State.CellCount * sizeof(float)];
+    Buffer.BlockCopy(sim.State.HeightMap, 0, bytes, 0, bytes.Length);
+    return Results.Bytes(bytes, "application/octet-stream");
+}).WithName("GetHeightMapRaw");
+
+// Streaming terrain tile: tileX/tileY are tile indices (each tile is 64×64 cells).
+// lod controls the sample step: 0 = full, 1 = half, 2 = quarter resolution.
+app.MapGet("/api/unreal/terrain-tile/{tileX}/{tileY}/{lod}",
+    (int tileX, int tileY, int lod, SimulationOrchestrator sim) =>
+{
+    const int TileSize = 64;
+    var step     = 1 << Math.Clamp(lod, 0, 4);
+    var gridSize = sim.State.GridSize;
+    var originX  = tileX * TileSize;
+    var originY  = tileY * TileSize;
+
+    if (originX < 0 || originX >= gridSize || originY < 0 || originY >= gridSize)
+        return Results.BadRequest("Tile coordinates out of range");
+
+    var endX    = Math.Min(originX + TileSize, gridSize);
+    var endY    = Math.Min(originY + TileSize, gridSize);
+    var cols    = (int)Math.Ceiling((double)(endX - originX) / step);
+    var rows    = (int)Math.Ceiling((double)(endY - originY) / step);
+    var heights = new float[cols * rows];
+    int idx     = 0;
+
+    for (int y = originY; y < endY; y += step)
+    {
+        for (int x = originX; x < endX; x += step)
+            heights[idx++] = sim.State.HeightMap[y * gridSize + x];
+    }
+
+    var bytes = new byte[idx * sizeof(float)];
+    Buffer.BlockCopy(heights, 0, bytes, 0, bytes.Length);
+    return Results.Bytes(bytes, "application/octet-stream");
+}).WithName("GetTerrainTile");
+
+// Camera state – GET returns current state, PUT updates it.
+// The server automatically derives the view mode from the supplied altitude so
+// the UE camera manager can query the expected mode on startup.
+app.MapGet("/api/unreal/camera", (CameraStateService cam) =>
+    Results.Ok(cam.State)
+).WithName("GetCameraState");
+
+app.MapPut("/api/unreal/camera", (CameraState state, CameraStateService cam) =>
+{
+    // Enforce the first-person threshold server-side so any client stays consistent.
+    state.Mode = state.AltitudeKm < CameraMode.FirstPersonThresholdKm
+        ? CameraMode.FirstPerson
+        : CameraMode.Orbit;
+    cam.State = state;
+    return Results.Ok(cam.State);
+}).WithName("UpdateCameraState");
 
 app.Run();
 

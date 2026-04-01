@@ -1,0 +1,15 @@
+# Unreal Engine generated / compiled output – do not commit
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+*.VC.db
+*.opensdf
+*.opendb
+*.sln
+*.suo
+*.xcworkspace
+*.xcodeproj
+*.DS_Store

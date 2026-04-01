@@ -1,0 +1,39 @@
+{
+    "FileVersion": 3,
+    "EngineAssociation": "5.4",
+    "Category": "",
+    "Description": "GeoTime planet simulation viewer for Unreal Engine 5",
+    "Modules": [
+        {
+            "Name": "GeoTimeUE",
+            "Type": "Runtime",
+            "LoadingPhase": "Default",
+            "AdditionalDependencies": [
+                "Engine",
+                "CoreUObject"
+            ]
+        }
+    ],
+    "Plugins": [
+        {
+            "Name": "HTTP",
+            "Enabled": true
+        },
+        {
+            "Name": "Json",
+            "Enabled": true
+        },
+        {
+            "Name": "JsonUtilities",
+            "Enabled": true
+        },
+        {
+            "Name": "Landscape",
+            "Enabled": true
+        },
+        {
+            "Name": "ProceduralMeshComponent",
+            "Enabled": true
+        }
+    ]
+}
