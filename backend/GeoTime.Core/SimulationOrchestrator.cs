@@ -76,18 +76,22 @@ public sealed class SimulationOrchestrator
     }
 
     /// <summary>Advance the simulation by deltaMa million years.</summary>
-    public void AdvanceSimulation(double deltaMa)
+    /// <param name="deltaMa">Simulation time step in millions of years.</param>
+    /// <param name="onProgress">Optional callback invoked at each engine phase with the phase name.</param>
+    public void AdvanceSimulation(double deltaMa, Action<string>? onProgress = null)
     {
         if (_tectonic == null || deltaMa <= 0) return;
 
         Clock.T += deltaMa;
 
         // Tectonic must run first (it updates boundaries, heights, plate map)
+        onProgress?.Invoke("tectonic");
         _tectonic.Tick(Clock.T, deltaMa);
 
         // Surface, Atmosphere, and Vegetation can run in parallel since they
         // read from state written by tectonic but write to independent fields.
         // Biomatter must run after Surface because both write to StratigraphyStack.
+        onProgress?.Invoke("surface");
         var tasks = new List<Task>();
         if (_surface != null)
             tasks.Add(Task.Run(() => _surface.Tick(Clock.T, deltaMa)));
@@ -112,7 +116,10 @@ public sealed class SimulationOrchestrator
         }
 
         // Biomatter runs after Surface to avoid concurrent modification of StratigraphyStack.
+        onProgress?.Invoke("biomatter");
         _biomatter?.Tick(Clock.T, deltaMa);
+
+        onProgress?.Invoke("complete");
     }
 
     /// <summary>Build a cross-section profile along the given path.</summary>

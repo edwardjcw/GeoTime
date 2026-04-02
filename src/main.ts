@@ -222,6 +222,94 @@ function topoColor(h: number): [number, number, number] {
   return [255, 255, 255];
 }
 
+// ── Rock type / soil order enum maps (must match backend Enums.cs) ─────────
+
+const ROCK_TYPE_NAMES: Record<number, string> = {
+  0: 'Basalt', 1: 'Granite', 2: 'Sandstone', 3: 'Limestone', 4: 'Shale',
+  5: 'Marble', 6: 'Quartzite', 7: 'Gneiss', 8: 'Peridotite', 9: 'Andesite',
+  10: 'Rhyolite', 11: 'Chalk', 12: 'Coal', 13: 'Oil Shale',
+};
+
+const SOIL_ORDER_NAMES: Record<number, string> = {
+  0: 'None', 1: 'Alfisols', 2: 'Andisols', 3: 'Aridisols', 4: 'Entisols',
+  5: 'Gelisols', 6: 'Histosols', 7: 'Inceptisols', 8: 'Mollisols',
+  9: 'Oxisols', 10: 'Spodosols', 11: 'Ultisols', 12: 'Vertisols',
+};
+
+// ── Layer legend definitions ──────────────────────────────────────────────────
+
+const LAYER_LEGENDS: Record<string, { title: string; items: Array<{ color: string; label: string }> }> = {
+  temperature: {
+    title: 'Temperature',
+    items: [
+      { color: 'rgb(0,0,200)',     label: '≤ −40 °C (polar)' },
+      { color: 'rgb(100,100,220)', label: '−20 °C (cold)' },
+      { color: 'rgb(255,255,255)', label: '0 °C (freezing)' },
+      { color: 'rgb(230,120,120)', label: '+20 °C (warm)' },
+      { color: 'rgb(255,0,0)',     label: '+45 °C (hot)' },
+    ],
+  },
+  precipitation: {
+    title: 'Precipitation',
+    items: [
+      { color: 'rgb(200,160,60)',   label: '0 mm/yr (arid)' },
+      { color: 'rgb(120,190,140)',  label: '600 mm/yr' },
+      { color: 'rgb(40,180,180)',   label: '1500 mm/yr' },
+      { color: 'rgb(20,220,240)',   label: '2500+ mm/yr (wet)' },
+    ],
+  },
+  clouds: {
+    title: 'Cloud Cover (proxy)',
+    items: [
+      { color: 'rgb(60,60,60)',   label: 'Clear / dry' },
+      { color: 'rgb(150,150,150)', label: 'Partly cloudy' },
+      { color: 'rgb(255,255,255)', label: 'Overcast / wet' },
+    ],
+  },
+  biomass: {
+    title: 'Biomass',
+    items: [
+      { color: 'rgb(10,40,10)',   label: '0 kg/m² (barren)' },
+      { color: 'rgb(15,120,15)',  label: '4 kg/m²' },
+      { color: 'rgb(20,190,20)',  label: '8 kg/m²' },
+      { color: 'rgb(30,230,30)',  label: '12+ kg/m² (lush)' },
+    ],
+  },
+  topo: {
+    title: 'Topography',
+    items: [
+      { color: 'rgb(0,20,140)',   label: 'Deep ocean' },
+      { color: 'rgb(20,100,180)', label: 'Shallow ocean' },
+      { color: 'rgb(100,200,240)', label: 'Coastal / shelf' },
+      { color: 'rgb(50,210,70)',  label: 'Lowland' },
+      { color: 'rgb(210,190,50)', label: 'Highland' },
+      { color: 'rgb(190,110,35)', label: 'Mountains' },
+      { color: 'rgb(255,255,255)', label: 'Peaks / ice' },
+    ],
+  },
+  soil: {
+    title: 'Biome (Whittaker)',
+    items: [
+      { color: 'rgb(240,248,255)', label: 'Ice / polar desert' },
+      { color: 'rgb(200,220,240)', label: 'Tundra' },
+      { color: 'rgb(100,130,100)', label: 'Boreal forest' },
+      { color: 'rgb(60,120,50)',   label: 'Temperate rainforest' },
+      { color: 'rgb(80,150,60)',   label: 'Temperate deciduous' },
+      { color: 'rgb(200,200,120)', label: 'Grassland / shrubland' },
+      { color: 'rgb(240,220,130)', label: 'Hot desert' },
+      { color: 'rgb(170,200,80)',  label: 'Savanna' },
+      { color: 'rgb(10,80,10)',    label: 'Tropical rainforest' },
+    ],
+  },
+  plates: {
+    title: 'Tectonic Plates',
+    items: [
+      { color: 'rgba(128,200,100,0.5)', label: 'Plate (random colour)' },
+      { color: 'rgba(200,100,128,0.5)', label: 'Plate boundary' },
+    ],
+  },
+};
+
 /**
  * Fetch map data for a specific non-plate layer and convert to a displayable RGBA texture.
  * Returns `null` for layers whose texture update is handled internally (e.g. 'soil').
@@ -256,8 +344,21 @@ async function fetchLayerRgba(layer: string): Promise<Uint8Array | null> {
     }
   } else if (layer === 'topo') {
     const data = await api.getHeightMap();
+    // Find actual min/max so we always see the full colour range regardless
+    // of whether heights are in normalised noise units or real metres.
+    let minH = Infinity, maxH = -Infinity;
+    for (const h of data) {
+      if (h < minH) minH = h;
+      if (h > maxH) maxH = h;
+    }
+    const hRange = maxH - minH || 1;
+    // Map the actual data range onto a notional [-8000 m, 9000 m] earth-like scale
+    // so that the topoColor bands always show meaningful variation.
+    const TOPO_MIN = -8000, TOPO_MAX = 9000;
+    const topoRange = TOPO_MAX - TOPO_MIN;
     for (let i = 0; i < cellCount; i++) {
-      const [r, g, b] = topoColor(data[i]);
+      const scaled = ((data[i] - minH) / hRange) * topoRange + TOPO_MIN;
+      const [r, g, b] = topoColor(scaled);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 200;
     }
   } else {
@@ -300,16 +401,33 @@ shell.onLayerToggle(async (layer: string, active: boolean) => {
         }
       }
     }
+
+    // Show or hide the legend for the active layer
+    if (active) {
+      const legend = LAYER_LEGENDS[layer];
+      if (legend) {
+        shell.showLayerLegend(legend.title, legend.items);
+      }
+    } else {
+      // Show legend for any other still-active non-plate layer
+      const otherActive = [...activeDataLayers].find(l => LAYER_LEGENDS[l]);
+      if (otherActive) {
+        const legend = LAYER_LEGENDS[otherActive];
+        shell.showLayerLegend(legend.title, legend.items);
+      } else {
+        shell.hideLayerLegend();
+      }
+    }
   } catch (err) {
     console.error(`Failed to toggle layer ${layer}:`, err);
   }
 });
 
-// ── Globe click handling for cross-section draw mode ────────────────────────
+// ── Globe click handling ──────────────────────────────────────────────────────
+// In draw mode: collect points for a cross-section path.
+// Otherwise: inspect the clicked cell and show an info popup.
 
 shell.onInspectClick((x: number, y: number) => {
-  if (!drawModeActive) return;
-
   const viewportEl = shell.getViewportElement();
   const latLon = renderer.screenToLatLon(
     x,
@@ -319,22 +437,50 @@ shell.onInspectClick((x: number, y: number) => {
   );
   if (!latLon) return;
 
-  drawPoints.push(latLon);
+  if (drawModeActive) {
+    drawPoints.push(latLon);
 
-  if (drawPoints.length >= 2) {
-    // Have enough points, request cross-section from backend
-    api.getCrossSection(drawPoints)
-      .then((profile) => {
-        lastCrossSectionProfile = profile;
-        shell.showCrossSection();
-        renderCrossSectionToPanel(profile, shell.areLabelsVisible());
-        drawModeActive = false;
-        shell.setDrawMode(false);
-      })
-      .catch((err) => {
-        console.error('Cross-section request failed:', err);
-      });
+    if (drawPoints.length >= 2) {
+      // Have enough points, request cross-section from backend
+      api.getCrossSection(drawPoints)
+        .then((profile) => {
+          lastCrossSectionProfile = profile;
+          shell.showCrossSection();
+          renderCrossSectionToPanel(profile, shell.areLabelsVisible());
+          drawModeActive = false;
+          shell.setDrawMode(false);
+        })
+        .catch((err) => {
+          console.error('Cross-section request failed:', err);
+        });
+    }
+    return;
   }
+
+  // Inspect mode: convert lat/lon → cell index → fetch info from backend
+  const { lat, lon } = latLon;
+  const normLon = (lon + 180) / 360;        // [0, 1]
+  const normLat = (90 - lat) / 180;         // [0, 1], north = 0
+  const col = Math.min(Math.floor(normLon * GRID_SIZE), GRID_SIZE - 1);
+  const row = Math.min(Math.floor(normLat * GRID_SIZE), GRID_SIZE - 1);
+  const cellIndex = row * GRID_SIZE + col;
+
+  api.inspectCell(cellIndex)
+    .then((info) => {
+      shell.showInspectPanel({
+        lat,
+        lon,
+        elevation: info.height,
+        rockType: ROCK_TYPE_NAMES[info.rockType] ?? `Type ${info.rockType}`,
+        soilOrder: SOIL_ORDER_NAMES[info.soilType] ?? `Order ${info.soilType}`,
+        temperature: info.temperature,
+        precipitation: info.precipitation,
+        biomass: info.biomass,
+      });
+    })
+    .catch((err) => {
+      console.error('Cell inspect failed:', err);
+    });
 });
 
 // ── Wire UI callbacks ───────────────────────────────────────────────────────
@@ -367,6 +513,32 @@ const SIM_UPDATE_INTERVAL = 200; // ms between backend simulation calls
 /** Flag to prevent overlapping backend requests. */
 let pendingSimRequest = false;
 
+// ── SignalR connection for real-time progress events ────────────────────────
+// We connect to the SignalR hub to receive engine-phase progress events that
+// the backend broadcasts while processing each simulation tick.  The main
+// simulation loop still drives advances via the REST API; SignalR is used
+// only for lightweight status feedback.
+const PHASE_LABELS: Record<string, string> = {
+  tectonic: '⛰ Tectonic…',
+  surface:  '🌊 Surface…',
+  biomatter:'🌿 Biomatter…',
+  complete: '',
+};
+
+const simSocket = api.createSimulationSocket({
+  onProgress: (event) => {
+    shell.setProgressText(PHASE_LABELS[event.phase] ?? '');
+  },
+  onTick: (event) => {
+    // Update time display on SignalR ticks too (when SignalR advance is used).
+    simTimeMa = event.timeMa;
+    shell.setSimTime(simTimeMa);
+  },
+});
+
+// Connect with a short retry delay — the backend may not be ready immediately.
+setTimeout(() => simSocket.connect(), 500);
+
 function loop(now: number): void {
   requestAnimationFrame(loop);
 
@@ -383,11 +555,13 @@ function loop(now: number): void {
       pendingSimRequest = true;
       simAccum = 0;
 
+      shell.setProgressText('⏳ Advancing…');
       api.advanceSimulation(deltaMa)
         .then(async (result) => {
           simTimeMa = result.timeMa;
           shell.setSimTime(simTimeMa);
           shell.setTimelineCursor(4500 + simTimeMa);
+          shell.setProgressText('');
 
           // Fetch updated height map for rendering
           const heightData = await api.getHeightMap();
@@ -396,6 +570,7 @@ function loop(now: number): void {
         })
         .catch((err) => {
           console.error('Simulation advance failed:', err);
+          shell.setProgressText('');
         })
         .finally(() => {
           pendingSimRequest = false;

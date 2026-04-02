@@ -3,6 +3,7 @@ using GeoTime.Core;
 using GeoTime.Core.Kernel;
 using GeoTime.Core.Models;
 using MessagePack;
+using Microsoft.AspNetCore.SignalR;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -41,9 +42,18 @@ app.MapPost("/api/planet/generate", (GenerateRequest req, SimulationOrchestrator
     });
 }).WithName("GeneratePlanet");
 
-app.MapPost("/api/simulation/advance", (AdvanceRequest req, SimulationOrchestrator sim) =>
+app.MapPost("/api/simulation/advance", async (AdvanceRequest req, SimulationOrchestrator sim, IHubContext<SimulationHub> hubContext) =>
 {
-    sim.AdvanceSimulation(req.DeltaMa);
+    sim.AdvanceSimulation(req.DeltaMa, phase =>
+    {
+        // Broadcast engine-phase progress to all connected SignalR clients so they
+        // can show meaningful progress feedback even when the REST endpoint is used.
+        _ = hubContext.Clients.All.SendAsync("SimulationProgress", new
+        {
+            phase,
+            timeMa = sim.GetCurrentTime(),
+        });
+    });
     return Results.Ok(new { timeMa = sim.GetCurrentTime() });
 }).WithName("AdvanceSimulation");
 
