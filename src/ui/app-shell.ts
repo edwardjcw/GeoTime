@@ -39,9 +39,13 @@ export class AppShell {
   private drawBtn: HTMLButtonElement;
   private crossSectionPanel: HTMLElement;
   private crossSectionCanvas: HTMLCanvasElement;
+  private crossSectionScrollEl: HTMLElement;
   private labelToggleBtn: HTMLButtonElement;
   private exportPngBtn: HTMLButtonElement;
   private closeCrossSectionBtn: HTMLButtonElement;
+  private zoomInBtn: HTMLButtonElement;
+  private zoomOutBtn: HTMLButtonElement;
+  private zoomResetBtn: HTMLButtonElement;
 
   // ── Inspect panel elements ──────────────────────────────────────────────
   private inspectPanel: HTMLElement;
@@ -65,6 +69,9 @@ export class AppShell {
   private closeCrossSectionCb: (() => void) | null = null;
   private inspectClickCb: ((x: number, y: number) => void) | null = null;
   private layerToggleCb: ((layer: string, active: boolean) => void) | null = null;
+  private zoomInCb: (() => void) | null = null;
+  private zoomOutCb: (() => void) | null = null;
+  private zoomResetCb: (() => void) | null = null;
 
   private sidebarOpen = true;
   private labelsVisible = true;
@@ -258,7 +265,8 @@ export class AppShell {
     layerTitle.style.marginBottom = '2px';
     layerGroup.appendChild(layerTitle);
 
-    const layerNames = ['plates', 'temperature', 'precipitation', 'soil', 'clouds', 'biomass'];
+    // Layer names must stay in sync with the switch cases in main.ts onLayerToggle handler.
+    const layerNames = ['plates', 'temperature', 'precipitation', 'soil', 'clouds', 'biomass', 'topo'];
     for (const name of layerNames) {
       const btn = document.createElement('button');
       btn.textContent = name;
@@ -367,6 +375,27 @@ export class AppShell {
     styleBtn(this.exportPngBtn);
     this.exportPngBtn.addEventListener('click', () => this.exportPngCb?.());
 
+    this.zoomInBtn = document.createElement('button');
+    this.zoomInBtn.textContent = '🔍+';
+    this.zoomInBtn.title = 'Zoom In';
+    styleBtn(this.zoomInBtn);
+    this.zoomInBtn.style.padding = '4px 8px';
+    this.zoomInBtn.addEventListener('click', () => this.zoomInCb?.());
+
+    this.zoomOutBtn = document.createElement('button');
+    this.zoomOutBtn.textContent = '🔍−';
+    this.zoomOutBtn.title = 'Zoom Out';
+    styleBtn(this.zoomOutBtn);
+    this.zoomOutBtn.style.padding = '4px 8px';
+    this.zoomOutBtn.addEventListener('click', () => this.zoomOutCb?.());
+
+    this.zoomResetBtn = document.createElement('button');
+    this.zoomResetBtn.textContent = '1×';
+    this.zoomResetBtn.title = 'Reset Zoom';
+    styleBtn(this.zoomResetBtn);
+    this.zoomResetBtn.style.padding = '4px 8px';
+    this.zoomResetBtn.addEventListener('click', () => this.zoomResetCb?.());
+
     this.closeCrossSectionBtn = document.createElement('button');
     this.closeCrossSectionBtn.textContent = '✕';
     styleBtn(this.closeCrossSectionBtn);
@@ -376,13 +405,29 @@ export class AppShell {
       this.closeCrossSectionCb?.();
     });
 
-    csHeader.append(csTitle, this.labelToggleBtn, this.exportPngBtn, this.closeCrossSectionBtn);
+    csHeader.append(
+      csTitle,
+      this.labelToggleBtn,
+      this.exportPngBtn,
+      this.zoomOutBtn,
+      this.zoomResetBtn,
+      this.zoomInBtn,
+      this.closeCrossSectionBtn,
+    );
     this.crossSectionPanel.appendChild(csHeader);
 
-    // Cross-section canvas (fills remaining space)
+    // Scroll wrapper for the zoomable canvas
+    this.crossSectionScrollEl = el('div', {
+      flex: '1',
+      overflow: 'auto',
+      position: 'relative',
+    });
+
+    // Cross-section canvas (natural pixel size — zoom is achieved by changing canvas dimensions)
     this.crossSectionCanvas = document.createElement('canvas');
-    this.crossSectionCanvas.style.cssText = 'width:100%;flex:1;display:block;';
-    this.crossSectionPanel.appendChild(this.crossSectionCanvas);
+    this.crossSectionCanvas.style.cssText = 'display:block;';
+    this.crossSectionScrollEl.appendChild(this.crossSectionCanvas);
+    this.crossSectionPanel.appendChild(this.crossSectionScrollEl);
 
     this.root.appendChild(this.crossSectionPanel);
 
@@ -470,6 +515,23 @@ export class AppShell {
 
   onCloseCrossSection(cb: () => void): void {
     this.closeCrossSectionCb = cb;
+  }
+
+  onCrossSectionZoomIn(cb: () => void): void {
+    this.zoomInCb = cb;
+  }
+
+  onCrossSectionZoomOut(cb: () => void): void {
+    this.zoomOutCb = cb;
+  }
+
+  onCrossSectionZoomReset(cb: () => void): void {
+    this.zoomResetCb = cb;
+  }
+
+  /** Get the cross-section scroll wrapper element (for measuring available width). */
+  getCrossSectionScrollEl(): HTMLElement {
+    return this.crossSectionScrollEl;
   }
 
   /** Show the cross-section panel. */
@@ -608,6 +670,9 @@ export class AppShell {
     this.closeCrossSectionCb = null;
     this.inspectClickCb = null;
     this.layerToggleCb = null;
+    this.zoomInCb = null;
+    this.zoomOutCb = null;
+    this.zoomResetCb = null;
   }
 
   // ── Sidebar toggle ─────────────────────────────────────────────────────

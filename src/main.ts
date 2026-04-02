@@ -31,6 +31,10 @@ let paused = false;
 /** Simulation rate (Ma per second of real time). */
 let simRate = 1;
 
+// Initialise the HUD time display immediately so it never shows "--"
+shell.setSimTime(simTimeMa);
+shell.setTimelineCursor(0);
+
 // ── Planet generation via backend ───────────────────────────────────────────
 
 function randomSeed(): number {
@@ -57,6 +61,7 @@ async function doGeneratePlanet(seed: number): Promise<void> {
     shell.setSeed(result.seed);
     shell.setTriangleCount(renderer.getTriangleCount());
     shell.setSimTime(simTimeMa);
+    shell.setTimelineCursor(4500 + simTimeMa);
 
     // Close any open cross-section panel on new planet
     shell.hideCrossSection();
@@ -91,15 +96,20 @@ let drawModeActive = false;
 let drawPoints: LatLon[] = [];
 let lastCrossSectionProfile: api.CrossSectionProfile | null = null;
 
-/** Render a cross-section profile into the panel canvas. */
+// Cross-section zoom level (1 = 100%, range 0.5 – 4×)
+let crossSectionZoom = 1;
+
+/** Render a cross-section profile into the panel canvas at the current zoom level. */
 function renderCrossSectionToPanel(profile: api.CrossSectionProfile, showLabels: boolean): void {
   const canvas = shell.getCrossSectionCanvas();
-  const panelEl = canvas.parentElement;
-  const w = panelEl ? panelEl.clientWidth : 960;
+  const scrollEl = shell.getCrossSectionScrollEl();
+  const panelW = scrollEl.clientWidth || 960;
+  const w = Math.max(200, Math.round(panelW * crossSectionZoom));
+  const h = Math.max(100, Math.round(280 * crossSectionZoom));
   // The API and shared types have compatible shapes; cast via unknown for safety
   renderCrossSection(profile as unknown as SharedCrossSectionProfile, {
     width: w,
-    height: 280,
+    height: h,
     showLabels,
     showLegend: true,
   }, canvas);
@@ -134,20 +144,137 @@ shell.onCloseCrossSection(() => {
   drawModeActive = false;
   shell.setDrawMode(false);
   drawPoints = [];
+  crossSectionZoom = 1;
+});
+
+shell.onCrossSectionZoomIn(() => {
+  crossSectionZoom = Math.min(4, crossSectionZoom + 0.5);
+  if (lastCrossSectionProfile) {
+    renderCrossSectionToPanel(lastCrossSectionProfile, shell.areLabelsVisible());
+  }
+});
+
+shell.onCrossSectionZoomOut(() => {
+  crossSectionZoom = Math.max(0.5, crossSectionZoom - 0.5);
+  if (lastCrossSectionProfile) {
+    renderCrossSectionToPanel(lastCrossSectionProfile, shell.areLabelsVisible());
+  }
+});
+
+shell.onCrossSectionZoomReset(() => {
+  crossSectionZoom = 1;
+  if (lastCrossSectionProfile) {
+    renderCrossSectionToPanel(lastCrossSectionProfile, shell.areLabelsVisible());
+  }
 });
 
 // ── Layer overlay toggle handling ────────────────────────────────────────────
 
-async function fetchAndApplyClimateOverlay(): Promise<void> {
-  const [tempData, precipData] = await Promise.all([
-    api.getTemperatureMap(),
-    api.getPrecipitationMap(),
-  ]);
-  renderer.updateClimateMap(
-    new Float32Array(tempData),
-    new Float32Array(precipData),
-    GRID_SIZE,
-  );
+// Track which non-plate data overlay layers are currently active
+const activeDataLayers = new Set<string>();
+
+/** Temperature (°C) → RGB: blue (cold) through white (0°C) to red (hot). */
+function temperatureColor(t: number): [number, number, number] {
+  if (t <= -40) return [0, 0, 200];
+  if (t < 0) {
+    const f = (t + 40) / 40;
+    return [Math.round(f * 255), Math.round(f * 255), 200 + Math.round(f * 55)];
+  }
+  const f = Math.min(1, t / 45);
+  return [200 + Math.round(f * 55), Math.round((1 - f) * 200), Math.round((1 - f) * 200)];
+}
+
+/** Precipitation (mm/yr) → RGB: tan (dry) to deep blue-green (wet). */
+function precipitationColor(p: number): [number, number, number] {
+  const f = Math.min(1, p / 2500);
+  return [
+    Math.round(200 - f * 180),
+    Math.round(160 + f * 60),
+    Math.round(60 + f * 180),
+  ];
+}
+
+/** Cloud proxy — precipitation scaled to white/grey cloud appearance. */
+function cloudColor(p: number): [number, number, number] {
+  const f = Math.min(1, p / 2500);
+  const v = Math.round(60 + f * 195);
+  return [v, v, v];
+}
+
+/** Biomass (kg/m²) → RGB: nearly black (barren) to vivid green (lush). */
+function biomassColor(b: number): [number, number, number] {
+  const f = Math.min(1, b / 12);
+  return [Math.round(10 + f * 20), Math.round(40 + f * 190), Math.round(10 + f * 20)];
+}
+
+/** Elevation (m) → RGB: vivid topographic bands (ocean → peaks). */
+function topoColor(h: number): [number, number, number] {
+  if (h < -5000) return [0, 20, 140];
+  if (h < -200) {
+    const f = (h + 5000) / 4800;
+    return [Math.round(f * 40), Math.round(f * 100 + 60), Math.round(120 + f * 100)];
+  }
+  if (h < 0)   return [100, 200, 240];
+  if (h < 500) return [50,  210,  70];
+  if (h < 1500) return [210, 190, 50];
+  if (h < 3000) return [190, 110, 35];
+  if (h < 5000) return [160, 110, 90];
+  return [255, 255, 255];
+}
+
+/**
+ * Fetch map data for a specific non-plate layer and convert to a displayable RGBA texture.
+ * Returns `null` for layers whose texture update is handled internally (e.g. 'soil').
+ */
+async function fetchLayerRgba(layer: string): Promise<Uint8Array | null> {
+  const cellCount = GRID_SIZE * GRID_SIZE;
+  const rgba = new Uint8Array(cellCount * 4);
+
+  if (layer === 'temperature') {
+    const data = await api.getTemperatureMap();
+    for (let i = 0; i < cellCount; i++) {
+      const [r, g, b] = temperatureColor(data[i]);
+      rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 180;
+    }
+  } else if (layer === 'precipitation') {
+    const data = await api.getPrecipitationMap();
+    for (let i = 0; i < cellCount; i++) {
+      const [r, g, b] = precipitationColor(data[i]);
+      rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 180;
+    }
+  } else if (layer === 'clouds') {
+    const data = await api.getPrecipitationMap();
+    for (let i = 0; i < cellCount; i++) {
+      const [r, g, b] = cloudColor(data[i]);
+      rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 160;
+    }
+  } else if (layer === 'biomass') {
+    const data = await api.getBiomassMap();
+    for (let i = 0; i < cellCount; i++) {
+      const [r, g, b] = biomassColor(data[i]);
+      rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 180;
+    }
+  } else if (layer === 'topo') {
+    const data = await api.getHeightMap();
+    for (let i = 0; i < cellCount; i++) {
+      const [r, g, b] = topoColor(data[i]);
+      rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 200;
+    }
+  } else {
+    // 'soil' and any unrecognised layer: use biome (Whittaker) colours via updateClimateMap.
+    // The texture update is handled here; return null so the caller skips updateColorMap.
+    const [tempData, precipData] = await Promise.all([
+      api.getTemperatureMap(),
+      api.getPrecipitationMap(),
+    ]);
+    renderer.updateClimateMap(
+      new Float32Array(tempData),
+      new Float32Array(precipData),
+      GRID_SIZE,
+    );
+    return null;
+  }
+  return rgba;
 }
 
 shell.onLayerToggle(async (layer: string, active: boolean) => {
@@ -159,11 +286,19 @@ shell.onLayerToggle(async (layer: string, active: boolean) => {
       }
       renderer.setPlateOverlayVisible(active);
     } else {
-      // temperature, precipitation, soil, clouds, biomass all use the climate overlay
       if (active) {
-        await fetchAndApplyClimateOverlay();
+        activeDataLayers.add(layer);
+        const rgba = await fetchLayerRgba(layer);
+        if (rgba !== null) {
+          renderer.updateColorMap(rgba, GRID_SIZE);
+        }
+        renderer.setBiomeOverlayVisible(true);
+      } else {
+        activeDataLayers.delete(layer);
+        if (activeDataLayers.size === 0) {
+          renderer.setBiomeOverlayVisible(false);
+        }
       }
-      renderer.setBiomeOverlayVisible(active);
     }
   } catch (err) {
     console.error(`Failed to toggle layer ${layer}:`, err);
@@ -252,6 +387,7 @@ function loop(now: number): void {
         .then(async (result) => {
           simTimeMa = result.timeMa;
           shell.setSimTime(simTimeMa);
+          shell.setTimelineCursor(4500 + simTimeMa);
 
           // Fetch updated height map for rendering
           const heightData = await api.getHeightMap();

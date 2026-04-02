@@ -331,31 +331,12 @@ export class GlobeRenderer {
   }
 
   /**
-   * Build and upload a biome overlay texture from temperature and precipitation maps.
-   * Uses the Whittaker biome classification (temperature × precipitation).
-   * @param temperatureMap  - Float32 array of °C values (row-major, same grid).
-   * @param precipitationMap - Float32 array of mm/yr equivalent values.
-   * @param gridSize         - Width/height of the square grid.
+   * Upload pre-computed RGBA colour data as the colour overlay texture.
+   * This is the low-level method; all per-layer overlays funnel through here.
+   * @param rgba      - Uint8Array of RGBA bytes (row-major, same grid).
+   * @param gridSize  - Width/height of the square grid.
    */
-  updateClimateMap(
-    temperatureMap: Float32Array,
-    precipitationMap: Float32Array,
-    gridSize: number,
-  ): void {
-    const cellCount = gridSize * gridSize;
-    // RGBA8 texture
-    const rgba = new Uint8Array(cellCount * 4);
-
-    for (let i = 0; i < cellCount; i++) {
-      const temp = temperatureMap[i];
-      const precip = precipitationMap[i];
-      const [r, g, b] = biomeColor(temp, precip);
-      rgba[i * 4 + 0] = r;
-      rgba[i * 4 + 1] = g;
-      rgba[i * 4 + 2] = b;
-      rgba[i * 4 + 3] = 180; // semi-transparent overlay
-    }
-
+  updateColorMap(rgba: Uint8Array, gridSize: number): void {
     if (this.biomeTexture) this.biomeTexture.dispose();
 
     this.biomeTexture = new THREE.DataTexture(
@@ -388,6 +369,32 @@ export class GlobeRenderer {
     } else {
       this.biomeMaterial!.uniforms.uBiomeMap.value = this.biomeTexture;
     }
+  }
+
+  /**
+   * Build and upload a biome overlay texture from temperature and precipitation maps.
+   * Uses the Whittaker biome classification (temperature × precipitation).
+   * @param temperatureMap  - Float32 array of °C values (row-major, same grid).
+   * @param precipitationMap - Float32 array of mm/yr equivalent values.
+   * @param gridSize         - Width/height of the square grid.
+   */
+  updateClimateMap(
+    temperatureMap: Float32Array,
+    precipitationMap: Float32Array,
+    gridSize: number,
+  ): void {
+    const cellCount = gridSize * gridSize;
+    const rgba = new Uint8Array(cellCount * 4);
+
+    for (let i = 0; i < cellCount; i++) {
+      const [r, g, b] = biomeColor(temperatureMap[i], precipitationMap[i]);
+      rgba[i * 4 + 0] = r;
+      rgba[i * 4 + 1] = g;
+      rgba[i * 4 + 2] = b;
+      rgba[i * 4 + 3] = 180;
+    }
+
+    this.updateColorMap(rgba, gridSize);
   }
 
   /** Show or hide the plate overlay. */

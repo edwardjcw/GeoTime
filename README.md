@@ -61,6 +61,34 @@ Set the backend URL via environment variable if needed:
 VITE_API_BASE=http://localhost:5000 npm run dev
 ```
 
+### Unreal Engine Version
+
+The `unreal/GeoTimeUE/` directory contains an Unreal Engine 5 project that connects to the same C# backend via the REST API and renders the terrain using UE5's landscape and procedural tools.
+
+**Prerequisites:**
+- Unreal Engine 5.3 or later
+- The C# backend must be running (see above)
+
+**Steps:**
+1. Start the C# backend first:
+   ```bash
+   cd backend
+   dotnet run --project GeoTime.Api
+   ```
+2. Open the Unreal Engine project:
+   - Launch the Unreal Editor
+   - Click **Browse** and navigate to `unreal/GeoTimeUE/GeoTimeUE.uproject`
+   - Open the project (allow it to compile shaders on first launch)
+3. Play in Editor:
+   - Press **Play** (or **Alt+P**) to start the simulation view
+   - The plugin fetches terrain and camera state from the backend at `http://localhost:5000`
+4. Key API endpoints used by the UE plugin:
+   - `GET /api/unreal/terrain-meta` — terrain dimensions and scale
+   - `GET /api/unreal/heightmap-raw` — raw 16-bit heightmap bytes
+   - `GET /api/unreal/terrain-tile/{x}/{y}/{lod}` — streamed terrain tiles
+   - `GET /api/unreal/camera` — camera position/orientation
+   - `PUT /api/unreal/camera` — update camera state (auto-sets mode: `firstperson` < 0.1 km altitude, `orbit` otherwise)
+
 ## Project Structure
 
 ### Backend (`backend/`)
