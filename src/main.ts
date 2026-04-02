@@ -242,8 +242,8 @@ const LAYER_LEGENDS: Record<string, { title: string; items: Array<{ color: strin
   temperature: {
     title: 'Temperature',
     items: [
-      { color: 'rgb(0,0,200)',     label: '≤ −40 °C (polar)' },
-      { color: 'rgb(100,100,220)', label: '−20 °C (cold)' },
+      { color: 'rgb(0,0,200)',     label: '<= -40 \u00b0C (polar)' },
+      { color: 'rgb(100,100,220)', label: '-20 \u00b0C (cold)' },
       { color: 'rgb(255,255,255)', label: '0 °C (freezing)' },
       { color: 'rgb(230,120,120)', label: '+20 °C (warm)' },
       { color: 'rgb(255,0,0)',     label: '+45 °C (hot)' },
@@ -519,9 +519,9 @@ let pendingSimRequest = false;
 // simulation loop still drives advances via the REST API; SignalR is used
 // only for lightweight status feedback.
 const PHASE_LABELS: Record<string, string> = {
-  tectonic: '⛰ Tectonic…',
-  surface:  '🌊 Surface…',
-  biomatter:'🌿 Biomatter…',
+  tectonic: '\u26f0 Tectonic\u2026',
+  surface:  '\U0001f30a Surface\u2026',
+  biomatter: '\U0001f33f Biomatter\u2026',
   complete: '',
 };
 
