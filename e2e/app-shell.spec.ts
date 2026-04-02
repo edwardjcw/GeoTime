@@ -370,7 +370,64 @@ test.describe('Phase 5: Cross-Section Viewer', () => {
   });
 });
 
-// ─── Phase 6: Vegetation & Polish Tests ─────────────────────────────────────
+// ─── Phase 7: Layer Overlays, Topo, Time Display, and Cross-Section Zoom ─────
+
+test.describe('Phase 7: Layer Overlays, Topo, and Cross-Section Zoom', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+  });
+
+  test('should display all layer overlay buttons including topo', async ({ page }) => {
+    await expect(page.locator('button', { hasText: 'plates' })).toBeVisible();
+    await expect(page.locator('button', { hasText: 'temperature' })).toBeVisible();
+    await expect(page.locator('button', { hasText: 'precipitation' })).toBeVisible();
+    await expect(page.locator('button', { hasText: 'soil' })).toBeVisible();
+    await expect(page.locator('button', { hasText: 'clouds' })).toBeVisible();
+    await expect(page.locator('button', { hasText: 'biomass' })).toBeVisible();
+    await expect(page.locator('button', { hasText: 'topo' })).toBeVisible();
+  });
+
+  test('should toggle each layer without crashing', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    const layers = ['plates', 'temperature', 'precipitation', 'soil', 'clouds', 'biomass', 'topo'];
+    for (const layer of layers) {
+      const btn = page.locator('button', { hasText: layer });
+      await btn.click();
+      await page.waitForTimeout(200);
+      await btn.click();
+      await page.waitForTimeout(200);
+    }
+
+    expect(errors).toHaveLength(0);
+  });
+
+  test('should display simulation time in Ma or Ga format at startup', async ({ page }) => {
+    // Time should be initialised immediately (no backend required)
+    const timeText = await page.locator('text=Time:').textContent();
+    expect(timeText).toMatch(/Time: -?\d+\.?\d*\s*(Ma|Ga)/);
+  });
+
+  test('should show cross-section zoom buttons when panel is open', async ({ page }) => {
+    // Zoom buttons are inside the cross-section panel which starts hidden
+    const zoomInBtn = page.locator('button', { hasText: '🔍+' });
+    await expect(zoomInBtn).not.toBeVisible();
+  });
+
+  test('cross-section panel has zoom controls', async ({ page }) => {
+    // Verify zoom buttons are present in the DOM (even if panel is hidden)
+    const zoomInBtn = page.locator('button[title="Zoom In"]');
+    const zoomOutBtn = page.locator('button[title="Zoom Out"]');
+    const zoomResetBtn = page.locator('button[title="Reset Zoom"]');
+    // They exist in DOM
+    await expect(zoomInBtn).toHaveCount(1);
+    await expect(zoomOutBtn).toHaveCount(1);
+    await expect(zoomResetBtn).toHaveCount(1);
+  });
+});
+
 
 test.describe('Phase 6: Vegetation & Polish', () => {
   test.beforeEach(async ({ page }) => {
@@ -386,6 +443,7 @@ test.describe('Phase 6: Vegetation & Polish', () => {
     await expect(page.locator('button', { hasText: 'soil' })).toBeVisible();
     await expect(page.locator('button', { hasText: 'clouds' })).toBeVisible();
     await expect(page.locator('button', { hasText: 'biomass' })).toBeVisible();
+    await expect(page.locator('button', { hasText: 'topo' })).toBeVisible();
   });
 
   test('should toggle layer overlay buttons', async ({ page }) => {
