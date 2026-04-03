@@ -245,6 +245,8 @@ export type SimulationEventHandler = {
   onPlateMapData?: (data: number[]) => void;
   onConnected?: (event: { timeMa: number; seed: number }) => void;
   onDisconnected?: () => void;
+  /** Called when the backend reports a simulation engine phase (tectonic, surface, biomatter, complete). */
+  onProgress?: (event: { phase: string; step?: number; totalSteps?: number; timeMa?: number }) => void;
 };
 
 /**
@@ -287,6 +289,9 @@ export function createSimulationSocket(handlers: SimulationEventHandler) {
                 break;
               case 'SimulationAdvanceComplete':
                 handlers.onAdvanceComplete?.(args[0]);
+                break;
+              case 'SimulationProgress':
+                handlers.onProgress?.(args[0]);
                 break;
               case 'PlanetGenerated':
                 handlers.onPlanetGenerated?.(args[0]);

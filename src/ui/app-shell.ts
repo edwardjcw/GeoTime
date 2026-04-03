@@ -51,6 +51,12 @@ export class AppShell {
   private inspectPanel: HTMLElement;
   private inspectContent: HTMLElement;
 
+  // ── Layer legend elements ───────────────────────────────────────────────
+  private legendPanel: HTMLElement;
+
+  // ── Progress indicator ──────────────────────────────────────────────────
+  private progressEl: HTMLSpanElement;
+
   // ── Timeline elements ───────────────────────────────────────────────────
   private timelineStrip: HTMLElement;
   private timelineBar: HTMLElement;
@@ -99,11 +105,11 @@ export class AppShell {
       position: 'absolute',
       top: '48px',
       left: '12px',
-      width: '220px',
+      width: '240px',
       background: 'rgba(10,10,14,0.92)',
       border: '1px solid rgba(255,255,255,0.12)',
       borderRadius: '6px',
-      padding: '10px 12px',
+      padding: '8px 12px',
       display: 'none',
       flexDirection: 'column',
       gap: '4px',
@@ -113,6 +119,31 @@ export class AppShell {
       fontFamily: 'monospace',
       pointerEvents: 'auto',
     });
+
+    // Inspect panel header with close button
+    const inspectHeader = el('div', {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: '4px',
+    });
+    const inspectTitle = document.createElement('span');
+    inspectTitle.textContent = '📍 Cell Info';
+    inspectTitle.style.fontWeight = 'bold';
+    const inspectCloseBtn = document.createElement('button');
+    inspectCloseBtn.textContent = '✕';
+    Object.assign(inspectCloseBtn.style, {
+      background: 'none',
+      border: 'none',
+      color: '#aaa',
+      cursor: 'pointer',
+      fontSize: '13px',
+      padding: '0 2px',
+    });
+    inspectCloseBtn.addEventListener('click', () => this.hideInspectPanel());
+    inspectHeader.append(inspectTitle, inspectCloseBtn);
+    this.inspectPanel.appendChild(inspectHeader);
+
     this.inspectContent = el('div', {
       display: 'flex',
       flexDirection: 'column',
@@ -120,6 +151,27 @@ export class AppShell {
     });
     this.inspectPanel.appendChild(this.inspectContent);
     this.root.appendChild(this.inspectPanel);
+
+    // ── Layer legend panel (floating, lower-left, hidden by default) ──────
+    this.legendPanel = el('div', {
+      position: 'absolute',
+      bottom: '48px',
+      left: '12px',
+      minWidth: '150px',
+      background: 'rgba(10,10,14,0.88)',
+      border: '1px solid rgba(255,255,255,0.12)',
+      borderRadius: '6px',
+      padding: '8px 12px',
+      display: 'none',
+      flexDirection: 'column',
+      gap: '4px',
+      zIndex: '21',
+      color: '#ddd',
+      fontSize: '11px',
+      fontFamily: 'monospace',
+      pointerEvents: 'none',
+    });
+    this.root.appendChild(this.legendPanel);
 
     // Forward viewport clicks for inspect
     this.viewport.addEventListener('click', (e: MouseEvent) => {
@@ -163,7 +215,12 @@ export class AppShell {
     styleBtn(this.pauseBtn);
     this.pauseBtn.addEventListener('click', () => this.pauseToggleCb?.());
 
-    this.hud.append(this.fpsEl, this.triEl, this.timeEl, this.pauseBtn);
+    this.progressEl = document.createElement('span');
+    this.progressEl.style.opacity = '0.5';
+    this.progressEl.style.fontSize = '11px';
+    this.progressEl.textContent = '';
+
+    this.hud.append(this.fpsEl, this.triEl, this.timeEl, this.pauseBtn, this.progressEl);
     this.root.appendChild(this.hud);
 
     // ── Sidebar ───────────────────────────────────────────────────────────
@@ -657,6 +714,49 @@ export class AppShell {
   /** Register a callback for layer overlay toggles. */
   onLayerToggle(cb: (layer: string, active: boolean) => void): void {
     this.layerToggleCb = cb;
+  }
+
+  /**
+   * Show a colour legend for the given layer.
+   * @param title  Short name for the layer.
+   * @param items  Array of { color: CSS colour string, label: description }.
+   */
+  showLayerLegend(title: string, items: Array<{ color: string; label: string }>): void {
+    this.legendPanel.innerHTML = '';
+
+    const titleEl = document.createElement('div');
+    titleEl.textContent = title;
+    titleEl.style.fontWeight = 'bold';
+    titleEl.style.marginBottom = '4px';
+    titleEl.style.opacity = '0.8';
+    this.legendPanel.appendChild(titleEl);
+
+    for (const item of items) {
+      const row = el('div', { display: 'flex', alignItems: 'center', gap: '6px' });
+      const swatch = el('div', {
+        width: '14px',
+        height: '14px',
+        borderRadius: '2px',
+        background: item.color,
+        flexShrink: '0',
+      });
+      const lbl = document.createElement('span');
+      lbl.textContent = item.label;
+      row.append(swatch, lbl);
+      this.legendPanel.appendChild(row);
+    }
+
+    this.legendPanel.style.display = 'flex';
+  }
+
+  /** Hide the layer legend. */
+  hideLayerLegend(): void {
+    this.legendPanel.style.display = 'none';
+  }
+
+  /** Show a brief engine-phase progress string in the HUD. */
+  setProgressText(text: string): void {
+    this.progressEl.textContent = text;
   }
 
   dispose(): void {

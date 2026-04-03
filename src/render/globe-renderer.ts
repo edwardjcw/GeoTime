@@ -76,11 +76,20 @@ void main() {
 
 // ─── Biome color shaders ────────────────────────────────────────────────────
 
+// The biome overlay reads the same heightmap as the terrain so it displaces
+// its vertices by the same amount, placing it exactly on the terrain surface
+// (plus a tiny epsilon to prevent z-fighting).
 const biomeVertexShader = /* glsl */ `
+uniform sampler2D uHeightMap;
+uniform float uDisplacementScale;
+
 varying vec2 vUv;
 void main() {
   vUv = uv;
-  vec3 pos = position * 1.0003;
+  float height = texture2D(uHeightMap, uv).r;
+  // Apply the same displacement as the terrain, plus a tiny offset so the
+  // overlay always sits on top of the terrain surface.
+  vec3 pos = position + normal * (height * uDisplacementScale + 0.002);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 }
 `;
@@ -263,6 +272,11 @@ export class GlobeRenderer {
     this.heightTexture.needsUpdate = true;
 
     this.globeMaterial.uniforms.uHeightMap.value = this.heightTexture;
+
+    // Keep the biome overlay in sync with the terrain displacement.
+    if (this.biomeMaterial) {
+      this.biomeMaterial.uniforms.uHeightMap.value = this.heightTexture;
+    }
   }
 
   /**
@@ -354,6 +368,8 @@ export class GlobeRenderer {
       this.biomeMaterial = new THREE.ShaderMaterial({
         uniforms: {
           uBiomeMap: { value: this.biomeTexture },
+          uHeightMap: { value: this.heightTexture },
+          uDisplacementScale: { value: DISPLACEMENT_SCALE },
         },
         vertexShader: biomeVertexShader,
         fragmentShader: biomeFragmentShader,

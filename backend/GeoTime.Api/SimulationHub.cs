@@ -27,6 +27,7 @@ public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
     /// <summary>
     /// Advance the simulation by deltaMa and stream state snapshots back to the caller.
     /// Breaks the advance into steps so the client receives incremental updates.
+    /// Emits "SimulationProgress" events with the engine phase name as each phase completes.
     /// </summary>
     public async Task AdvanceSimulation(double deltaMa, int steps = 1)
     {
@@ -35,7 +36,19 @@ public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
         var stepSize = deltaMa / steps;
         for (var i = 0; i < steps; i++)
         {
-            sim.AdvanceSimulation(stepSize);
+            var step = i; // capture for the lambda
+            sim.AdvanceSimulation(stepSize, phase =>
+            {
+                // Fire-and-forget: SignalR queues async sends internally so this is safe.
+                _ = Clients.Caller.SendAsync("SimulationProgress", new
+                {
+                    phase,
+                    step = step + 1,
+                    totalSteps = steps,
+                    timeMa = sim.GetCurrentTime(),
+                });
+            });
+
             await Clients.Caller.SendAsync("SimulationTick", new
             {
                 timeMa = sim.GetCurrentTime(),
