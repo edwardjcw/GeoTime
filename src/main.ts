@@ -344,20 +344,38 @@ async function fetchLayerRgba(layer: string): Promise<Uint8Array | null> {
     }
   } else if (layer === 'topo') {
     const data = await api.getHeightMap();
-    // Find actual min/max so we always see the full colour range regardless
-    // of whether heights are in normalised noise units or real metres.
-    let minH = Infinity, maxH = -Infinity;
+    // Heights are in real metres. Because isostatic equilibrium clusters ocean
+    // cells near −3200 m and land cells near +1863 m, a global rescale smears
+    // everything into just 2–3 colour bands.  Instead, stretch each domain
+    // across its own actual [min, max] range to a target interval that sits
+    // fully within the topoColor palette for that domain:
+    //   ocean: [minOcean, maxOcean] → [−7000, −200]
+    //           deepest → dark navy through gradient → coastal light blue
+    //   land:  [minLand, maxLand]   → [0, 5500]
+    //           lowest land → lowland green → highland → mountains → white peaks
+    let minOcean = 0, maxOcean = 0;
+    let minLand  = 0, maxLand  = 0;
+    let hasOcean = false, hasLand = false;
     for (const h of data) {
-      if (h < minH) minH = h;
-      if (h > maxH) maxH = h;
+      if (h < 0) {
+        if (!hasOcean || h < minOcean) minOcean = h;
+        if (!hasOcean || h > maxOcean) maxOcean = h;
+        hasOcean = true;
+      } else {
+        if (!hasLand || h < minLand) minLand = h;
+        if (!hasLand || h > maxLand) maxLand = h;
+        hasLand = true;
+      }
     }
-    const hRange = maxH - minH || 1;
-    // Map the actual data range onto a notional [-8000 m, 9000 m] earth-like scale
-    // so that the topoColor bands always show meaningful variation.
-    const TOPO_MIN = -8000, TOPO_MAX = 9000;
-    const topoRange = TOPO_MAX - TOPO_MIN;
+    const oceanRange = (maxOcean - minOcean) || 1;
+    const landRange  = (maxLand  - minLand)  || 1;
+    const OCEAN_LO = -7000, OCEAN_HI = -200;
+    const LAND_LO  =     0, LAND_HI  = 5500;
     for (let i = 0; i < cellCount; i++) {
-      const scaled = ((data[i] - minH) / hRange) * topoRange + TOPO_MIN;
+      const h = data[i];
+      const scaled = h < 0
+        ? (h - minOcean) / oceanRange * (OCEAN_HI - OCEAN_LO) + OCEAN_LO
+        : (h - minLand)  / landRange  * (LAND_HI  - LAND_LO)  + LAND_LO;
       const [r, g, b] = topoColor(scaled);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 200;
     }
@@ -513,21 +531,74 @@ const SIM_UPDATE_INTERVAL = 200; // ms between backend simulation calls
 /** Flag to prevent overlapping backend requests. */
 let pendingSimRequest = false;
 
+// ── Agent status tracking ───────────────────────────────────────────────────
+// Track the last known status of each simulation engine phase.  Updated via
+// SignalR progress events and displayed in the clickable agent status panel.
+
+/** Each agent's latest status: 'idle' | 'running' | 'done'. */
+const agentStatuses: Record<string, 'idle' | 'running' | 'done'> = {
+  tectonic:   'idle',
+  surface:    'idle',
+  atmosphere: 'idle',
+  vegetation: 'idle',
+  biomatter:  'idle',
+};
+
+function updateAgentStatuses(phase: string): void {
+  // Phases arrive in order: tectonic → surface (parallel: atmosphere+vegetation) → biomatter → complete
+  if (phase === 'tectonic') {
+    agentStatuses.tectonic = 'running';
+    agentStatuses.surface = 'idle';
+    agentStatuses.atmosphere = 'idle';
+    agentStatuses.vegetation = 'idle';
+    agentStatuses.biomatter = 'idle';
+  } else if (phase === 'surface') {
+    agentStatuses.tectonic = 'done';
+    agentStatuses.surface = 'running';
+    agentStatuses.atmosphere = 'running';
+    agentStatuses.vegetation = 'running';
+  } else if (phase === 'biomatter') {
+    agentStatuses.surface = 'done';
+    agentStatuses.atmosphere = 'done';
+    agentStatuses.vegetation = 'done';
+    agentStatuses.biomatter = 'running';
+  } else if (phase === 'complete') {
+    agentStatuses.biomatter = 'done';
+  } else {
+    // Unknown phase — log and leave statuses unchanged so the panel remains readable.
+    console.debug(`[agents] unknown phase: ${phase}`);
+  }
+  shell.updateAgentStatuses(agentStatuses);
+}
+
+function resetAgentStatuses(): void {
+  for (const key of Object.keys(agentStatuses)) {
+    agentStatuses[key] = 'idle';
+  }
+  shell.updateAgentStatuses(agentStatuses);
+}
+
 // ── SignalR connection for real-time progress events ────────────────────────
 // We connect to the SignalR hub to receive engine-phase progress events that
 // the backend broadcasts while processing each simulation tick.  The main
 // simulation loop still drives advances via the REST API; SignalR is used
 // only for lightweight status feedback.
 const PHASE_LABELS: Record<string, string> = {
-  tectonic: '\u26f0 Tectonic\u2026',
-  surface:  '\U0001f30a Surface\u2026',
-  biomatter: '\U0001f33f Biomatter\u2026',
-  complete: '',
+  tectonic:  '⛰ Tectonic\u2026',
+  surface:   '🌊 Surface\u2026',
+  biomatter: '🌿 Biomatter\u2026',
+  complete:  '',
 };
 
 const simSocket = api.createSimulationSocket({
   onProgress: (event) => {
-    shell.setProgressText(PHASE_LABELS[event.phase] ?? '');
+    // Only update progress text while an advance is in flight, to avoid
+    // late-arriving SignalR messages overwriting the cleared state after the
+    // REST response has already been processed.
+    if (pendingSimRequest) {
+      shell.setProgressText(PHASE_LABELS[event.phase] ?? '');
+    }
+    updateAgentStatuses(event.phase);
   },
   onTick: (event) => {
     // Update time display on SignalR ticks too (when SignalR advance is used).
@@ -562,15 +633,31 @@ function loop(now: number): void {
           shell.setSimTime(simTimeMa);
           shell.setTimelineCursor(4500 + simTimeMa);
           shell.setProgressText('');
+          resetAgentStatuses();
 
           // Fetch updated height map for rendering
           const heightData = await api.getHeightMap();
           const heightMap = new Float32Array(heightData);
           renderer.updateHeightMap(heightMap, GRID_SIZE);
+
+          // Re-render any active data overlays so they reflect the new state.
+          // This keeps the visual overlay in sync with the updated simulation.
+          if (activeDataLayers.size > 0) {
+            // Refresh the most-recently-activated overlay (the one currently visible).
+            const layers = [...activeDataLayers];
+            const layerToRefresh = layers[layers.length - 1];
+            if (layerToRefresh !== undefined) {
+              const rgba = await fetchLayerRgba(layerToRefresh);
+              if (rgba !== null) {
+                renderer.updateColorMap(rgba, GRID_SIZE);
+              }
+            }
+          }
         })
         .catch((err) => {
           console.error('Simulation advance failed:', err);
           shell.setProgressText('');
+          resetAgentStatuses();
         })
         .finally(() => {
           pendingSimRequest = false;

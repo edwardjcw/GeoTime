@@ -55,7 +55,12 @@ export class AppShell {
   private legendPanel: HTMLElement;
 
   // ── Progress indicator ──────────────────────────────────────────────────
-  private progressEl: HTMLSpanElement;
+  private progressEl: HTMLButtonElement;
+
+  // ── Agent status panel ──────────────────────────────────────────────────
+  private agentPanel: HTMLElement;
+  private agentPanelRows: Map<string, HTMLElement> = new Map();
+  private agentPanelOpen = false;
 
   // ── Timeline elements ───────────────────────────────────────────────────
   private timelineStrip: HTMLElement;
@@ -215,10 +220,79 @@ export class AppShell {
     styleBtn(this.pauseBtn);
     this.pauseBtn.addEventListener('click', () => this.pauseToggleCb?.());
 
-    this.progressEl = document.createElement('span');
-    this.progressEl.style.opacity = '0.5';
-    this.progressEl.style.fontSize = '11px';
+    this.progressEl = document.createElement('button');
+    Object.assign(this.progressEl.style, {
+      opacity: '0.7',
+      fontSize: '11px',
+      background: 'none',
+      border: 'none',
+      color: '#ccc',
+      cursor: 'pointer',
+      fontFamily: 'monospace',
+      padding: '2px 6px',
+      borderRadius: '3px',
+    });
+    this.progressEl.title = 'Click to view agent status';
     this.progressEl.textContent = '';
+    this.progressEl.addEventListener('click', () => this.toggleAgentPanel());
+    this.progressEl.addEventListener('mouseenter', () => {
+      this.progressEl.style.background = 'rgba(255,255,255,0.1)';
+    });
+    this.progressEl.addEventListener('mouseleave', () => {
+      this.progressEl.style.background = 'none';
+    });
+
+    // ── Agent status panel ─────────────────────────────────────────────────
+    this.agentPanel = el('div', {
+      position: 'absolute',
+      top: '40px',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      background: 'rgba(10,10,18,0.92)',
+      border: '1px solid rgba(255,255,255,0.12)',
+      borderRadius: '6px',
+      padding: '10px 14px',
+      display: 'none',
+      flexDirection: 'column',
+      gap: '5px',
+      zIndex: '30',
+      color: '#ddd',
+      fontSize: '12px',
+      fontFamily: 'monospace',
+      minWidth: '200px',
+      pointerEvents: 'none',
+    });
+
+    const agentPanelTitle = document.createElement('div');
+    agentPanelTitle.textContent = 'Engine Agents';
+    Object.assign(agentPanelTitle.style, {
+      fontWeight: 'bold',
+      marginBottom: '4px',
+      opacity: '0.8',
+      fontSize: '11px',
+    });
+    this.agentPanel.appendChild(agentPanelTitle);
+
+    const AGENT_DEFS: Array<[string, string]> = [
+      ['tectonic',   '⛰ Tectonic'],
+      ['surface',    '🌊 Surface'],
+      ['atmosphere', '☁️ Atmosphere'],
+      ['vegetation', '🌿 Vegetation'],
+      ['biomatter',  '🧬 Biomatter'],
+    ];
+    for (const [key, label] of AGENT_DEFS) {
+      const row = el('div', { display: 'flex', justifyContent: 'space-between', gap: '12px' });
+      const lbl = document.createElement('span');
+      lbl.textContent = label;
+      lbl.style.opacity = '0.7';
+      const status = document.createElement('span');
+      status.textContent = '○ idle';
+      status.style.opacity = '0.5';
+      row.append(lbl, status);
+      this.agentPanel.appendChild(row);
+      this.agentPanelRows.set(key, status);
+    }
+    this.root.appendChild(this.agentPanel);
 
     this.hud.append(this.fpsEl, this.triEl, this.timeEl, this.pauseBtn, this.progressEl);
     this.root.appendChild(this.hud);
@@ -757,6 +831,39 @@ export class AppShell {
   /** Show a brief engine-phase progress string in the HUD. */
   setProgressText(text: string): void {
     this.progressEl.textContent = text;
+    // Show a subtle indicator on the button when something is in progress
+    this.progressEl.style.opacity = text ? '1' : '0.7';
+  }
+
+  // ── Agent status panel API ──────────────────────────────────────────────
+
+  /** Update the per-agent status display. */
+  updateAgentStatuses(statuses: Record<string, 'idle' | 'running' | 'done'>): void {
+    for (const [key, el] of this.agentPanelRows) {
+      const s = statuses[key] ?? 'idle';
+      if (s === 'running') {
+        el.textContent = '● running';
+        el.style.color = '#4af';
+        el.style.opacity = '1';
+      } else if (s === 'done') {
+        el.textContent = '✓ done';
+        el.style.color = '#4c8';
+        el.style.opacity = '0.8';
+      } else {
+        el.textContent = '○ idle';
+        el.style.color = '#ccc';
+        el.style.opacity = '0.5';
+      }
+    }
+  }
+
+  /** Toggle the agent status panel visibility. */
+  private toggleAgentPanel(): void {
+    this.agentPanelOpen = !this.agentPanelOpen;
+    this.agentPanel.style.display = this.agentPanelOpen ? 'flex' : 'none';
+    this.progressEl.style.background = this.agentPanelOpen
+      ? 'rgba(255,255,255,0.15)'
+      : 'none';
   }
 
   dispose(): void {
