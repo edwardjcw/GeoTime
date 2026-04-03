@@ -138,7 +138,8 @@ void main() {
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const SUBDIVISION_LEVEL = 5; // ~20 480 triangles
-const DISPLACEMENT_SCALE = 0.02;
+// Heights are stored in metres; 5e-6 gives ~4% visual exaggeration at 8 000 m peaks.
+const DISPLACEMENT_SCALE = 5e-6;
 const CAMERA_DISTANCE = 3.0;
 
 // ─── Biome Color Lookup (Whittaker diagram) ──────────────────────────────────

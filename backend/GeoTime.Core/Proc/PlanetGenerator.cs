@@ -227,6 +227,23 @@ public sealed class PlanetGenerator(uint seed)
             }
             state.RockAgeMap[i] = (float)rng.NextFloat(100, 4000);
         }
+
+        // Convert noise-unit heights to metre-scale by applying isostatic equilibrium.
+        // Use the sign of each cell's noise height (positive = above sea level = continental crust,
+        // negative = below sea level = oceanic crust) so that the correct equilibrium depth is
+        // applied even when most plates ended up with average heights < 0.
+        // The noise perturbation (±500 m) preserves topographic variation within each domain.
+        // Isostatic ratio matches TectonicEngine.ApplyIsostasy constant (2.7/3.3).
+        const double isostaticRatio = 2.7 / 3.3;
+        for (var i = 0; i < cellCount; i++)
+        {
+            var h = state.HeightMap[i]; // normalized noise: negative = ocean, positive = land
+            var crustKm = h < 0 ? 7.0 : 35.0;
+            var eq = crustKm * 1000 * (1 - isostaticRatio) - 4500;
+            state.HeightMap[i] = (float)(eq + h * 500);
+            // Correct crust thickness to match cell type for physical consistency
+            state.CrustThicknessMap[i] = (float)crustKm;
+        }
     }
 
     private static List<HotspotInfo> GenerateHotspots(Xoshiro256ss rng)
