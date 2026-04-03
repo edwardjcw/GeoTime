@@ -232,15 +232,20 @@ public sealed class PlanetGenerator(uint seed)
         // Use the sign of each cell's noise height (positive = above sea level = continental crust,
         // negative = below sea level = oceanic crust) so that the correct equilibrium depth is
         // applied even when most plates ended up with average heights < 0.
-        // The noise perturbation (±500 m) preserves topographic variation within each domain.
+        // The noise perturbation (±NoiseAmplitudeM) preserves topographic variation within each domain.
         // Isostatic ratio matches TectonicEngine.ApplyIsostasy constant (2.7/3.3).
-        const double isostaticRatio = 2.7 / 3.3;
+        const double isostaticRatio   = 2.7 / 3.3;
+        const double oceanicCrustKm   = 7.0;    // typical oceanic crust thickness (km)
+        const double continentalCrustKm = 35.0; // typical continental crust thickness (km)
+        const double kmToM            = 1000.0; // km → m conversion
+        const double isostaticOffsetM = 4500.0; // baseline depth correction for isostasy (m)
+        const double noiseAmplitudeM  = 500.0;  // noise perturbation amplitude (m)
         for (var i = 0; i < cellCount; i++)
         {
             var h = state.HeightMap[i]; // normalized noise: negative = ocean, positive = land
-            var crustKm = h < 0 ? 7.0 : 35.0;
-            var eq = crustKm * 1000 * (1 - isostaticRatio) - 4500;
-            state.HeightMap[i] = (float)(eq + h * 500);
+            var crustKm = h < 0 ? oceanicCrustKm : continentalCrustKm;
+            var eq = crustKm * kmToM * (1 - isostaticRatio) - isostaticOffsetM;
+            state.HeightMap[i] = (float)(eq + h * noiseAmplitudeM);
             // Correct crust thickness to match cell type for physical consistency
             state.CrustThicknessMap[i] = (float)crustKm;
         }

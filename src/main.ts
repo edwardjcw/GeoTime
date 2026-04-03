@@ -534,6 +534,9 @@ function updateAgentStatuses(phase: string): void {
     agentStatuses.biomatter = 'running';
   } else if (phase === 'complete') {
     agentStatuses.biomatter = 'done';
+  } else {
+    // Unknown phase — log and leave statuses unchanged so the panel remains readable.
+    console.debug(`[agents] unknown phase: ${phase}`);
   }
   shell.updateAgentStatuses(agentStatuses);
 }
@@ -611,10 +614,13 @@ function loop(now: number): void {
           // This keeps the visual overlay in sync with the updated simulation.
           if (activeDataLayers.size > 0) {
             // Refresh the most-recently-activated overlay (the one currently visible).
-            const layerToRefresh = [...activeDataLayers].at(-1)!;
-            const rgba = await fetchLayerRgba(layerToRefresh);
-            if (rgba !== null) {
-              renderer.updateColorMap(rgba, GRID_SIZE);
+            const layers = [...activeDataLayers];
+            const layerToRefresh = layers[layers.length - 1];
+            if (layerToRefresh !== undefined) {
+              const rgba = await fetchLayerRgba(layerToRefresh);
+              if (rgba !== null) {
+                renderer.updateColorMap(rgba, GRID_SIZE);
+              }
             }
           }
         })
