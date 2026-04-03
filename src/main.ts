@@ -344,9 +344,39 @@ async function fetchLayerRgba(layer: string): Promise<Uint8Array | null> {
     }
   } else if (layer === 'topo') {
     const data = await api.getHeightMap();
-    // Heights are now stored in metres; apply the topoColor bands directly.
+    // Heights are in real metres. Because isostatic equilibrium clusters ocean
+    // cells near −3200 m and land cells near +1863 m, a global rescale smears
+    // everything into just 2–3 colour bands.  Instead, stretch each domain
+    // across its own actual [min, max] range to a target interval that sits
+    // fully within the topoColor palette for that domain:
+    //   ocean: [minOcean, maxOcean] → [−7000, −200]
+    //           deepest → dark navy through gradient → coastal light blue
+    //   land:  [minLand, maxLand]   → [0, 5500]
+    //           lowest land → lowland green → highland → mountains → white peaks
+    let minOcean = 0, maxOcean = 0;
+    let minLand  = 0, maxLand  = 0;
+    let hasOcean = false, hasLand = false;
+    for (const h of data) {
+      if (h < 0) {
+        if (!hasOcean || h < minOcean) minOcean = h;
+        if (!hasOcean || h > maxOcean) maxOcean = h;
+        hasOcean = true;
+      } else {
+        if (!hasLand || h < minLand) minLand = h;
+        if (!hasLand || h > maxLand) maxLand = h;
+        hasLand = true;
+      }
+    }
+    const oceanRange = (maxOcean - minOcean) || 1;
+    const landRange  = (maxLand  - minLand)  || 1;
+    const OCEAN_LO = -7000, OCEAN_HI = -200;
+    const LAND_LO  =     0, LAND_HI  = 5500;
     for (let i = 0; i < cellCount; i++) {
-      const [r, g, b] = topoColor(data[i]);
+      const h = data[i];
+      const scaled = h < 0
+        ? (h - minOcean) / oceanRange * (OCEAN_HI - OCEAN_LO) + OCEAN_LO
+        : (h - minLand)  / landRange  * (LAND_HI  - LAND_LO)  + LAND_LO;
+      const [r, g, b] = topoColor(scaled);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 200;
     }
   } else {
