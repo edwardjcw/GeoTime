@@ -945,6 +945,41 @@ test.describe('Phase 9 – Weather Pattern Layer', () => {
     // Take screenshot
     await page.screenshot({ path: 'e2e/screenshots/weather-layer-after-play.png', fullPage: false });
   });
+
+  test('wind map toggle button should be visible when weather layer is active', async ({ page }) => {
+    const weatherBtn = page.locator('button[data-layer="weather"]');
+    await weatherBtn.click();
+    await page.waitForTimeout(1500);
+
+    // Should show the Wind toggle button
+    const windBtn = page.locator('button', { hasText: /Wind/ });
+    await expect(windBtn).toBeVisible();
+
+    // Take screenshot of weather layer with wind button visible
+    await page.screenshot({ path: 'e2e/screenshots/weather-layer-with-wind-toggle.png', fullPage: false });
+  });
+
+  test('clicking wind toggle should activate wind animation without crashing', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    const weatherBtn = page.locator('button[data-layer="weather"]');
+    await weatherBtn.click();
+    await page.waitForTimeout(1500);
+
+    // Click the Wind toggle button
+    const windBtn = page.locator('button', { hasText: /Wind/ });
+    await windBtn.click();
+    await page.waitForTimeout(1000); // allow animation to run a few frames
+
+    const critical = errors.filter(
+      (e) => !e.includes('WebGL') && !e.includes('THREE.') && !e.includes('NetworkError'),
+    );
+    expect(critical).toHaveLength(0);
+
+    // Take screenshot of wind animation active
+    await page.screenshot({ path: 'e2e/screenshots/weather-wind-animation.png', fullPage: false });
+  });
 });
 
 test.describe('Phase 9 – First Person Mode Controls', () => {

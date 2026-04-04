@@ -81,6 +81,8 @@ export class AppShell {
   private weatherMonthPanel: HTMLElement = document.createElement('div');
   private weatherMonthLabel: HTMLSpanElement = document.createElement('span');
   private _currentWeatherMonth = 0;
+  private _windToggleBtn: HTMLButtonElement | null = null;
+  private _windActive = false;
 
   // ── Callbacks ───────────────────────────────────────────────────────────
   private newPlanetCb: (() => void) | null = null;
@@ -98,6 +100,7 @@ export class AppShell {
   private saveStateCb: (() => void) | null = null;
   private loadStateCb: (() => void) | null = null;
   private weatherMonthChangeCb: ((month: number) => void) | null = null;
+  private windToggleCb: ((active: boolean) => void) | null = null;
   private abortRequestCb: (() => void) | null = null;
 
   private sidebarOpen = true;
@@ -362,7 +365,25 @@ export class AppShell {
       this.weatherMonthLabel.textContent = `Weather Month: ${MONTH_NAMES[this._currentWeatherMonth]}`;
       this.weatherMonthChangeCb?.(this._currentWeatherMonth);
     });
-    this.weatherMonthPanel.append(prevMonthBtn, this.weatherMonthLabel, nextMonthBtn);
+
+    // Wind map toggle button
+    const sep = document.createElement('span');
+    sep.textContent = '|';
+    sep.style.opacity = '0.3';
+    this._windToggleBtn = document.createElement('button');
+    this._windToggleBtn.textContent = '💨 Wind';
+    styleBtn(this._windToggleBtn);
+    this._windToggleBtn.style.padding = '2px 10px';
+    this._windToggleBtn.title = 'Toggle animated wind particle overlay';
+    this._windToggleBtn.addEventListener('click', () => {
+      this._windActive = !this._windActive;
+      if (this._windToggleBtn) {
+        this._windToggleBtn.style.background = this._windActive ? '#2a6' : 'rgba(255,255,255,0.08)';
+      }
+      this.windToggleCb?.(this._windActive);
+    });
+
+    this.weatherMonthPanel.append(prevMonthBtn, this.weatherMonthLabel, nextMonthBtn, sep, this._windToggleBtn);
     this.root.appendChild(this.weatherMonthPanel);
 
     this.hud.append(this.fpsEl, this.triEl, this.timeEl, this.pauseBtn, this.firstPersonEl, this.progressEl);
@@ -753,6 +774,11 @@ export class AppShell {
     this.weatherMonthChangeCb = cb;
   }
 
+  /** Register a callback for wind map toggle. */
+  onWindToggle(cb: (active: boolean) => void): void {
+    this.windToggleCb = cb;
+  }
+
   /** Show the weather month selector panel. */
   showWeatherMonthSelector(month: number): void {
     this._currentWeatherMonth = month;
@@ -760,9 +786,15 @@ export class AppShell {
     this.weatherMonthPanel.style.display = 'flex';
   }
 
-  /** Hide the weather month selector panel. */
+  /** Hide the weather month selector panel and reset wind state. */
   hideWeatherMonthSelector(): void {
     this.weatherMonthPanel.style.display = 'none';
+    // Reset wind toggle to off
+    if (this._windActive) {
+      this._windActive = false;
+      if (this._windToggleBtn) this._windToggleBtn.style.background = 'rgba(255,255,255,0.08)';
+      this.windToggleCb?.(false);
+    }
   }
 
   /**
@@ -1033,6 +1065,7 @@ export class AppShell {
     this.saveStateCb = null;
     this.loadStateCb = null;
     this.weatherMonthChangeCb = null;
+    this.windToggleCb = null;
     this.abortRequestCb = null;
   }
 

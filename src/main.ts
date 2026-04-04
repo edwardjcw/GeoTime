@@ -367,11 +367,13 @@ const LAYER_LEGENDS: Record<string, { title: string; items: Array<{ color: strin
   weather: {
     title: 'Weather Patterns',
     items: [
-      { color: 'rgb(255,140,0)',   label: 'ITCZ (tropical convergence)' },
-      { color: 'rgb(50,100,255)',  label: 'Polar front' },
-      { color: 'rgb(255,220,50)',  label: 'Subtropical high' },
-      { color: 'rgb(160,160,160)', label: 'Orographic front' },
-      { color: 'rgb(255,255,150)', label: 'Jet stream' },
+      { color: 'rgb(255,130,10)',  label: 'ITCZ (tropical convergence)' },
+      { color: 'rgb(40,130,230)',  label: 'Polar front' },
+      { color: 'rgb(255,240,120)', label: 'Subtropical high (dry air)' },
+      { color: 'rgb(130,140,165)', label: 'Orographic front' },
+      { color: 'rgba(255,80,50,0.9)',  label: '🌀 Tropical cyclone' },
+      { color: 'rgba(80,160,255,0.9)', label: '🌀 Extratropical cyclone' },
+      { color: 'rgb(40,200,255)',  label: '💨 Wind particles (toggle)' },
     ],
   },
 };
@@ -379,37 +381,89 @@ const LAYER_LEGENDS: Record<string, { title: string; items: Array<{ color: strin
 // ── Weather state ─────────────────────────────────────────────────────────────
 let weatherMonth = 0;         // currently displayed month (0 = January)
 let weatherLayerPausedSim = false;
+let lastWeatherResult: api.WeatherPatternResult | null = null; // cached for wind toggle
 
-/** Build an RGBA texture from weather pattern data. */
+/** Build an RGBA texture from weather pattern data — meteorological map style.
+ *
+ * The texture is mostly transparent so the terrain shows through as a base.
+ * Atmospheric features are rendered as semi-transparent colored overlays:
+ *   - ITCZ: warm orange glow near the equatorial convergence zone
+ *   - Polar front: cool blue tint at 50-70° latitude
+ *   - Subtropical high: faint pale-yellow haze at 22-38° (dry, sinking air)
+ *   - Orographic front: grey shadow on steep mountain slopes
+ *   - Cyclones: circular gradient blooms (red for tropical, blue for extratropical)
+ *
+ * Jet-stream animation is handled separately by the wind-particle canvas overlay,
+ * so it is intentionally omitted from the static texture.
+ */
 function renderWeatherPattern(result: api.WeatherPatternResult): Uint8Array {
   const cellCount = GRID_SIZE * GRID_SIZE;
-  const rgba = new Uint8Array(cellCount * 4);
+  const rgba = new Uint8Array(cellCount * 4); // all zeros = transparent
 
   for (let i = 0; i < cellCount; i++) {
-    let r = 0, g = 0, b = 0, a = 0;
-    const front = result.frontType?.[i] ?? 0;
-    const jet   = result.jetStreamIntensity?.[i] ?? 0;
+    const front = result.frontType[i] ?? 0;
+    const intensity = result.frontIntensity[i] ?? 0;
+    if (intensity < 0.05 || front === 0) continue;
 
-    if (front === 1) {        // ITCZ
-      r = 255; g = 140; b = 0; a = 180;
-    } else if (front === 2) { // polar front
-      r = 50; g = 100; b = 255; a = 180;
-    } else if (front === 3) { // subtropical high
-      r = 255; g = 220; b = 50; a = 180;
-    } else if (front === 4) { // orographic
-      r = 160; g = 160; b = 160; a = 180;
-    } else if (jet > 0.1) {   // jet stream
-      const t = Math.min(1, jet);
-      r = Math.round(200 + t * 55);
-      g = Math.round(200 + t * 55);
-      b = Math.round(100 * (1 - t));
-      a = Math.round(100 + t * 100);
+    let r = 0, g = 0, b = 0, a = 0;
+
+    switch (front) {
+      case 1: // ITCZ — warm orange/amber convergence zone
+        r = 255; g = 130; b = 10;
+        a = Math.round(intensity * 170);
+        break;
+      case 2: // Polar front — cold blue band
+        r = 40; g = 130; b = 230;
+        a = Math.round(intensity * 160);
+        break;
+      case 3: // Subtropical high — very faint pale-yellow (dry descending air)
+        r = 255; g = 240; b = 120;
+        a = Math.round(intensity * 55);
+        break;
+      case 4: // Orographic front — grey mountain shadow
+        r = 130; g = 140; b = 165;
+        a = Math.round(intensity * 130);
+        break;
     }
 
     rgba[i * 4 + 0] = r;
     rgba[i * 4 + 1] = g;
     rgba[i * 4 + 2] = b;
     rgba[i * 4 + 3] = a;
+  }
+
+  // Overlay cyclone positions as radial gradient "blooms"
+  const gs = GRID_SIZE;
+  for (const cyc of result.cyclonePositions ?? []) {
+    const col = Math.round(((cyc.lon + 180) / 360) * gs);
+    const row = Math.round(((90 - cyc.lat) / 180) * gs);
+    const radius = Math.round(6 + cyc.intensity * 8);
+
+    for (let dr = -radius; dr <= radius; dr++) {
+      for (let dc = -radius; dc <= radius; dc++) {
+        const dist2 = dr * dr + dc * dc;
+        if (dist2 > radius * radius) continue;
+        const nr = row + dr;
+        const nc = ((col + dc) % gs + gs) % gs;
+        if (nr < 0 || nr >= gs) continue;
+        const idx = nr * gs + nc;
+        const t = Math.pow(1 - Math.sqrt(dist2) / radius, 1.5);
+        const alpha = Math.round(t * 200 * cyc.intensity);
+        if (cyc.type === 1) {
+          // Tropical — deep red/orange core
+          rgba[idx * 4 + 0] = Math.max(rgba[idx * 4 + 0], Math.round(255 * t));
+          rgba[idx * 4 + 1] = Math.max(rgba[idx * 4 + 1], Math.round(60 * t));
+          rgba[idx * 4 + 2] = 0;
+          rgba[idx * 4 + 3] = Math.max(rgba[idx * 4 + 3], alpha);
+        } else {
+          // Extratropical — blue/white spiral
+          rgba[idx * 4 + 0] = Math.max(rgba[idx * 4 + 0], Math.round(80 * t));
+          rgba[idx * 4 + 1] = Math.max(rgba[idx * 4 + 1], Math.round(160 * t));
+          rgba[idx * 4 + 2] = Math.max(rgba[idx * 4 + 2], Math.round(255 * t));
+          rgba[idx * 4 + 3] = Math.max(rgba[idx * 4 + 3], alpha);
+        }
+      }
+    }
   }
 
   return rgba;
@@ -539,12 +593,15 @@ shell.onLayerToggle(async (layer: string, active: boolean) => {
         }
         shell.showWeatherMonthSelector(weatherMonth);
         const result = await api.getWeatherPattern(weatherMonth);
+        lastWeatherResult = result;
         const rgba = renderWeatherPattern(result);
         renderer.updateColorMap(rgba, GRID_SIZE);
         renderer.setBiomeOverlayVisible(true);
       } else {
         activeDataLayers.delete(layer);
-        shell.hideWeatherMonthSelector();
+        shell.hideWeatherMonthSelector(); // also fires windToggleCb(false) if wind was on
+        renderer.stopWindAnimation();
+        lastWeatherResult = null;
         if (weatherLayerPausedSim) {
           paused = false;
           shell.setPaused(false);
@@ -597,11 +654,25 @@ shell.onWeatherMonthChange(async (month: number) => {
   if (activeDataLayers.has('weather')) {
     try {
       const result = await api.getWeatherPattern(month);
+      lastWeatherResult = result;
       const rgba = renderWeatherPattern(result);
       renderer.updateColorMap(rgba, GRID_SIZE);
+      // Restart wind animation with new month's data if it is currently active
+      if (renderer.isWindAnimationActive()) {
+        renderer.startWindAnimation(result.windU, result.windV, GRID_SIZE);
+      }
     } catch (err) {
       console.error('Weather month change failed:', err);
     }
+  }
+});
+
+// Wind map toggle
+shell.onWindToggle((active: boolean) => {
+  if (active && lastWeatherResult) {
+    renderer.startWindAnimation(lastWeatherResult.windU, lastWeatherResult.windV, GRID_SIZE);
+  } else {
+    renderer.stopWindAnimation();
   }
 });
 

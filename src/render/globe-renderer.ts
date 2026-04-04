@@ -218,6 +218,17 @@ export class GlobeRenderer {
   private _fpKeyDownHandler: ((e: KeyboardEvent) => void) | null = null;
   private _fpKeyUpHandler: ((e: KeyboardEvent) => void) | null = null;
 
+  // ── Wind animation overlay ────────────────────────────────────────────────
+  private _windCanvas: HTMLCanvasElement | null = null;
+  private _windCtx: CanvasRenderingContext2D | null = null;
+  private _windU: Float32Array | null = null;
+  private _windV: Float32Array | null = null;
+  private _windGridSize = 512;
+  private _windParticles: Array<{ lat: number; lon: number; age: number; speed: number }> = [];
+  private _windAnimActive = false;
+  /** Scratch vector to avoid allocations in hot animation path. */
+  private _windScratch = new THREE.Vector3();
+
   constructor(container: HTMLElement) {
     // ── Renderer ──────────────────────────────────────────────────────────
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -399,6 +410,10 @@ export class GlobeRenderer {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+    if (this._windCanvas) {
+      this._windCanvas.width = width;
+      this._windCanvas.height = height;
+    }
   }
 
   /** Render one frame (call inside a rAF loop). */
@@ -438,6 +453,16 @@ export class GlobeRenderer {
     this.camera.updateProjectionMatrix();
 
     this.renderer.render(this.scene, this.camera);
+
+    // Wind particle animation overlay (runs after WebGL render so particles sit on top)
+    if (this._windAnimActive) {
+      this._animateWindParticles();
+    }
+  }
+
+  /** Returns true when wind particle animation is running. */
+  isWindAnimationActive(): boolean {
+    return this._windAnimActive;
   }
 
   /** Current triangle count of the globe mesh. */
@@ -667,6 +692,12 @@ export class GlobeRenderer {
       this.scene.remove(this._waterMesh);
     }
 
+    if (this._windCanvas) {
+      this._windCanvas.remove();
+      this._windCanvas = null;
+      this._windCtx = null;
+    }
+
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
@@ -809,6 +840,161 @@ export class GlobeRenderer {
 
     this.camera.up.copy(up);
     this.camera.lookAt(cx + lookDir.x, cy + lookDir.y, cz + lookDir.z);
+  }
+
+  // ── Wind animation ────────────────────────────────────────────────────────
+
+  /**
+   * Start animated wind-particle overlay using pre-fetched wind vectors.
+   * Particles trace wind streamlines across the globe surface.
+   * @param windU  - Zonal wind component per cell (westward-positive, m/s-equivalent).
+   * @param windV  - Meridional wind component per cell (northward-positive).
+   * @param gridSize - Width/height of the square grid.
+   */
+  startWindAnimation(windU: number[], windV: number[], gridSize: number): void {
+    this._windU = new Float32Array(windU);
+    this._windV = new Float32Array(windV);
+    this._windGridSize = gridSize;
+
+    // Lazy-create the canvas overlay
+    if (!this._windCanvas) {
+      const domEl = this.renderer.domElement;
+      const container = domEl.parentElement;
+      if (!container) return;
+      this._windCanvas = document.createElement('canvas');
+      this._windCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
+      this._windCanvas.width = domEl.clientWidth || domEl.width;
+      this._windCanvas.height = domEl.clientHeight || domEl.height;
+      // Insert after the WebGL canvas so it sits on top
+      container.insertBefore(this._windCanvas, domEl.nextSibling);
+      this._windCtx = this._windCanvas.getContext('2d');
+    }
+
+    // Spawn particles spread across the globe
+    const PARTICLE_COUNT = 2500;
+    this._windParticles = Array.from({ length: PARTICLE_COUNT }, () => ({
+      lat: Math.random() * 178 - 89,
+      lon: Math.random() * 360 - 180,
+      age: Math.random(),
+      speed: 0.7 + Math.random() * 0.6,
+    }));
+
+    this._windAnimActive = true;
+  }
+
+  /** Stop and hide the wind animation overlay. */
+  stopWindAnimation(): void {
+    this._windAnimActive = false;
+    this._windParticles = [];
+    if (this._windCanvas && this._windCtx) {
+      this._windCtx.clearRect(0, 0, this._windCanvas.width, this._windCanvas.height);
+    }
+  }
+
+  /** Sample the wind vector (U eastward, V northward) at a lat/lon position. */
+  private _sampleWindAt(lat: number, lon: number): { u: number; v: number } {
+    if (!this._windU || !this._windV) return { u: 0, v: 0 };
+    const gs = this._windGridSize;
+    const col = Math.round(((lon + 180) / 360) * gs) % gs;
+    const row = Math.max(0, Math.min(gs - 1, Math.round(((90 - lat) / 180) * gs)));
+    const idx = row * gs + col;
+    // Backend windU = westward-positive; we want eastward-positive for standard convention
+    return { u: -this._windU[idx], v: this._windV[idx] };
+  }
+
+  /**
+   * Per-frame wind particle update.  Called at the end of render().
+   * Each particle traces the wind field; speed is artificially amplified for
+   * visual effect.  Particles that age out are respawned at random positions.
+   */
+  private _animateWindParticles(): void {
+    if (!this._windCtx || !this._windCanvas) return;
+
+    const ctx = this._windCtx;
+    const W = this._windCanvas.width;
+    const H = this._windCanvas.height;
+
+    // Soft fade of previous frame trails
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
+    ctx.fillRect(0, 0, W, H);
+
+    // Visual amplification: a wind of 10 units should cross ~30° in ~6s (at 60fps)
+    // 30° / (6s × 60fps) = 0.083°/frame → SCALE = 0.083 / 10 ≈ 0.008
+    const SCALE = 0.01;
+    const DEG2RAD = Math.PI / 180;
+
+    const camPos = this.camera.position;
+
+    for (const p of this._windParticles) {
+      const { u, v } = this._sampleWindAt(p.lat, p.lon);
+      const windSpeed = Math.sqrt(u * u + v * v);
+
+      const prevLat = p.lat;
+      const prevLon = p.lon;
+
+      // Move particle along wind vector (account for cosLat compression on longitude)
+      const cosLat = Math.max(0.02, Math.cos(p.lat * DEG2RAD));
+      p.lat = Math.max(-89, Math.min(89, p.lat + v * SCALE * p.speed));
+      p.lon += (u / cosLat) * SCALE * p.speed;
+      p.lon = ((p.lon + 180) % 360 + 360) % 360 - 180;
+      p.age += 0.004 + 0.003 * Math.min(1, windSpeed / 15);
+
+      if (p.age > 1) {
+        p.lat = Math.random() * 178 - 89;
+        p.lon = Math.random() * 360 - 180;
+        p.age = 0;
+        continue;
+      }
+
+      // Project prevLat/prevLon to screen
+      const latR1 = prevLat * DEG2RAD;
+      const lonR1 = prevLon * DEG2RAD;
+      this._windScratch.set(
+        Math.cos(latR1) * Math.cos(lonR1),
+        Math.sin(latR1),
+        Math.cos(latR1) * Math.sin(lonR1),
+      );
+      // Skip particles on back-face of globe (dot with camera direction < threshold)
+      if (this._windScratch.dot(camPos) < 0.08) continue;
+
+      this._windScratch.project(this.camera);
+      if (this._windScratch.z > 1) continue; // behind clip plane
+      const x1 = (this._windScratch.x + 1) * 0.5 * W;
+      const y1 = (1 - this._windScratch.y) * 0.5 * H;
+
+      // Project current position
+      const latR2 = p.lat * DEG2RAD;
+      const lonR2 = p.lon * DEG2RAD;
+      this._windScratch.set(
+        Math.cos(latR2) * Math.cos(lonR2),
+        Math.sin(latR2),
+        Math.cos(latR2) * Math.sin(lonR2),
+      );
+      this._windScratch.project(this.camera);
+      if (this._windScratch.z > 1) continue;
+      const x2 = (this._windScratch.x + 1) * 0.5 * W;
+      const y2 = (1 - this._windScratch.y) * 0.5 * H;
+
+      // Skip segments that are too long (pole distortion / globe-edge artifacts)
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      if (dx * dx + dy * dy > 80 * 80) continue;
+
+      // Color by wind speed: dark blue (calm) → cyan → white (strong)
+      const speedFrac = Math.min(1, windSpeed / 20);
+      const cr = Math.round(20 + speedFrac * 235);
+      const cg = Math.round(150 + speedFrac * 105);
+      const cb = Math.round(255);
+      const opacity = (1 - p.age) * Math.min(0.95, 0.3 + speedFrac * 0.6);
+
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.strokeStyle = `rgba(${cr},${cg},${cb},${opacity.toFixed(2)})`;
+      ctx.lineWidth = 1 + speedFrac * 0.8;
+      ctx.stroke();
+    }
   }
 }
 
