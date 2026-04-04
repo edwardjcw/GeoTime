@@ -1,3 +1,4 @@
+using GeoTime.Core.Compute;
 using GeoTime.Core.Models;
 using GeoTime.Core.Kernel;
 using GeoTime.Core.Proc;
@@ -5,9 +6,9 @@ using GeoTime.Core.Proc;
 namespace GeoTime.Core.Engines;
 
 /// <summary>Phase 4 orchestrator: climate + weather pipeline.</summary>
-public sealed class AtmosphereEngine(EventBus bus, EventLog log, uint seed, int gridSize, double minTick = 1.0)
+public sealed class AtmosphereEngine(EventBus bus, EventLog log, uint seed, int gridSize, double minTick = 1.0, GpuComputeService? gpu = null)
 {
-    private readonly ClimateEngine _climate = new(gridSize);
+    private readonly ClimateEngine _climate = new(gridSize, gpu);
     private readonly WeatherEngine _weather = new(gridSize);
     private readonly Xoshiro256ss _rng = new(seed);
 

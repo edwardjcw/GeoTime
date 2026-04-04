@@ -1,3 +1,4 @@
+using GeoTime.Core.Compute;
 using GeoTime.Core.Models;
 using GeoTime.Core.Kernel;
 using GeoTime.Core.Proc;
@@ -8,7 +9,7 @@ namespace GeoTime.Core.Engines;
 /// <summary>
 /// Main tectonic engine: plate motion, boundary processes, isostasy, volcanism.
 /// </summary>
-public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, double minTickInterval = 0.1)
+public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, double minTickInterval = 0.1, GpuComputeService? gpu = null)
 {
     private const double ISOSTATIC_RATIO = 2.7 / 3.3;
 
@@ -143,41 +144,51 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
     }
 
     /// <summary>
-    /// Apply isostatic equilibrium adjustment to height using SIMD vectorisation and
-    /// Parallel.For for 2–8× speedup on multi-core x64 hardware.
+    /// Apply isostatic equilibrium adjustment to height.
+    /// When a <see cref="GpuComputeService"/> is available the ILGPU kernel is used (GPU or
+    /// multi-threaded CPU via ILGPU).  Otherwise falls back to SIMD + Parallel.For.
+    /// Equilibrium: eq = crust * 1000 * (1 − ISOSTATIC_RATIO) − 4500
+    /// height_new  = height * (1 − relax) + eq * relax
     /// </summary>
-    private static void ApplyIsostasy(SimulationState state, double deltaMa)
+    private void ApplyIsostasy(SimulationState state, double deltaMa)
     {
-        var cc = state.CellCount;
-        var relaxF = (float)Math.Min(1, 0.1 * deltaMa);
-        var vRelax = new Vector<float>(relaxF);
-        var vRelaxComp = new Vector<float>(1f - relaxF);
-        // Equilibrium = crustThickness * 1000 * (1 - ISOSTATIC_RATIO) - 4500
-        var vFactor = new Vector<float>((float)(1000.0 * (1 - ISOSTATIC_RATIO)));
-        var vOffset = new Vector<float>(-4500f);
+        var relaxF  = (float)Math.Min(1, 0.1 * deltaMa);
+        var factor  = (float)(1000.0 * (1 - ISOSTATIC_RATIO));
+        const float offset = -4500f;
 
-        var height = state.HeightMap;
-        var crust = state.CrustThicknessMap;
-        var vLen = Vector<float>.Count; // typically 8 on AVX2
+        if (gpu != null)
+        {
+            // ── GPU / ILGPU path ──────────────────────────────────────────
+            gpu.ApplyIsostasy(state.HeightMap, state.CrustThicknessMap, relaxF, factor, offset);
+            return;
+        }
+
+        // ── CPU SIMD + Parallel.For fallback ─────────────────────────────
+        var cc = state.CellCount;
+        var vRelax     = new Vector<float>(relaxF);
+        var vRelaxComp = new Vector<float>(1f - relaxF);
+        var vFactor    = new Vector<float>(factor);
+        var vOffset    = new Vector<float>(offset);
+        var height     = state.HeightMap;
+        var crust      = state.CrustThicknessMap;
+        var vLen       = Vector<float>.Count; // typically 8 on AVX2
 
         Parallel.For(0, (cc + vLen - 1) / vLen, chunk =>
         {
             var start = chunk * vLen;
-            var end = Math.Min(start + vLen, cc);
-            var len = end - start;
+            var end   = Math.Min(start + vLen, cc);
+            var len   = end - start;
 
             if (len == vLen)
             {
-                // Full SIMD vector: process vLen cells at once
                 var vCrust = new Vector<float>(crust, start);
-                var vH    = new Vector<float>(height, start);
-                var vEq   = vCrust * vFactor + vOffset;
-                var vNew  = vH * vRelaxComp + vEq * vRelax;
+                var vH     = new Vector<float>(height, start);
+                var vEq    = vCrust * vFactor + vOffset;
+                var vNew   = vH * vRelaxComp + vEq * vRelax;
                 vNew.CopyTo(height, start);
             }
             else
             {
-                // Tail: process remaining cells scalar
                 var relax = (double)relaxF;
                 for (var i = start; i < end; i++)
                 {

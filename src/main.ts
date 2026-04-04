@@ -79,6 +79,11 @@ async function doGeneratePlanet(seed: number): Promise<void> {
       shell.setLoadStateEnabled(info.count > 0);
     }).catch(() => {/* ignore */});
 
+    // Fetch and display the compute backend indicator (GPU vs CPU)
+    api.getComputeInfo().then((info) => {
+      shell.setComputeMode(info.isGpu, info.deviceName);
+    }).catch(() => {/* backend may not be ready yet – ignore */});
+
     // Close any open cross-section panel on new planet
     shell.hideCrossSection();
     shell.setDrawMode(false);
@@ -887,6 +892,12 @@ const PHASE_LABELS: Record<string, string> = {
 };
 
 const simSocket = api.createSimulationSocket({
+  onConnected: (event) => {
+    // When the hub sends compute info on connection, update the toolbar indicator.
+    if (event.computeMode !== undefined && event.computeDevice !== undefined) {
+      shell.setComputeMode(event.computeMode === 'GPU', event.computeDevice);
+    }
+  },
   onProgress: (event) => {
     // Only update progress text while an advance is in flight, to avoid
     // late-arriving SignalR messages overwriting the cleared state after the

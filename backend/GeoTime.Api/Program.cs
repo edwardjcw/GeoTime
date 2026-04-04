@@ -1,5 +1,6 @@
 using GeoTime.Api;
 using GeoTime.Core;
+using GeoTime.Core.Compute;
 using GeoTime.Core.Engines;
 using GeoTime.Core.Kernel;
 using GeoTime.Core.Models;
@@ -61,6 +62,32 @@ app.MapPost("/api/simulation/advance", async (AdvanceRequest req, SimulationOrch
 app.MapGet("/api/simulation/time", (SimulationOrchestrator sim) =>
     Results.Ok(new { timeMa = sim.GetCurrentTime(), seed = sim.GetCurrentSeed() })
 ).WithName("GetSimulationTime");
+
+// ── Compute Backend Info (Recommendation 5-6: GPU/CPU indicator) ─────────────
+
+app.MapGet("/api/simulation/compute-info", (SimulationOrchestrator sim) =>
+{
+    var info = sim.GetComputeInfo();
+    return Results.Ok(new
+    {
+        mode           = info.Mode.ToString(),
+        deviceName     = info.DeviceName,
+        acceleratorType = info.AcceleratorType,
+        isGpu          = info.Mode == ComputeMode.GPU,
+    });
+}).WithName("GetComputeInfo");
+
+// ── Adaptive Resolution Toggle (Recommendation 7) ────────────────────────────
+
+app.MapGet("/api/simulation/adaptive-resolution", (SimulationOrchestrator sim) =>
+    Results.Ok(new { enabled = sim.AdaptiveResolutionEnabled })
+).WithName("GetAdaptiveResolution");
+
+app.MapPost("/api/simulation/adaptive-resolution", (AdaptiveResolutionRequest req, SimulationOrchestrator sim) =>
+{
+    sim.AdaptiveResolutionEnabled = req.Enabled;
+    return Results.Ok(new { enabled = sim.AdaptiveResolutionEnabled });
+}).WithName("SetAdaptiveResolution");
 
 app.MapGet("/api/state/heightmap", (SimulationOrchestrator sim) =>
     Results.Ok(sim.State.HeightMap)
@@ -319,6 +346,7 @@ record AdvanceRequest(double DeltaMa);
 record PointDto(double Lat, double Lon);
 record CrossSectionRequest(List<PointDto> Points);
 record RestoreSnapshotRequest(double TargetTimeMa);
+record AdaptiveResolutionRequest(bool Enabled);
 
 // ── Make Program class accessible for integration tests ──
 namespace GeoTime.Api

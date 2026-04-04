@@ -124,6 +124,19 @@ export async function getSimulationTime(): Promise<SimulationTimeResult> {
   return get('/api/simulation/time');
 }
 
+/** Result from /api/simulation/compute-info – describes the active compute backend. */
+export interface ComputeInfoResult {
+  mode: 'CPU' | 'GPU';
+  deviceName: string;
+  acceleratorType: string;
+  isGpu: boolean;
+}
+
+/** Fetch the active compute backend info (GPU/CPU) from the server. */
+export async function getComputeInfo(): Promise<ComputeInfoResult> {
+  return get('/api/simulation/compute-info');
+}
+
 export async function getHeightMap(): Promise<number[]> {
   return get('/api/state/heightmap');
 }
@@ -295,7 +308,9 @@ export type SimulationEventHandler = {
   onPrecipitationMapData?: (data: number[]) => void;
   onBiomassMapData?: (data: number[]) => void;
   onPlateMapData?: (data: number[]) => void;
-  onConnected?: (event: { timeMa: number; seed: number }) => void;
+  /** Rec 8: raw float32 state bundle pushed after each advance step. */
+  onStateBundleData?: (data: ArrayBuffer) => void;
+  onConnected?: (event: { timeMa: number; seed: number; computeMode?: string; computeDevice?: string }) => void;
   onDisconnected?: () => void;
   /** Called when the backend reports a simulation engine phase (tectonic, surface, biomatter, complete). */
   onProgress?: (event: { phase: string; step?: number; totalSteps?: number; timeMa?: number }) => void;
@@ -363,6 +378,17 @@ export function createSimulationSocket(handlers: SimulationEventHandler) {
               case 'PlateMapData':
                 handlers.onPlateMapData?.(args[0]);
                 break;
+              case 'StateBundleData':
+                // Rec 8: binary state bundle pushed after each advance step.
+                // args[0] is a Uint8Array from SignalR; wrap in ArrayBuffer.
+                if (args[0] instanceof Uint8Array) {
+                  const u8 = args[0];
+                  handlers.onStateBundleData?.(u8.buffer.slice(
+                    u8.byteOffset, u8.byteOffset + u8.byteLength) as ArrayBuffer);
+                } else if (args[0] instanceof ArrayBuffer) {
+                  handlers.onStateBundleData?.(args[0]);
+                }
+                break;
             }
           }
         } catch {
@@ -402,5 +428,7 @@ export function createSimulationSocket(handlers: SimulationEventHandler) {
     requestPrecipitationMap: () => invoke('RequestPrecipitationMap'),
     requestBiomassMap: () => invoke('RequestBiomassMap'),
     requestPlateMap: () => invoke('RequestPlateMap'),
+    /** Rec 8: ask the hub to push a binary state bundle (height+temp+precip). */
+    requestStateBundleBinary: () => invoke('RequestStateBundleBinary'),
   };
 }

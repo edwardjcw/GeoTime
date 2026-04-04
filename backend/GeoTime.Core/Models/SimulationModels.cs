@@ -5,6 +5,13 @@ public static class GridConstants
 {
     public const int GRID_SIZE = 512;
     public const int CELL_COUNT = GRID_SIZE * GRID_SIZE; // 262_144
+
+    /// <summary>
+    /// Coarse-grid size used by the adaptive-resolution system (Strategy D).
+    /// Atmosphere and vegetation engines run at this resolution when the
+    /// camera is in orbital view, then upsample for display.
+    /// </summary>
+    public const int COARSE_GRID_SIZE = 128;
 }
 
 /// <summary>Holds all simulation state arrays for a planet.</summary>

@@ -77,6 +77,9 @@ export class AppShell {
   // ── First-person indicator ──────────────────────────────────────────────
   private firstPersonEl: HTMLSpanElement = document.createElement('span');
 
+  // ── Compute backend indicator (GPU / CPU) ───────────────────────────────
+  private computeEl: HTMLSpanElement = document.createElement('span');
+
   // ── Weather month selector ───────────────────────────────────────────────
   private weatherMonthPanel: HTMLElement = document.createElement('div');
   private weatherMonthLabel: HTMLSpanElement = document.createElement('span');
@@ -245,6 +248,16 @@ export class AppShell {
     this.firstPersonEl.style.fontWeight = 'bold';
     this.firstPersonEl.style.display = 'none';
 
+    this.computeEl = document.createElement('span');
+    this.computeEl.textContent = '';
+    Object.assign(this.computeEl.style, {
+      fontSize: '11px',
+      fontFamily: 'monospace',
+      opacity: '0.75',
+      color: '#adf',
+    });
+    this.computeEl.title = 'Backend compute device';
+
     this.progressEl = document.createElement('button');
     Object.assign(this.progressEl.style, {
       opacity: '0.7',
@@ -386,7 +399,7 @@ export class AppShell {
     this.weatherMonthPanel.append(prevMonthBtn, this.weatherMonthLabel, nextMonthBtn, sep, this._windToggleBtn);
     this.root.appendChild(this.weatherMonthPanel);
 
-    this.hud.append(this.fpsEl, this.triEl, this.timeEl, this.pauseBtn, this.firstPersonEl, this.progressEl);
+    this.hud.append(this.fpsEl, this.triEl, this.timeEl, this.pauseBtn, this.firstPersonEl, this.computeEl, this.progressEl);
     this.root.appendChild(this.hud);
 
     // ── Sidebar ───────────────────────────────────────────────────────────
@@ -734,6 +747,19 @@ export class AppShell {
       this.firstPersonEl.textContent = '';
       this.firstPersonEl.style.display = 'none';
     }
+  }
+
+  /**
+   * Update the compute-backend indicator in the toolbar.
+   * Shows a GPU or CPU chip icon and the device name.
+   * @param isGpu - true if an actual GPU accelerator is active
+   * @param deviceName - human-readable device label from the backend
+   */
+  setComputeMode(isGpu: boolean, deviceName: string): void {
+    const icon = isGpu ? '🖥 GPU' : '⚙️ CPU';
+    this.computeEl.textContent = `${icon}`;
+    this.computeEl.title = `Backend compute: ${deviceName}`;
+    this.computeEl.style.color = isGpu ? '#7ef' : '#adf';
   }
 
   onNewPlanet(cb: () => void): void {
