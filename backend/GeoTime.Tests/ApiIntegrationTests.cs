@@ -430,6 +430,67 @@ public class ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> fact
         Assert.Equal(cc * sizeof(float) * 3, bytes.Length);
     }
 
+    // ── Compute Info Endpoint (Rec 5-6) ──────────────────────────────────────
+
+    [Fact]
+    public async Task GetComputeInfo_ReturnsOk()
+    {
+        var response = await _client.GetAsync("/api/simulation/compute-info");
+        response.EnsureSuccessStatusCode();
+    }
+
+    [Fact]
+    public async Task GetComputeInfo_ContainsExpectedFields()
+    {
+        var response = await _client.GetAsync("/api/simulation/compute-info");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.True(json.TryGetProperty("mode", out var mode), "Should have 'mode' field");
+        Assert.True(json.TryGetProperty("deviceName", out var device), "Should have 'deviceName' field");
+        Assert.True(json.TryGetProperty("isGpu", out _), "Should have 'isGpu' field");
+        Assert.False(string.IsNullOrEmpty(mode.GetString()), "mode should not be empty");
+        Assert.False(string.IsNullOrEmpty(device.GetString()), "deviceName should not be empty");
+    }
+
+    [Fact]
+    public async Task GetComputeInfo_ModeIsCpuOrGpu()
+    {
+        var response = await _client.GetAsync("/api/simulation/compute-info");
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var mode = json.GetProperty("mode").GetString();
+        Assert.True(mode == "CPU" || mode == "GPU", $"mode should be CPU or GPU, got: {mode}");
+    }
+
+    // ── Adaptive Resolution Endpoints (Rec 7) ─────────────────────────────────
+
+    [Fact]
+    public async Task GetAdaptiveResolution_ReturnsEnabled()
+    {
+        var response = await _client.GetAsync("/api/simulation/adaptive-resolution");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.TryGetProperty("enabled", out _), "Should have 'enabled' field");
+    }
+
+    [Fact]
+    public async Task SetAdaptiveResolution_CanToggle()
+    {
+        // Disable
+        var disableResp = await _client.PostAsJsonAsync(
+            "/api/simulation/adaptive-resolution", new { enabled = false });
+        disableResp.EnsureSuccessStatusCode();
+        var disableJson = await disableResp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(disableJson.GetProperty("enabled").GetBoolean());
+
+        // Re-enable
+        var enableResp = await _client.PostAsJsonAsync(
+            "/api/simulation/adaptive-resolution", new { enabled = true });
+        enableResp.EnsureSuccessStatusCode();
+        var enableJson = await enableResp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(enableJson.GetProperty("enabled").GetBoolean());
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private async Task<double> GetTimeMa()

@@ -4,9 +4,9 @@ This document surveys computational bottlenecks in GeoTime and outlines a priori
 
 ---
 
-## Status: Recommendations 1–4 Implemented ✅
+## Status: Recommendations 1–8 Implemented ✅
 
-The four highest-priority recommendations from Section 8 have been implemented:
+The eight highest-priority recommendations have been implemented:
 
 | Priority | Strategy | Status |
 |---|---|---|
@@ -14,6 +14,15 @@ The four highest-priority recommendations from Section 8 have been implemented:
 | 2 | A.1 – `Parallel.For` per-cell loops | ✅ Done — ClimateEngine, VegetationEngine, WeatherEngine, TectonicEngine (isostasy) |
 | 3 | A.2 – SIMD `Vector<float>` isostasy | ✅ Done — TectonicEngine.ApplyIsostasy |
 | 4 | E – Dirty mask incremental updates | ✅ Done — DirtyMask on SimulationState; used in VegetationEngine + BiomatterEngine |
+| 5 | B.1 – ILGPU tectonic GPU kernel | ✅ Done — GpuComputeService (CUDA→OpenCL→CPU fallback); IsostasyKernel dispatched from TectonicEngine |
+| 6 | B.3 – GPU climate diffusion | ✅ Done — DiffuseKernel in GpuComputeService; ClimateEngine runs Laplacian diffusion pass per tick |
+| 7 | D – Adaptive resolution (128×128) | ✅ Done — AdaptiveResolutionService (downsample/upsample); SimulationOrchestrator runs atmosphere+vegetation at 128×128 when `AdaptiveResolutionEnabled=true` |
+| 8 | F – SignalR binary streaming | ✅ Done — SimulationHub pushes `StateBundleData` (float32 height+temp+precip) after every advance step; `/api/simulation/compute-info` endpoint; GPU/CPU indicator in UI toolbar |
+
+### UI Toolbar Compute Indicator
+The upper toolbar now shows ⚙️ CPU or 🖥 GPU with the active device name.  The label is
+populated on SignalR `Connected` and also fetched via `GET /api/simulation/compute-info`
+on every planet generation.
 
 ### Bug fixes (also addressed)
 
