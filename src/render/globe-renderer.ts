@@ -215,7 +215,9 @@ export class GlobeRenderer {
 
     // ── Camera ────────────────────────────────────────────────────────────
     const aspect = container.clientWidth / container.clientHeight;
-    this.camera = new THREE.PerspectiveCamera(50, aspect, 0.001, 100);
+    // Near plane starts at 0.01 (orbital distance ~3) and is adjusted
+    // dynamically in render() to 0.001 when in first-person surface mode.
+    this.camera = new THREE.PerspectiveCamera(50, aspect, 0.01, 100);
     this.camera.position.set(0, 0, CAMERA_DISTANCE);
 
     // ── Controls (arcball with inertia) ───────────────────────────────────
@@ -383,9 +385,18 @@ export class GlobeRenderer {
         // Restore orbital FOV
         this.camera.fov = 50;
       }
-      this.camera.updateProjectionMatrix();
       this._cameraChangeCb?.(nowFP);
     }
+
+    // Dynamically adjust near clipping plane based on camera distance to avoid
+    // depth-buffer precision issues at large distances while still allowing
+    // close surface views.  At surface level (dist ≈ 1.0), use a very small
+    // near plane; at orbit distance (dist ≥ 2), use a larger value.
+    const near = nowFP ? 0.001 : Math.max(0.01, dist * 0.01);
+    if (Math.abs(this.camera.near - near) > near * 0.1) {
+      this.camera.near = near;
+    }
+    this.camera.updateProjectionMatrix();
 
     this.renderer.render(this.scene, this.camera);
   }
