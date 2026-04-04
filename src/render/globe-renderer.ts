@@ -836,7 +836,7 @@ export class GlobeRenderer {
       terrainH = Math.max(0, this._fpHeightMap[row * gs + col]); // ocean → 0 m
     }
 
-    const PERSON_HEIGHT_M = 1.8288; // 6 feet in metres
+    const PERSON_HEIGHT_M = 1.8288; // 6 feet in meters
     const camR = 1.0 + (terrainH + PERSON_HEIGHT_M) * DISPLACEMENT_SCALE;
     const cx = camR * Math.cos(latR) * Math.cos(lonR);
     const cy = camR * Math.sin(latR);

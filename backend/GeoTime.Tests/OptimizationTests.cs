@@ -5,7 +5,7 @@ using GeoTime.Core.Proc;
 namespace GeoTime.Tests;
 
 /// <summary>
-/// Tests that verify the correctness of performance optimisations:
+/// Tests that verify the correctness of performance optimizations:
 /// Parallel.For (ClimateEngine, VegetationEngine, WeatherEngine),
 /// SIMD (ApplyIsostasy via TectonicEngine), dirty mask (DirtyMask on SimulationState),
 /// and the state bundle endpoint layout.
@@ -29,7 +29,7 @@ public class OptimizationTests
     // ── Dirty mask ────────────────────────────────────────────────────────────
 
     [Fact]
-    public void DirtyMask_InitialisedAllTrue()
+    public void DirtyMask_InitializedAllTrue()
     {
         var s = new SimulationState(8);
         Assert.All(s.DirtyMask, b => Assert.True(b));
