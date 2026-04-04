@@ -932,20 +932,16 @@ function loop(now: number): void {
           shell.setProgressText('');
           resetAgentStatuses();
 
-          // Fetch updated height map and climate data for rendering
-          const [heightData, tempData, precipData] = await Promise.all([
-            api.getHeightMap(),
-            api.getTemperatureMap(),
-            api.getPrecipitationMap(),
-          ]);
-          const heightMap = new Float32Array(heightData);
+          // Fetch updated height+temperature+precipitation in a single request.
+          const bundle = await api.getStateBundle(GRID_SIZE * GRID_SIZE);
+          const heightMap = bundle.heightMap;
           renderer.updateHeightMap(heightMap, GRID_SIZE);
 
           // Keep the biome base texture in sync for the default view.
           if (activeDataLayers.size === 0) {
             renderer.updateBiomeBaseMap(
-              new Float32Array(tempData),
-              new Float32Array(precipData),
+              bundle.temperatureMap,
+              bundle.precipitationMap,
               heightMap,
               GRID_SIZE,
             );

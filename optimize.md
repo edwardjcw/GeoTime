@@ -4,6 +4,24 @@ This document surveys computational bottlenecks in GeoTime and outlines a priori
 
 ---
 
+## Status: Recommendations 1–4 Implemented ✅
+
+The four highest-priority recommendations from Section 8 have been implemented:
+
+| Priority | Strategy | Status |
+|---|---|---|
+| 1 | D – MessagePack/binary state bundle | ✅ Done — `/api/state/bundle/binary` endpoint + frontend |
+| 2 | A.1 – `Parallel.For` per-cell loops | ✅ Done — ClimateEngine, VegetationEngine, WeatherEngine, TectonicEngine (isostasy) |
+| 3 | A.2 – SIMD `Vector<float>` isostasy | ✅ Done — TectonicEngine.ApplyIsostasy |
+| 4 | E – Dirty mask incremental updates | ✅ Done — DirtyMask on SimulationState; used in VegetationEngine + BiomatterEngine |
+
+### Bug fixes (also addressed)
+
+- **First-person view height**: Camera is now positioned exactly 6 feet (1.8288 m) above the terrain elevation at the current lat/lon.  Ocean cells use sea level (0 m) as the base.  The CPU-side height map is sampled from `_fpHeightMap` which is kept in sync with the GPU texture by `updateHeightMap()`.
+- **Wind animation invisible**: The trail-fade compositing was changed from `source-over` (black fill that made the canvas opaque) to `destination-out` (reduces existing pixel alpha), so the WebGL terrain always shows through the wind canvas.
+
+---
+
 ## 1. Current Bottlenecks
 
 ### 1.1 Tectonic Engine (most expensive)

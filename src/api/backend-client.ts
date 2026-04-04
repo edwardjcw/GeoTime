@@ -213,6 +213,34 @@ export async function getOrganicCarbonMapBinary(): Promise<ArrayBuffer> {
   return getBinary('/api/state/organiccarbonmap/binary');
 }
 
+// ── State Bundle (height + temperature + precipitation in one round-trip) ────
+
+/** Decoded state bundle returned by the /api/state/bundle/binary endpoint. */
+export interface StateBundle {
+  heightMap: Float32Array;
+  temperatureMap: Float32Array;
+  precipitationMap: Float32Array;
+}
+
+/**
+ * Fetch height, temperature, and precipitation maps in a single HTTP request.
+ *
+ * The response is raw float32 bytes with layout:
+ *   [heightMap bytes | temperatureMap bytes | precipitationMap bytes]
+ * Each array occupies exactly cellCount * 4 bytes.
+ *
+ * @param cellCount - Total number of grid cells (gridSize × gridSize).
+ */
+export async function getStateBundle(cellCount: number): Promise<StateBundle> {
+  const buf = await getBinary('/api/state/bundle/binary');
+  const floatBytes = cellCount * Float32Array.BYTES_PER_ELEMENT;
+  return {
+    heightMap:       new Float32Array(buf, 0,            cellCount),
+    temperatureMap:  new Float32Array(buf, floatBytes,   cellCount),
+    precipitationMap: new Float32Array(buf, floatBytes * 2, cellCount),
+  };
+}
+
 // ── Weather Pattern ──────────────────────────────────────────────────────────
 
 export interface WeatherPatternResult {

@@ -371,6 +371,65 @@ public class ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> fact
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    // ── State Bundle Binary Endpoint ──────────────────────────────────────────
+
+    [Fact]
+    public async Task GetStateBundleBinary_ReturnsOctetStream()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        var response = await _client.GetAsync("/api/state/bundle/binary");
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("application/octet-stream", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public async Task GetStateBundleBinary_ReturnsThreeFloatArraysInOrder()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+
+        // Fetch individual maps for comparison
+        var heightJson = await _client.GetFromJsonAsync<float[]>("/api/state/heightmap");
+        var tempJson   = await _client.GetFromJsonAsync<float[]>("/api/state/temperaturemap");
+        var precipJson = await _client.GetFromJsonAsync<float[]>("/api/state/precipitationmap");
+        Assert.NotNull(heightJson);
+        Assert.NotNull(tempJson);
+        Assert.NotNull(precipJson);
+
+        // Fetch bundle
+        var bundleResponse = await _client.GetAsync("/api/state/bundle/binary");
+        bundleResponse.EnsureSuccessStatusCode();
+        var bytes = await bundleResponse.Content.ReadAsByteArrayAsync();
+
+        var cc = heightJson.Length;
+        var floatBytes = cc * sizeof(float);
+        Assert.Equal(floatBytes * 3, bytes.Length);
+
+        // Decode each sub-array
+        var heightOut = new float[cc];
+        var tempOut   = new float[cc];
+        var precipOut = new float[cc];
+        Buffer.BlockCopy(bytes, 0,              heightOut, 0, floatBytes);
+        Buffer.BlockCopy(bytes, floatBytes,     tempOut,   0, floatBytes);
+        Buffer.BlockCopy(bytes, floatBytes * 2, precipOut, 0, floatBytes);
+
+        // All three arrays should match the individual endpoints
+        Assert.Equal(heightJson, heightOut);
+        Assert.Equal(tempJson,   tempOut);
+        Assert.Equal(precipJson, precipOut);
+    }
+
+    [Fact]
+    public async Task GetStateBundleBinary_SizeMatchesCellCount()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        var bytes = await (await _client.GetAsync("/api/state/bundle/binary"))
+            .Content.ReadAsByteArrayAsync();
+
+        // GeoTime uses a 512×512 grid (GridConstants.CELL_COUNT = 262_144)
+        const int cc = GeoTime.Core.Models.GridConstants.CELL_COUNT;
+        Assert.Equal(cc * sizeof(float) * 3, bytes.Length);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private async Task<double> GetTimeMa()

@@ -229,6 +229,10 @@ export class GlobeRenderer {
   /** Scratch vector to avoid allocations in hot animation path. */
   private _windScratch = new THREE.Vector3();
 
+  // ── First-person terrain height map (CPU copy for camera positioning) ────
+  private _fpHeightMap: Float32Array | null = null;
+  private _fpHeightGridSize = 512;
+
   constructor(container: HTMLElement) {
     // ── Renderer ──────────────────────────────────────────────────────────
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -355,6 +359,11 @@ export class GlobeRenderer {
     if (this.biomeMaterial) {
       this.biomeMaterial.uniforms.uHeightMap.value = this.heightTexture;
     }
+
+    // Save a CPU-side reference for first-person terrain height sampling.
+    // The DataTexture keeps this array alive, so saving the same reference is safe.
+    this._fpHeightMap = heightData;
+    this._fpHeightGridSize = gridSize;
   }
 
   /**
@@ -813,10 +822,22 @@ export class GlobeRenderer {
       this._fpLon = ((this._fpLon + 180) % 360 + 360) % 360 - 180;
     }
 
-    // Position camera just above globe surface at (lat, lon)
+    // Position camera 6 feet (1.8288 m) above globe surface at (lat, lon),
+    // taking terrain elevation into account.  For ocean cells (h < 0), the
+    // surface is treated as sea level (0 m) so the user "walks on water".
     const latR = this._fpLat * (Math.PI / 180);
     const lonR = this._fpLon * (Math.PI / 180);
-    const camR = 1.001;
+
+    let terrainH = 0;
+    if (this._fpHeightMap) {
+      const gs = this._fpHeightGridSize;
+      const row = Math.max(0, Math.min(gs - 1, Math.round((90 - this._fpLat) / 180 * gs)));
+      const col = ((Math.round(((this._fpLon + 180) / 360) * gs)) % gs + gs) % gs;
+      terrainH = Math.max(0, this._fpHeightMap[row * gs + col]); // ocean → 0 m
+    }
+
+    const PERSON_HEIGHT_M = 1.8288; // 6 feet in meters
+    const camR = 1.0 + (terrainH + PERSON_HEIGHT_M) * DISPLACEMENT_SCALE;
     const cx = camR * Math.cos(latR) * Math.cos(lonR);
     const cy = camR * Math.sin(latR);
     const cz = camR * Math.cos(latR) * Math.sin(lonR);
@@ -914,10 +935,13 @@ export class GlobeRenderer {
     const W = this._windCanvas.width;
     const H = this._windCanvas.height;
 
-    // Soft fade of previous frame trails
-    ctx.globalCompositeOperation = 'source-over';
+    // Soft fade of previous frame trails: use destination-out so existing pixels
+    // lose alpha rather than accumulating opaque black.  This keeps the WebGL
+    // terrain visible through the wind canvas at all times.
+    ctx.globalCompositeOperation = 'destination-out';
     ctx.fillStyle = 'rgba(0,0,0,0.06)';
     ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'source-over';
 
     // Visual amplification: a wind of 10 units should cross ~30° in ~6s (at 60fps)
     // 30° / (6s × 60fps) = 0.083°/frame → SCALE = 0.083 / 10 ≈ 0.008

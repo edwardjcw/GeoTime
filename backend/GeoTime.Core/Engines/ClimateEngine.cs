@@ -22,37 +22,52 @@ public sealed class ClimateEngine(int gridSize)
         var co2Ppm = atmo.CO2 * 1_000_000;
         var dT_ghg = co2Ppm > 0 ? LAMBDA * Math.Log(co2Ppm / CO2_REF) / Math.Log(2) : 0;
         var dT_milan = 2 * Math.Sin(timeMa * 2 * Math.PI / 100);
+        var alpha = Math.Min(1, deltaMa * 0.5);
 
+        // Parallel temperature update with thread-local aggregates.
+        var lockObj = new object();
         double tempSum = 0, eqTempSum = 0;
         int eqCount = 0, iceCells = 0;
 
-        for (var row = 0; row < gridSize; row++)
-        {
-            var latDeg = 90.0 - (double)row / (gridSize - 1) * 180;
-            var latRad = latDeg * Math.PI / 180;
-            for (var col = 0; col < gridSize; col++)
+        Parallel.For(0, gridSize,
+            () => (tempSum: 0.0, eqTempSum: 0.0, eqCount: 0, iceCells: 0),
+            (row, _, local) =>
             {
-                var i = row * gridSize + col;
-                double h = state.HeightMap[i];
-                var isIce = state.TemperatureMap[i] < -5;
-                var albedo = isIce ? ALBEDO_ICE : h < 0 ? ALBEDO_OCEAN : ALBEDO_LAND;
-                if (isIce) iceCells++;
+                var latDeg = 90.0 - (double)row / (gridSize - 1) * 180;
+                var latRad = latDeg * Math.PI / 180;
 
-                var T_base = 30 * Math.Cos(latRad);
-                var hKm = Math.Max(0, h / 1000);
-                var T_final = T_base - hKm * LAPSE_RATE + dT_ghg + dT_milan;
+                for (var col = 0; col < gridSize; col++)
+                {
+                    var i = row * gridSize + col;
+                    double h = state.HeightMap[i];
+                    var isIce = state.TemperatureMap[i] < -5;
+                    if (isIce) local.iceCells++;
 
-                var alpha = Math.Min(1, deltaMa * 0.5);
-                state.TemperatureMap[i] = (float)(state.TemperatureMap[i] * (1 - alpha) + T_final * alpha);
-                tempSum += state.TemperatureMap[i];
+                    var T_base = 30 * Math.Cos(latRad);
+                    var hKm = Math.Max(0, h / 1000);
+                    var T_final = T_base - hKm * LAPSE_RATE + dT_ghg + dT_milan;
 
-                if (!(Math.Abs(latDeg) < 10)) continue;
-                eqTempSum += state.TemperatureMap[i]; eqCount++;
-            }
-        }
+                    state.TemperatureMap[i] = (float)(state.TemperatureMap[i] * (1 - alpha) + T_final * alpha);
+                    local.tempSum += state.TemperatureMap[i];
 
-        // 3-cell circulation winds
-        for (var row = 0; row < gridSize; row++)
+                    if (!(Math.Abs(latDeg) < 10)) continue;
+                    local.eqTempSum += state.TemperatureMap[i]; local.eqCount++;
+                }
+                return local;
+            },
+            local =>
+            {
+                lock (lockObj)
+                {
+                    tempSum += local.tempSum;
+                    eqTempSum += local.eqTempSum;
+                    eqCount += local.eqCount;
+                    iceCells += local.iceCells;
+                }
+            });
+
+        // Parallel 3-cell circulation winds (each cell is independent).
+        Parallel.For(0, gridSize, row =>
         {
             var latDeg = 90.0 - (double)row / (gridSize - 1) * 180;
             var absLat = Math.Abs(latDeg);
@@ -76,7 +91,7 @@ public sealed class ClimateEngine(int gridSize)
                 state.WindUMap[i] = (float)u;
                 state.WindVMap[i] = (float)v;
             }
-        }
+        });
 
         var meanT = tempSum / cc;
         var eqT = eqCount > 0 ? eqTempSum / eqCount : meanT;
