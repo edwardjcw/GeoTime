@@ -152,6 +152,10 @@ export async function getOrganicCarbonMap(): Promise<number[]> {
   return get('/api/state/organiccarbonmap');
 }
 
+export async function getSoilMap(): Promise<number[]> {
+  return get('/api/state/soilmap');
+}
+
 export async function getPlates(): Promise<unknown[]> {
   return get('/api/state/plates');
 }

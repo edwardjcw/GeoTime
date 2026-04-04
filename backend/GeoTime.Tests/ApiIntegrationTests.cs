@@ -139,6 +139,29 @@ public class ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> fact
         Assert.True(data.Length > 0);
     }
 
+    [Fact]
+    public async Task GetSoilMap_ReturnsArray()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        var response = await _client.GetAsync("/api/state/soilmap");
+        response.EnsureSuccessStatusCode();
+        var data = await response.Content.ReadFromJsonAsync<int[]>();
+        Assert.NotNull(data);
+        Assert.True(data.Length > 0);
+    }
+
+    [Fact]
+    public async Task GetSoilMap_ContainsValidSoilOrders()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        var response = await _client.GetAsync("/api/state/soilmap");
+        response.EnsureSuccessStatusCode();
+        var data = await response.Content.ReadFromJsonAsync<int[]>();
+        Assert.NotNull(data);
+        // All soil order values should be in range [0, 12]
+        Assert.All(data, v => Assert.InRange(v, 0, 12));
+    }
+
     // ── Plates, Hotspots, Atmosphere ──────────────────────────────────────────
 
     [Fact]
