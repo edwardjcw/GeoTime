@@ -1,4 +1,5 @@
 using GeoTime.Core;
+using GeoTime.Core.Compute;
 using Microsoft.AspNetCore.SignalR;
 
 namespace GeoTime.Api;
@@ -7,6 +8,11 @@ namespace GeoTime.Api;
 /// SignalR hub for real-time simulation streaming.
 /// Clients can request planet generation, advance simulation, and receive
 /// state updates pushed from the server.
+///
+/// Recommendation 8 (Strategy F): After each advance step the hub pushes a
+/// binary state bundle (height + temperature + precipitation) directly to the
+/// caller so the frontend can update its GPU textures without a separate REST
+/// round-trip.
 /// </summary>
 public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
 {
@@ -28,6 +34,10 @@ public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
     /// Advance the simulation by deltaMa and stream state snapshots back to the caller.
     /// Breaks the advance into steps so the client receives incremental updates.
     /// Emits "SimulationProgress" events with the engine phase name as each phase completes.
+    ///
+    /// After each step a compact binary state bundle (height + temperature + precipitation
+    /// as raw float32 bytes) is pushed via "StateBundleData" so the frontend can update
+    /// its GPU textures without polling REST endpoints.
     /// </summary>
     public async Task AdvanceSimulation(double deltaMa, int steps = 1)
     {
@@ -55,12 +65,36 @@ public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
                 step = i + 1,
                 totalSteps = steps,
             });
+
+            // Strategy F: push binary state bundle directly to the caller after each step.
+            // Layout: [height bytes | temp bytes | precip bytes] = 3 × cellCount × 4 bytes.
+            await PushStateBundleAsync();
         }
 
         await Clients.Caller.SendAsync("SimulationAdvanceComplete", new
         {
             timeMa = sim.GetCurrentTime(),
         });
+    }
+
+    /// <summary>
+    /// Push the current state bundle (height + temperature + precipitation as raw float32
+    /// bytes) to the calling client.  Clients should handle "StateBundleData" to receive it.
+    /// </summary>
+    public async Task RequestStateBundleBinary()
+        => await PushStateBundleAsync();
+
+    private async Task PushStateBundleAsync()
+    {
+        var height = sim.State.HeightMap;
+        var temp   = sim.State.TemperatureMap;
+        var precip = sim.State.PrecipitationMap;
+        var floatBytes = height.Length * sizeof(float);
+        var bundle = new byte[floatBytes * 3];
+        Buffer.BlockCopy(height, 0, bundle, 0,              floatBytes);
+        Buffer.BlockCopy(temp,   0, bundle, floatBytes,     floatBytes);
+        Buffer.BlockCopy(precip, 0, bundle, floatBytes * 2, floatBytes);
+        await Clients.Caller.SendAsync("StateBundleData", bundle);
     }
 
     /// <summary>
@@ -99,10 +133,13 @@ public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
 
     public override async Task OnConnectedAsync()
     {
+        var computeInfo = sim.GetComputeInfo();
         await Clients.Caller.SendAsync("Connected", new
         {
             timeMa = sim.GetCurrentTime(),
             seed = sim.GetCurrentSeed(),
+            computeMode = computeInfo.Mode.ToString(),
+            computeDevice = computeInfo.DeviceName,
         });
         await base.OnConnectedAsync();
     }

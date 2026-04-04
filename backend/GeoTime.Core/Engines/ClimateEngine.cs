@@ -1,10 +1,11 @@
+using GeoTime.Core.Compute;
 using GeoTime.Core.Models;
 using GeoTime.Core.Proc;
 
 namespace GeoTime.Core.Engines;
 
 /// <summary>General circulation model + ice-age forcing.</summary>
-public sealed class ClimateEngine(int gridSize)
+public sealed class ClimateEngine(int gridSize, GpuComputeService? gpu = null)
 {
     private const double S0 = 1361;
     private const double LAMBDA = 3.0;
@@ -14,6 +15,12 @@ public sealed class ClimateEngine(int gridSize)
     private const double ALBEDO_LAND = 0.30;
     private const double ALBEDO_ICE = 0.85;
     private const double SNOWBALL_THRESHOLD = -10;
+
+    /// <summary>
+    /// Diffusion coefficient: fraction of the Laplacian spread per climate tick.
+    /// Small value (0.02) keeps the diffusion numerically stable on a 512×512 grid.
+    /// </summary>
+    private const float DiffusionAlpha = 0.02f;
 
     public ClimateResult Tick(double timeMa, double deltaMa, SimulationState state,
         AtmosphericComposition atmo, Xoshiro256ss _rng)
@@ -66,6 +73,11 @@ public sealed class ClimateEngine(int gridSize)
                 }
             });
 
+        // ── Strategy B.3: GPU temperature diffusion ──────────────────────────
+        // Smooth heat across neighbours once per tick using a 5-point Laplacian.
+        // GPU path: ILGPU kernel; CPU path: Parallel.For equivalent.
+        DiffuseTemperature(state.TemperatureMap);
+
         // Parallel 3-cell circulation winds (each cell is independent).
         Parallel.For(0, gridSize, row =>
         {
@@ -102,6 +114,38 @@ public sealed class ClimateEngine(int gridSize)
             CO2Ppm = co2Ppm, IceAlbedoFeedback = (double)iceCells / cc,
             SnowballTriggered = eqT < SNOWBALL_THRESHOLD, IceCells = iceCells,
         };
+    }
+
+    /// <summary>
+    /// Apply one pass of 5-point Laplacian heat diffusion to smooth temperature gradients.
+    /// Uses ILGPU kernel when a <see cref="GpuComputeService"/> is injected; otherwise
+    /// falls back to a thread-safe Parallel.For copy-then-write approach.
+    /// </summary>
+    private void DiffuseTemperature(float[] temp)
+    {
+        if (gpu != null)
+        {
+            gpu.DiffuseTemperature(temp, gridSize, DiffusionAlpha);
+            return;
+        }
+
+        // CPU fallback: read-only pass into scratch buffer, write back
+        var scratch = new float[temp.Length];
+        var gs = gridSize;
+        Parallel.For(0, gs, row =>
+        {
+            for (var col = 0; col < gs; col++)
+            {
+                var i     = row * gs + col;
+                var up    = ((row - 1 + gs) % gs) * gs + col;
+                var down  = ((row + 1) % gs)       * gs + col;
+                var left  = row * gs + (col - 1 + gs) % gs;
+                var right = row * gs + (col + 1) % gs;
+                var lap   = temp[up] + temp[down] + temp[left] + temp[right] - 4f * temp[i];
+                scratch[i] = temp[i] + DiffusionAlpha * lap;
+            }
+        });
+        Array.Copy(scratch, temp, temp.Length);
     }
 }
 

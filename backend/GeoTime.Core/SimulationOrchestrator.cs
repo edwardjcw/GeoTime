@@ -1,3 +1,4 @@
+using GeoTime.Core.Compute;
 using GeoTime.Core.Models;
 using GeoTime.Core.Kernel;
 using GeoTime.Core.Proc;
@@ -9,7 +10,7 @@ namespace GeoTime.Core;
 /// Top-level simulation orchestrator that owns all engines and state.
 /// Replaces the TypeScript main.ts game loop logic on the backend.
 /// </summary>
-public sealed class SimulationOrchestrator
+public sealed class SimulationOrchestrator : IDisposable
 {
     public SimulationState State { get; private set; }
     public SimClock Clock { get; }
@@ -17,6 +18,14 @@ public sealed class SimulationOrchestrator
     public EventLog EventLog { get; }
     public SnapshotManager Snapshots { get; }
 
+    /// <summary>
+    /// Strategy D (Rec 7): When true, the atmosphere and vegetation engines run at
+    /// 128×128 coarse resolution and upsample results to the full 512×512 grid.
+    /// Enabled by default; can be toggled by the REST API for benchmarking.
+    /// </summary>
+    public bool AdaptiveResolutionEnabled { get; set; } = true;
+
+    private readonly GpuComputeService _gpu;
     private TectonicEngine? _tectonic;
     private SurfaceEngine? _surface;
     private AtmosphereEngine? _atmosphere;
@@ -31,12 +40,16 @@ public sealed class SimulationOrchestrator
     public SimulationOrchestrator(int gridSize = GridConstants.GRID_SIZE)
     {
         _gridSize = gridSize;
+        _gpu = new GpuComputeService();
         Bus = new EventBus();
         Clock = new SimClock(Bus, 0.05);
         EventLog = new EventLog();
         Snapshots = new SnapshotManager(10, 500);
         State = new SimulationState(gridSize);
     }
+
+    /// <summary>Returns the active compute backend information for the UI toolbar.</summary>
+    public ComputeInfo GetComputeInfo() => _gpu.Info;
 
     /// <summary>Generate a new planet with the given seed.</summary>
     public PlanetGeneratorResult GeneratePlanet(uint seed)
@@ -51,13 +64,13 @@ public sealed class SimulationOrchestrator
         EventLog.Clear();
         Snapshots.Clear();
 
-        _tectonic = new TectonicEngine(Bus, EventLog, seed, 0.1);
+        _tectonic = new TectonicEngine(Bus, EventLog, seed, 0.1, _gpu);
         _tectonic.Initialize(result.Plates, result.Hotspots, result.Atmosphere, State);
 
         _surface = new SurfaceEngine(Bus, EventLog, seed, _gridSize, 0.5);
         _surface.Initialize(State, _tectonic.Stratigraphy);
 
-        _atmosphere = new AtmosphereEngine(Bus, EventLog, seed, _gridSize, 1.0);
+        _atmosphere = new AtmosphereEngine(Bus, EventLog, seed, _gridSize, 1.0, _gpu);
         _atmosphere.Initialize(State, result.Atmosphere);
 
         _crossSection = new CrossSectionEngine();
@@ -88,9 +101,32 @@ public sealed class SimulationOrchestrator
         onProgress?.Invoke("tectonic");
         _tectonic.Tick(Clock.T, deltaMa);
 
+        // ── Strategy D: Adaptive Resolution ──────────────────────────────────
+        // When AdaptiveResolutionEnabled, downsample temperature, precipitation, and
+        // biomass maps to 128×128 before running the atmosphere and vegetation engines,
+        // then upsample results back to 512×512.  The surface and tectonic engines
+        // always operate at full resolution.
+        if (AdaptiveResolutionEnabled && _gridSize == GridConstants.GRID_SIZE)
+        {
+            ApplyAdaptiveResolution(deltaMa, onProgress);
+        }
+        else
+        {
+            // Full-resolution path (used when gridSize != 512, e.g., in unit tests)
+            RunFullResolutionEngines(deltaMa, onProgress);
+        }
+
+        // Biomatter runs after Surface to avoid concurrent modification of StratigraphyStack.
+        onProgress?.Invoke("biomatter");
+        _biomatter?.Tick(Clock.T, deltaMa);
+
+        onProgress?.Invoke("complete");
+    }
+
+    private void RunFullResolutionEngines(double deltaMa, Action<string>? onProgress)
+    {
         // Surface, Atmosphere, and Vegetation can run in parallel since they
         // read from state written by tectonic but write to independent fields.
-        // Biomatter must run after Surface because both write to StratigraphyStack.
         onProgress?.Invoke("surface");
         var tasks = new List<Task>();
         if (_surface != null)
@@ -102,24 +138,62 @@ public sealed class SimulationOrchestrator
 
         if (tasks.Count > 0)
         {
-            try
-            {
-                Task.WhenAll(tasks).GetAwaiter().GetResult();
-            }
+            try { Task.WhenAll(tasks).GetAwaiter().GetResult(); }
             catch (AggregateException ex)
             {
-                // Log but don't crash — partial state is better than no state.
-                // In production, this would feed into a diagnostics channel.
                 System.Diagnostics.Debug.WriteLine(
                     $"Parallel engine tick error: {ex.Flatten().InnerExceptions.Count} engine(s) failed");
             }
         }
+    }
 
-        // Biomatter runs after Surface to avoid concurrent modification of StratigraphyStack.
-        onProgress?.Invoke("biomatter");
-        _biomatter?.Tick(Clock.T, deltaMa);
+    private void ApplyAdaptiveResolution(double deltaMa, Action<string>? onProgress)
+    {
+        const int CoarseSize = GridConstants.COARSE_GRID_SIZE;
+        var fullSize = _gridSize; // 512
 
-        onProgress?.Invoke("complete");
+        // Downsample inputs to coarse grid
+        var coarseTemp   = AdaptiveResolutionService.Downsample(State.TemperatureMap,   fullSize, CoarseSize);
+        var coarsePrecip = AdaptiveResolutionService.Downsample(State.PrecipitationMap, fullSize, CoarseSize);
+        var coarseBiomass = AdaptiveResolutionService.Downsample(State.BiomassMap,       fullSize, CoarseSize);
+
+        // Build a lightweight coarse SimulationState (shares height with full-res via downsampled copy)
+        var coarseState = new SimulationState(CoarseSize);
+        Array.Copy(coarseTemp,    coarseState.TemperatureMap,   CoarseSize * CoarseSize);
+        Array.Copy(coarsePrecip,  coarseState.PrecipitationMap, CoarseSize * CoarseSize);
+        Array.Copy(coarseBiomass, coarseState.BiomassMap,       CoarseSize * CoarseSize);
+        // Downsample height for lapse-rate calculations in the climate engine
+        var coarseHeight = AdaptiveResolutionService.Downsample(State.HeightMap, fullSize, CoarseSize);
+        Array.Copy(coarseHeight, coarseState.HeightMap, CoarseSize * CoarseSize);
+        Array.Fill(coarseState.DirtyMask, true);
+
+        // Build coarse engines that share the GPU service
+        var coarseAtmo  = new AtmosphereEngine(Bus, EventLog, _currentSeed, CoarseSize, 1.0, _gpu);
+        var coarseVeg   = new VegetationEngine(Bus, EventLog, _currentSeed, CoarseSize, 1.0);
+        coarseAtmo.Initialize(coarseState, _tectonic!.GetAtmosphere()!);
+        coarseVeg.Initialize(coarseState);
+
+        // Surface runs at full resolution
+        onProgress?.Invoke("surface");
+        var tasks = new List<Task>();
+        if (_surface != null)
+            tasks.Add(Task.Run(() => _surface.Tick(Clock.T, deltaMa)));
+        tasks.Add(Task.Run(() => coarseAtmo.Tick(Clock.T, deltaMa)));
+        tasks.Add(Task.Run(() => coarseVeg.Tick(Clock.T, deltaMa)));
+
+        try { Task.WhenAll(tasks).GetAwaiter().GetResult(); }
+        catch (AggregateException ex)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"Adaptive parallel tick error: {ex.Flatten().InnerExceptions.Count} engine(s) failed");
+        }
+
+        // Upsample coarse results back to full resolution
+        AdaptiveResolutionService.UpsampleInto(coarseState.TemperatureMap,   CoarseSize, State.TemperatureMap,   fullSize);
+        AdaptiveResolutionService.UpsampleInto(coarseState.PrecipitationMap, CoarseSize, State.PrecipitationMap, fullSize);
+        AdaptiveResolutionService.UpsampleInto(coarseState.BiomassMap,       CoarseSize, State.BiomassMap,       fullSize);
+        AdaptiveResolutionService.UpsampleInto(coarseState.WindUMap,         CoarseSize, State.WindUMap,         fullSize);
+        AdaptiveResolutionService.UpsampleInto(coarseState.WindVMap,         CoarseSize, State.WindVMap,         fullSize);
     }
 
     /// <summary>Build a cross-section profile along the given path.</summary>
@@ -272,6 +346,8 @@ public sealed class SimulationOrchestrator
         Buffer.BlockCopy(src, offset, dest, 0, dest.Length * 4);
         offset += dest.Length * 4;
     }
+
+    public void Dispose() => _gpu.Dispose();
 }
 
 /// <summary>Cell inspection result.</summary>
