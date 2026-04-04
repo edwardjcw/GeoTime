@@ -70,6 +70,13 @@ export class AppShell {
   // ── Layer overlay elements ──────────────────────────────────────────────
   private layerToggles: Map<string, HTMLButtonElement> = new Map();
 
+  // ── Save/Load elements ──────────────────────────────────────────────────
+  private saveStateBtn: HTMLButtonElement = document.createElement('button');
+  private loadStateBtn: HTMLButtonElement = document.createElement('button');
+
+  // ── First-person indicator ──────────────────────────────────────────────
+  private firstPersonEl: HTMLSpanElement = document.createElement('span');
+
   // ── Callbacks ───────────────────────────────────────────────────────────
   private newPlanetCb: (() => void) | null = null;
   private pauseToggleCb: (() => void) | null = null;
@@ -83,6 +90,8 @@ export class AppShell {
   private zoomInCb: (() => void) | null = null;
   private zoomOutCb: (() => void) | null = null;
   private zoomResetCb: (() => void) | null = null;
+  private saveStateCb: (() => void) | null = null;
+  private loadStateCb: (() => void) | null = null;
 
   private sidebarOpen = true;
   private labelsVisible = true;
@@ -220,6 +229,12 @@ export class AppShell {
     styleBtn(this.pauseBtn);
     this.pauseBtn.addEventListener('click', () => this.pauseToggleCb?.());
 
+    this.firstPersonEl = document.createElement('span');
+    this.firstPersonEl.textContent = '';
+    this.firstPersonEl.style.color = '#4af';
+    this.firstPersonEl.style.fontWeight = 'bold';
+    this.firstPersonEl.style.display = 'none';
+
     this.progressEl = document.createElement('button');
     Object.assign(this.progressEl.style, {
       opacity: '0.7',
@@ -294,7 +309,7 @@ export class AppShell {
     }
     this.root.appendChild(this.agentPanel);
 
-    this.hud.append(this.fpsEl, this.triEl, this.timeEl, this.pauseBtn, this.progressEl);
+    this.hud.append(this.fpsEl, this.triEl, this.timeEl, this.pauseBtn, this.firstPersonEl, this.progressEl);
     this.root.appendChild(this.hud);
 
     // ── Sidebar ───────────────────────────────────────────────────────────
@@ -324,6 +339,21 @@ export class AppShell {
     styleBtn(this.newPlanetBtn, true);
     this.newPlanetBtn.addEventListener('click', () => this.newPlanetCb?.());
     this.sidebar.appendChild(this.newPlanetBtn);
+
+    // -- Save / Load state buttons
+    const saveLoadRow = el('div', { display: 'flex', gap: '6px' });
+    this.saveStateBtn = document.createElement('button');
+    this.saveStateBtn.textContent = '💾 Save State';
+    styleBtn(this.saveStateBtn);
+    this.saveStateBtn.style.flex = '1';
+    this.saveStateBtn.addEventListener('click', () => this.saveStateCb?.());
+    this.loadStateBtn = document.createElement('button');
+    this.loadStateBtn.textContent = '📂 Load State';
+    styleBtn(this.loadStateBtn);
+    this.loadStateBtn.style.flex = '1';
+    this.loadStateBtn.addEventListener('click', () => this.loadStateCb?.());
+    saveLoadRow.append(this.saveStateBtn, this.loadStateBtn);
+    this.sidebar.appendChild(saveLoadRow);
 
     // -- Seed display
     const seedRow = el('div', {
@@ -397,7 +427,7 @@ export class AppShell {
     layerGroup.appendChild(layerTitle);
 
     // Layer names must stay in sync with the switch cases in main.ts onLayerToggle handler.
-    const layerNames = ['plates', 'temperature', 'precipitation', 'soil', 'clouds', 'biomass', 'topo'];
+    const layerNames = ['plates', 'temperature', 'precipitation', 'biome', 'soil', 'clouds', 'biomass', 'topo'];
     for (const name of layerNames) {
       const btn = document.createElement('button');
       btn.textContent = name;
@@ -618,6 +648,17 @@ export class AppShell {
     this.pauseBtn.textContent = paused ? '▶ Resume' : '⏸ Pause';
   }
 
+  /** Show or hide the first-person mode indicator in the HUD. */
+  setFirstPersonMode(active: boolean): void {
+    if (active) {
+      this.firstPersonEl.textContent = '👁 First-Person';
+      this.firstPersonEl.style.display = 'inline';
+    } else {
+      this.firstPersonEl.textContent = '';
+      this.firstPersonEl.style.display = 'none';
+    }
+  }
+
   onNewPlanet(cb: () => void): void {
     this.newPlanetCb = cb;
   }
@@ -628,6 +669,22 @@ export class AppShell {
 
   onRateChange(cb: (rate: number) => void): void {
     this.rateChangeCb = cb;
+  }
+
+  /** Register save-state callback. */
+  onSaveState(cb: () => void): void {
+    this.saveStateCb = cb;
+  }
+
+  /** Register load-state callback. */
+  onLoadState(cb: () => void): void {
+    this.loadStateCb = cb;
+  }
+
+  /** Temporarily disable the load button (e.g., when no snapshots exist). */
+  setLoadStateEnabled(enabled: boolean): void {
+    this.loadStateBtn.disabled = !enabled;
+    this.loadStateBtn.style.opacity = enabled ? '1' : '0.4';
   }
 
   // ── Cross-Section API ──────────────────────────────────────────────────
@@ -880,6 +937,8 @@ export class AppShell {
     this.zoomInCb = null;
     this.zoomOutCb = null;
     this.zoomResetCb = null;
+    this.saveStateCb = null;
+    this.loadStateCb = null;
   }
 
   // ── Sidebar toggle ─────────────────────────────────────────────────────

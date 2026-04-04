@@ -89,6 +89,10 @@ app.MapGet("/api/state/organiccarbonmap", (SimulationOrchestrator sim) =>
     Results.Ok(sim.State.OrganicCarbonMap)
 ).WithName("GetOrganicCarbonMap");
 
+app.MapGet("/api/state/soilmap", (SimulationOrchestrator sim) =>
+    Results.Ok(sim.State.SoilTypeMap.Select(b => (int)b).ToArray())
+).WithName("GetSoilMap");
+
 app.MapGet("/api/state/plates", (SimulationOrchestrator sim) =>
     Results.Ok(sim.GetPlates())
 ).WithName("GetPlates");

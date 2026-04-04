@@ -15,11 +15,13 @@ uniform float uDisplacementScale;
 varying float vHeight;
 varying vec3 vNormal;
 varying vec3 vWorldPos;
+varying vec2 vUv;
 
 void main() {
   // Sample height from equirectangular texture using UV
   float height = texture2D(uHeightMap, uv).r;
   vHeight = height;
+  vUv = uv;
 
   // Displace vertex along normal
   vec3 displaced = position + normal * height * uDisplacementScale;
@@ -34,10 +36,13 @@ void main() {
 
 const fragmentShader = /* glsl */ `
 uniform vec3 uSunDirection;
+uniform sampler2D uBiomeBase;
+uniform float uBiomeBlend;
 
 varying float vHeight;
 varying vec3 vNormal;
 varying vec3 vWorldPos;
+varying vec2 vUv;
 
 // Elevation thresholds (in meters, normalised by the data range)
 // The heightMap stores raw meter values; we colour by those bands.
@@ -63,7 +68,13 @@ vec3 getTerrainColor(float h) {
 }
 
 void main() {
-  vec3 baseColor = getTerrainColor(vHeight);
+  vec3 elevColor = getTerrainColor(vHeight);
+
+  // Blend with biome base texture when available
+  vec4 biomeCol = texture2D(uBiomeBase, vUv);
+  // Only blend on land cells and when biome blend is active
+  float blendFactor = uBiomeBlend * step(0.0, vHeight) * biomeCol.a;
+  vec3 baseColor = mix(elevColor, biomeCol.rgb, blendFactor);
 
   // Simple directional (sun) + ambient lighting
   float NdotL = max(dot(vNormal, normalize(uSunDirection)), 0.0);
@@ -141,6 +152,8 @@ const SUBDIVISION_LEVEL = 5; // ~20 480 triangles
 // Heights are stored in metres; 5e-6 gives ~4% visual exaggeration at 8 000 m peaks.
 const DISPLACEMENT_SCALE = 5e-6;
 const CAMERA_DISTANCE = 3.0;
+// Camera distance at which we enter first-person mode (globe radius = 1.0)
+const FIRST_PERSON_THRESHOLD = 1.05;
 
 // ─── Biome Color Lookup (Whittaker diagram) ──────────────────────────────────
 
@@ -183,7 +196,11 @@ export class GlobeRenderer {
   private biomeMaterial: THREE.ShaderMaterial | null = null;
   private biomeTexture: THREE.DataTexture | null = null;
 
+  private biomeBaseTexture: THREE.DataTexture | null = null;
+
   private triangleCount: number;
+  private _isFirstPerson = false;
+  private _cameraChangeCb: ((isFirstPerson: boolean) => void) | null = null;
 
   constructor(container: HTMLElement) {
     // ── Renderer ──────────────────────────────────────────────────────────
@@ -198,6 +215,8 @@ export class GlobeRenderer {
 
     // ── Camera ────────────────────────────────────────────────────────────
     const aspect = container.clientWidth / container.clientHeight;
+    // Near plane starts at 0.01 (orbital distance ~3) and is adjusted
+    // dynamically in render() to 0.001 when in first-person surface mode.
     this.camera = new THREE.PerspectiveCamera(50, aspect, 0.01, 100);
     this.camera.position.set(0, 0, CAMERA_DISTANCE);
 
@@ -205,7 +224,7 @@ export class GlobeRenderer {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
-    this.controls.minDistance = 1.2;
+    this.controls.minDistance = 1.001; // Allow zooming all the way to the surface
     this.controls.maxDistance = 10;
 
     // ── Lights ────────────────────────────────────────────────────────────
@@ -224,7 +243,19 @@ export class GlobeRenderer {
       THREE.RedFormat,
       THREE.FloatType,
     );
+    this.heightTexture.flipY = true;
     this.heightTexture.needsUpdate = true;
+
+    // ── Biome base texture (1×1 transparent placeholder) ──────────────────
+    this.biomeBaseTexture = new THREE.DataTexture(
+      new Uint8Array([0, 0, 0, 0]),
+      1,
+      1,
+      THREE.RGBAFormat,
+      THREE.UnsignedByteType,
+    );
+    this.biomeBaseTexture.flipY = true;
+    this.biomeBaseTexture.needsUpdate = true;
 
     // ── Globe ShaderMaterial ──────────────────────────────────────────────
     this.globeMaterial = new THREE.ShaderMaterial({
@@ -232,6 +263,8 @@ export class GlobeRenderer {
         uHeightMap: { value: this.heightTexture },
         uDisplacementScale: { value: DISPLACEMENT_SCALE },
         uSunDirection: { value: new THREE.Vector3(5, 3, 5).normalize() },
+        uBiomeBase: { value: this.biomeBaseTexture },
+        uBiomeBlend: { value: 0.0 },
       },
       vertexShader,
       fragmentShader,
@@ -270,6 +303,7 @@ export class GlobeRenderer {
     );
     this.heightTexture.magFilter = THREE.LinearFilter;
     this.heightTexture.minFilter = THREE.LinearFilter;
+    this.heightTexture.flipY = true;
     this.heightTexture.needsUpdate = true;
 
     this.globeMaterial.uniforms.uHeightMap.value = this.heightTexture;
@@ -303,6 +337,7 @@ export class GlobeRenderer {
     );
     this.plateTexture.magFilter = THREE.NearestFilter;
     this.plateTexture.minFilter = THREE.NearestFilter;
+    this.plateTexture.flipY = true;
     this.plateTexture.needsUpdate = true;
 
     if (!this.plateMesh) {
@@ -337,12 +372,53 @@ export class GlobeRenderer {
   /** Render one frame (call inside a rAF loop). */
   render(): void {
     this.controls.update();
+
+    // Detect first-person mode transition
+    const dist = this.camera.position.length();
+    const nowFP = dist < FIRST_PERSON_THRESHOLD;
+    if (nowFP !== this._isFirstPerson) {
+      this._isFirstPerson = nowFP;
+      if (nowFP) {
+        // Switch to wider FOV for ground-level perspective
+        this.camera.fov = 75;
+      } else {
+        // Restore orbital FOV
+        this.camera.fov = 50;
+      }
+      this._cameraChangeCb?.(nowFP);
+    }
+
+    // Dynamically adjust near clipping plane based on camera distance to avoid
+    // depth-buffer precision issues at large distances while still allowing
+    // close surface views.  At surface level (dist ≈ 1.0), use a very small
+    // near plane; at orbit distance (dist ≥ 2), use a larger value.
+    const near = nowFP ? 0.001 : Math.max(0.01, dist * 0.01);
+    if (Math.abs(this.camera.near - near) > near * 0.1) {
+      this.camera.near = near;
+    }
+    this.camera.updateProjectionMatrix();
+
     this.renderer.render(this.scene, this.camera);
   }
 
   /** Current triangle count of the globe mesh. */
   getTriangleCount(): number {
     return this.triangleCount;
+  }
+
+  /** Returns true when the camera is close enough for first-person perspective. */
+  isFirstPersonMode(): boolean {
+    return this._isFirstPerson;
+  }
+
+  /** Returns the current camera distance from the globe centre. */
+  getCameraDistance(): number {
+    return this.camera.position.length();
+  }
+
+  /** Register a callback for first-person mode transitions. */
+  onCameraChange(cb: (isFirstPerson: boolean) => void): void {
+    this._cameraChangeCb = cb;
   }
 
   /**
@@ -363,6 +439,7 @@ export class GlobeRenderer {
     );
     this.biomeTexture.magFilter = THREE.LinearFilter;
     this.biomeTexture.minFilter = THREE.LinearFilter;
+    this.biomeTexture.flipY = true;
     this.biomeTexture.needsUpdate = true;
 
     if (!this.biomeMesh) {
@@ -412,6 +489,60 @@ export class GlobeRenderer {
     }
 
     this.updateColorMap(rgba, gridSize);
+  }
+
+  /**
+   * Set a biome-influenced base texture that blends into the default terrain view.
+   * This makes the default (non-overlay) view show biome variation such as deserts,
+   * forests, tundra etc. instead of plain elevation bands.
+   * @param temperatureMap  - Float32 array of °C values.
+   * @param precipitationMap - Float32 array of mm/yr equivalent values.
+   * @param heightMap       - Float32 array of elevation values in meters.
+   * @param gridSize        - Width/height of the square grid.
+   */
+  updateBiomeBaseMap(
+    temperatureMap: Float32Array,
+    precipitationMap: Float32Array,
+    heightMap: Float32Array,
+    gridSize: number,
+  ): void {
+    const cellCount = gridSize * gridSize;
+    const rgba = new Uint8Array(cellCount * 4);
+
+    for (let i = 0; i < cellCount; i++) {
+      const h = heightMap[i];
+      if (h < 0) {
+        // Ocean: no biome color blending (keep elevation shader for oceans)
+        rgba[i * 4 + 3] = 0;
+        continue;
+      }
+      const [r, g, b] = biomeColor(temperatureMap[i], precipitationMap[i]);
+
+      // Add snow on high peaks based on temperature (below -5°C)
+      const temp = temperatureMap[i];
+      const snowFactor = temp < -5 ? Math.min(1, (-5 - temp) / 10) : 0;
+      rgba[i * 4 + 0] = Math.round(r + (255 - r) * snowFactor);
+      rgba[i * 4 + 1] = Math.round(g + (255 - g) * snowFactor);
+      rgba[i * 4 + 2] = Math.round(b + (255 - b) * snowFactor);
+      rgba[i * 4 + 3] = 200; // Strong blend on land
+    }
+
+    if (this.biomeBaseTexture) this.biomeBaseTexture.dispose();
+
+    this.biomeBaseTexture = new THREE.DataTexture(
+      rgba,
+      gridSize,
+      gridSize,
+      THREE.RGBAFormat,
+      THREE.UnsignedByteType,
+    );
+    this.biomeBaseTexture.magFilter = THREE.LinearFilter;
+    this.biomeBaseTexture.minFilter = THREE.LinearFilter;
+    this.biomeBaseTexture.flipY = true;
+    this.biomeBaseTexture.needsUpdate = true;
+
+    this.globeMaterial.uniforms.uBiomeBase.value = this.biomeBaseTexture;
+    this.globeMaterial.uniforms.uBiomeBlend.value = 0.75; // 75% biome blend on land
   }
 
   /** Show or hide the plate overlay. */
@@ -486,7 +617,12 @@ export class GlobeRenderer {
       this.scene.remove(this.biomeMesh);
     }
 
+    if (this.biomeBaseTexture) {
+      this.biomeBaseTexture.dispose();
+    }
+
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
 }
+

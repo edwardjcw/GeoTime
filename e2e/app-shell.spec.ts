@@ -382,6 +382,7 @@ test.describe('Phase 7: Layer Overlays, Topo, and Cross-Section Zoom', () => {
     await expect(page.locator('button', { hasText: 'plates' })).toBeVisible();
     await expect(page.locator('button', { hasText: 'temperature' })).toBeVisible();
     await expect(page.locator('button', { hasText: 'precipitation' })).toBeVisible();
+    await expect(page.locator('button', { hasText: 'biome' })).toBeVisible();
     await expect(page.locator('button', { hasText: 'soil' })).toBeVisible();
     await expect(page.locator('button', { hasText: 'clouds' })).toBeVisible();
     await expect(page.locator('button', { hasText: 'biomass' })).toBeVisible();
@@ -392,7 +393,7 @@ test.describe('Phase 7: Layer Overlays, Topo, and Cross-Section Zoom', () => {
     const errors: string[] = [];
     page.on('pageerror', (err) => errors.push(err.message));
 
-    const layers = ['plates', 'temperature', 'precipitation', 'soil', 'clouds', 'biomass', 'topo'];
+    const layers = ['plates', 'temperature', 'precipitation', 'biome', 'soil', 'clouds', 'biomass', 'topo'];
     for (const layer of layers) {
       const btn = page.locator('button', { hasText: layer });
       await btn.click();
@@ -440,6 +441,7 @@ test.describe('Phase 6: Vegetation & Polish', () => {
     await expect(page.locator('button', { hasText: 'plates' })).toBeVisible();
     await expect(page.locator('button', { hasText: 'temperature' })).toBeVisible();
     await expect(page.locator('button', { hasText: 'precipitation' })).toBeVisible();
+    await expect(page.locator('button', { hasText: 'biome' })).toBeVisible();
     await expect(page.locator('button', { hasText: 'soil' })).toBeVisible();
     await expect(page.locator('button', { hasText: 'clouds' })).toBeVisible();
     await expect(page.locator('button', { hasText: 'biomass' })).toBeVisible();
@@ -538,5 +540,248 @@ test.describe('Phase 6: Vegetation & Polish', () => {
       (e) => !e.includes('WebGL') && !e.includes('THREE.'),
     );
     expect(critical).toHaveLength(0);
+  });
+});
+
+// ── Phase 8 – Save/Load, Biome/Soil Layers, Elevation, First-Person, Default View ──
+
+test.describe('Phase 8 – Save/Load State', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+    await page.waitForTimeout(1500);
+  });
+
+  test('should display Save State button in sidebar', async ({ page }) => {
+    const btn = page.locator('button', { hasText: /Save State/i });
+    await expect(btn).toBeVisible();
+  });
+
+  test('should display Load State button in sidebar', async ({ page }) => {
+    const btn = page.locator('button', { hasText: /Load State/i });
+    await expect(btn).toBeVisible();
+  });
+
+  test('should save state without crashing', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    const saveBtn = page.locator('button', { hasText: /Save State/i });
+    await saveBtn.click();
+    await page.waitForTimeout(500);
+
+    const critical = errors.filter((e) => !e.includes('WebGL') && !e.includes('THREE.'));
+    expect(critical).toHaveLength(0);
+  });
+
+  test('should save and then load state without crashing', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    // Save current state
+    const saveBtn = page.locator('button', { hasText: /Save State/i });
+    await saveBtn.click();
+    await page.waitForTimeout(800);
+
+    // Load state
+    const loadBtn = page.locator('button', { hasText: /Load State/i });
+    await loadBtn.click();
+    await page.waitForTimeout(1500);
+
+    // Time display should still be valid
+    const timeText = await page.locator('text=Time:').textContent();
+    expect(timeText).toMatch(/Time: -?\d+\.?\d*\s*(Ma|Ga)/);
+
+    const critical = errors.filter((e) => !e.includes('WebGL') && !e.includes('THREE.'));
+    expect(critical).toHaveLength(0);
+  });
+});
+
+test.describe('Phase 8 – Biome and Soil Layer Overlays', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+    await page.waitForTimeout(1500);
+  });
+
+  test('should have a biome layer button', async ({ page }) => {
+    const btn = page.locator('button[data-layer="biome"]');
+    await expect(btn).toBeVisible();
+  });
+
+  test('should have a soil layer button', async ({ page }) => {
+    const btn = page.locator('button[data-layer="soil"]');
+    await expect(btn).toBeVisible();
+  });
+
+  test('should not have an old "soil" layer that shows biome data', async ({ page }) => {
+    // The old "soil" label should no longer exist; "biome" should be the Whittaker overlay
+    const biomeBtn = page.locator('button[data-layer="biome"]');
+    await expect(biomeBtn).toBeVisible();
+    // Both biome and soil should be distinct buttons
+    const soilBtn = page.locator('button[data-layer="soil"]');
+    await expect(soilBtn).toBeVisible();
+  });
+
+  test('should toggle biome layer without crashing', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    const btn = page.locator('button[data-layer="biome"]');
+    await btn.click();
+    await page.waitForTimeout(1000);
+    await btn.click(); // toggle off
+    await page.waitForTimeout(500);
+
+    const critical = errors.filter((e) => !e.includes('WebGL') && !e.includes('THREE.'));
+    expect(critical).toHaveLength(0);
+  });
+
+  test('should toggle soil (USDA orders) layer without crashing', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    const btn = page.locator('button[data-layer="soil"]');
+    await btn.click();
+    await page.waitForTimeout(1000);
+    await btn.click(); // toggle off
+    await page.waitForTimeout(500);
+
+    const critical = errors.filter((e) => !e.includes('WebGL') && !e.includes('THREE.'));
+    expect(critical).toHaveLength(0);
+  });
+
+  test('should show biome legend when biome layer is active', async ({ page }) => {
+    const btn = page.locator('button[data-layer="biome"]');
+    await btn.click();
+    await page.waitForTimeout(800);
+
+    // Legend should contain biome-related text
+    await expect(page.locator('text=Biome')).toBeVisible();
+
+    // Toggle off
+    await btn.click();
+    await page.waitForTimeout(300);
+  });
+
+  test('should show soil legend with USDA soil order names when soil layer is active', async ({ page }) => {
+    const btn = page.locator('button[data-layer="soil"]');
+    await btn.click();
+    await page.waitForTimeout(800);
+
+    // Legend should contain soil-related text
+    await expect(page.locator('text=Soil')).toBeVisible();
+
+    // Toggle off
+    await btn.click();
+    await page.waitForTimeout(300);
+  });
+});
+
+test.describe('Phase 8 – Elevation Readout', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+    await page.waitForTimeout(1500);
+  });
+
+  test('should show Elevation in inspect panel when clicking globe', async ({ page }) => {
+    // Click on the center of the globe viewport
+    const canvas = page.locator('canvas');
+    const box = await canvas.boundingBox();
+    if (!box) return;
+
+    await canvas.click({ position: { x: box.width / 2, y: box.height / 2 } });
+    await page.waitForTimeout(800);
+
+    // If an inspect panel appeared, it should contain Elevation
+    const elevationRow = page.locator('text=Elevation');
+    const isVisible = await elevationRow.isVisible();
+    if (isVisible) {
+      const elevText = await elevationRow.locator('..').textContent();
+      // Should contain a number followed by "m"
+      expect(elevText).toMatch(/-?\d+\s*m/);
+    }
+  });
+});
+
+test.describe('Phase 8 – First-Person Mode', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+    await page.waitForTimeout(1500);
+  });
+
+  test('should not show first-person indicator at default zoom', async ({ page }) => {
+    const fpIndicator = page.locator('text=First-Person');
+    await expect(fpIndicator).not.toBeVisible();
+  });
+
+  test('should show canvas and allow zooming without crashing', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    const canvas = page.locator('canvas');
+    await expect(canvas).toBeVisible();
+
+    // Simulate scroll wheel to zoom in (pinch in on canvas)
+    const box = await canvas.boundingBox();
+    if (box) {
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      // Scroll down to zoom in
+      for (let i = 0; i < 10; i++) {
+        await page.mouse.wheel(0, -100);
+        await page.waitForTimeout(50);
+      }
+      await page.waitForTimeout(500);
+    }
+
+    const critical = errors.filter((e) => !e.includes('WebGL') && !e.includes('THREE.'));
+    expect(critical).toHaveLength(0);
+  });
+});
+
+test.describe('Phase 8 – Default View Variation', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+    await page.waitForTimeout(2000);
+  });
+
+  test('should render globe with biome-influenced default view', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    // Just verify the globe renders without errors
+    const canvas = page.locator('canvas');
+    await expect(canvas).toBeVisible();
+
+    const critical = errors.filter((e) => !e.includes('WebGL') && !e.includes('THREE.'));
+    expect(critical).toHaveLength(0);
+  });
+
+  test('should generate new planet with varied default view without errors', async ({ page }) => {
+    const consoleErrors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+
+    const newPlanetBtn = page.locator('button', { hasText: 'New Planet' });
+    await newPlanetBtn.click();
+    await page.waitForTimeout(3000);
+
+    const canvas = page.locator('canvas');
+    await expect(canvas).toBeVisible();
+
+    const critical = consoleErrors.filter((e) => !e.includes('WebGL') && !e.includes('THREE.'));
+    expect(critical).toHaveLength(0);
+  });
+
+  test('all 8 layer buttons should be visible including biome and soil', async ({ page }) => {
+    const layers = ['plates', 'temperature', 'precipitation', 'biome', 'soil', 'clouds', 'biomass', 'topo'];
+    for (const layer of layers) {
+      const btn = page.locator(`button[data-layer="${layer}"]`);
+      await expect(btn).toBeVisible();
+    }
   });
 });

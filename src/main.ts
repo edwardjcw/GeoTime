@@ -47,9 +47,11 @@ async function doGeneratePlanet(seed: number): Promise<void> {
     simTimeMa = result.timeMa;
 
     // Fetch initial display data from backend
-    const [heightData, plateData] = await Promise.all([
+    const [heightData, plateData, tempData, precipData] = await Promise.all([
       api.getHeightMap(),
       api.getPlateMap(),
+      api.getTemperatureMap(),
+      api.getPrecipitationMap(),
     ]);
 
     const heightMap = new Float32Array(heightData);
@@ -58,10 +60,24 @@ async function doGeneratePlanet(seed: number): Promise<void> {
     renderer.updateHeightMap(heightMap, GRID_SIZE);
     renderer.updatePlateMap(plateMap, GRID_SIZE);
 
+    // Set biome-influenced base texture for the default (non-overlay) view.
+    // This gives the globe varied colouring: deserts, forests, tundra, etc.
+    renderer.updateBiomeBaseMap(
+      new Float32Array(tempData),
+      new Float32Array(precipData),
+      heightMap,
+      GRID_SIZE,
+    );
+
     shell.setSeed(result.seed);
     shell.setTriangleCount(renderer.getTriangleCount());
     shell.setSimTime(simTimeMa);
     shell.setTimelineCursor(4500 + simTimeMa);
+
+    // Update load-state button availability (snapshots exist if we ever saved)
+    api.listSnapshots().then((info) => {
+      shell.setLoadStateEnabled(info.count > 0);
+    }).catch(() => {/* ignore */});
 
     // Close any open cross-section panel on new planet
     shell.hideCrossSection();
@@ -222,6 +238,29 @@ function topoColor(h: number): [number, number, number] {
   return [255, 255, 255];
 }
 
+/**
+ * USDA soil order (0-12) → RGB colour for the soil layer overlay.
+ * Must match the SoilOrder enum in the backend (Enums.cs).
+ */
+function soilOrderColor(order: number): [number, number, number] {
+  switch (order) {
+    case 0:  return [180, 180, 180]; // None (grey)
+    case 1:  return [160, 120, 60];  // Alfisols  – brown
+    case 2:  return [100, 80,  40];  // Andisols  – dark brown (volcanic)
+    case 3:  return [230, 200, 120]; // Aridisols – sandy yellow
+    case 4:  return [200, 180, 140]; // Entisols  – light tan
+    case 5:  return [220, 240, 255]; // Gelisols  – icy pale blue
+    case 6:  return [60,  100, 60];  // Histosols – organic dark green
+    case 7:  return [140, 170, 100]; // Inceptisols – muted olive
+    case 8:  return [180, 140, 80];  // Mollisols – warm tan (grassland)
+    case 9:  return [80,  50,  20];  // Oxisols   – deep red-brown (tropical)
+    case 10: return [100, 130, 160]; // Spodosols – grey-blue (boreal)
+    case 11: return [120, 80,  40];  // Ultisols  – rust (humid sub-tropical)
+    case 12: return [160, 100, 140]; // Vertisols – mauve (clay-rich)
+    default: return [180, 180, 180];
+  }
+}
+
 // ── Rock type / soil order enum maps (must match backend Enums.cs) ─────────
 
 const ROCK_TYPE_NAMES: Record<number, string> = {
@@ -287,7 +326,7 @@ const LAYER_LEGENDS: Record<string, { title: string; items: Array<{ color: strin
       { color: 'rgb(255,255,255)', label: 'Peaks / ice' },
     ],
   },
-  soil: {
+  biome: {
     title: 'Biome (Whittaker)',
     items: [
       { color: 'rgb(240,248,255)', label: 'Ice / polar desert' },
@@ -301,6 +340,23 @@ const LAYER_LEGENDS: Record<string, { title: string; items: Array<{ color: strin
       { color: 'rgb(10,80,10)',    label: 'Tropical rainforest' },
     ],
   },
+  soil: {
+    title: 'Soil Orders (USDA)',
+    items: [
+      { color: 'rgb(160,120,60)',  label: 'Alfisols (moist forest)' },
+      { color: 'rgb(100,80,40)',   label: 'Andisols (volcanic)' },
+      { color: 'rgb(230,200,120)', label: 'Aridisols (desert)' },
+      { color: 'rgb(200,180,140)', label: 'Entisols (young/thin)' },
+      { color: 'rgb(220,240,255)', label: 'Gelisols (permafrost)' },
+      { color: 'rgb(60,100,60)',   label: 'Histosols (organic/bog)' },
+      { color: 'rgb(140,170,100)', label: 'Inceptisols (weakly dev.)' },
+      { color: 'rgb(180,140,80)',  label: 'Mollisols (grassland)' },
+      { color: 'rgb(80,50,20)',    label: 'Oxisols (tropical)' },
+      { color: 'rgb(100,130,160)', label: 'Spodosols (boreal)' },
+      { color: 'rgb(120,80,40)',   label: 'Ultisols (humid subtrop.)' },
+      { color: 'rgb(160,100,140)', label: 'Vertisols (clay-rich)' },
+    ],
+  },
   plates: {
     title: 'Tectonic Plates',
     items: [
@@ -312,7 +368,7 @@ const LAYER_LEGENDS: Record<string, { title: string; items: Array<{ color: strin
 
 /**
  * Fetch map data for a specific non-plate layer and convert to a displayable RGBA texture.
- * Returns `null` for layers whose texture update is handled internally (e.g. 'soil').
+ * Returns `null` for layers whose texture update is handled internally (e.g. 'biome').
  */
 async function fetchLayerRgba(layer: string): Promise<Uint8Array | null> {
   const cellCount = GRID_SIZE * GRID_SIZE;
@@ -379,9 +435,28 @@ async function fetchLayerRgba(layer: string): Promise<Uint8Array | null> {
       const [r, g, b] = topoColor(scaled);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 200;
     }
+  } else if (layer === 'biome') {
+    // Biome (Whittaker) overlay: use temperature × precipitation classification.
+    // The texture update is handled internally via updateClimateMap; return null.
+    const [tempData, precipData] = await Promise.all([
+      api.getTemperatureMap(),
+      api.getPrecipitationMap(),
+    ]);
+    renderer.updateClimateMap(
+      new Float32Array(tempData),
+      new Float32Array(precipData),
+      GRID_SIZE,
+    );
+    return null;
+  } else if (layer === 'soil') {
+    // Soil orders (USDA): fetch soil type map from backend.
+    const soilData = await api.getSoilMap();
+    for (let i = 0; i < cellCount; i++) {
+      const [r, g, b] = soilOrderColor(soilData[i]);
+      rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 200;
+    }
   } else {
-    // 'soil' and any unrecognised layer: use biome (Whittaker) colours via updateClimateMap.
-    // The texture update is handled here; return null so the caller skips updateColorMap.
+    // Unrecognised layer: fall back to biome colours.
     const [tempData, precipData] = await Promise.all([
       api.getTemperatureMap(),
       api.getPrecipitationMap(),
@@ -516,6 +591,50 @@ shell.onRateChange((rate) => {
   simRate = Math.max(0.001, Math.min(100, rate));
 });
 
+shell.onSaveState(async () => {
+  try {
+    await api.takeSnapshot();
+    shell.setLoadStateEnabled(true);
+  } catch (err) {
+    console.error('Save state failed:', err);
+  }
+});
+
+shell.onLoadState(async () => {
+  try {
+    // Restore the most recent snapshot
+    const info = await api.listSnapshots();
+    if (info.count === 0) return;
+    const latestTime = Math.max(...info.times);
+    const result = await api.restoreSnapshot(latestTime);
+    simTimeMa = result.restoredTimeMa;
+    shell.setSimTime(simTimeMa);
+    shell.setTimelineCursor(4500 + simTimeMa);
+
+    // Refresh display data after restore
+    const [heightData, tempData, precipData] = await Promise.all([
+      api.getHeightMap(),
+      api.getTemperatureMap(),
+      api.getPrecipitationMap(),
+    ]);
+    const heightMap = new Float32Array(heightData);
+    renderer.updateHeightMap(heightMap, GRID_SIZE);
+    renderer.updateBiomeBaseMap(
+      new Float32Array(tempData),
+      new Float32Array(precipData),
+      heightMap,
+      GRID_SIZE,
+    );
+  } catch (err) {
+    console.error('Load state failed:', err);
+  }
+});
+
+// Wire first-person mode indicator
+renderer.onCameraChange((isFirstPerson) => {
+  shell.setFirstPersonMode(isFirstPerson);
+});
+
 // ── Render loop ─────────────────────────────────────────────────────────────
 // The render loop now only handles display and periodically asks the backend
 // to advance the simulation and fetches updated state.
@@ -635,10 +754,24 @@ function loop(now: number): void {
           shell.setProgressText('');
           resetAgentStatuses();
 
-          // Fetch updated height map for rendering
-          const heightData = await api.getHeightMap();
+          // Fetch updated height map and climate data for rendering
+          const [heightData, tempData, precipData] = await Promise.all([
+            api.getHeightMap(),
+            api.getTemperatureMap(),
+            api.getPrecipitationMap(),
+          ]);
           const heightMap = new Float32Array(heightData);
           renderer.updateHeightMap(heightMap, GRID_SIZE);
+
+          // Keep the biome base texture in sync for the default view.
+          if (activeDataLayers.size === 0) {
+            renderer.updateBiomeBaseMap(
+              new Float32Array(tempData),
+              new Float32Array(precipData),
+              heightMap,
+              GRID_SIZE,
+            );
+          }
 
           // Re-render any active data overlays so they reflect the new state.
           // This keeps the visual overlay in sync with the updated simulation.
