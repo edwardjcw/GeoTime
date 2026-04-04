@@ -213,6 +213,26 @@ export async function getOrganicCarbonMapBinary(): Promise<ArrayBuffer> {
   return getBinary('/api/state/organiccarbonmap/binary');
 }
 
+// ── Weather Pattern ──────────────────────────────────────────────────────────
+
+export interface WeatherPatternResult {
+  month: number;
+  windU: number[];
+  windV: number[];
+  oceanCurrentU: number[];
+  oceanCurrentV: number[];
+  jetStreamIntensity: number[];
+  frontIntensity: number[];
+  /** 0=none 1=ITCZ 2=polar 3=subtropical 4=orographic */
+  frontType: number[];
+  cyclonePositions: Array<{ lat: number; lon: number; intensity: number; type: number }>;
+}
+
+export async function getWeatherPattern(month: number): Promise<WeatherPatternResult> {
+  // Backend expects 1-based month (1 = January … 12 = December)
+  return get(`/api/weather/monthly?month=${month + 1}`);
+}
+
 // ── Snapshot Management ─────────────────────────────────────────────────────
 
 export async function takeSnapshot(): Promise<{ timeMa: number; snapshotCount: number }> {

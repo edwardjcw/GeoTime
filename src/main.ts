@@ -364,7 +364,56 @@ const LAYER_LEGENDS: Record<string, { title: string; items: Array<{ color: strin
       { color: 'rgba(200,100,128,0.5)', label: 'Plate boundary' },
     ],
   },
+  weather: {
+    title: 'Weather Patterns',
+    items: [
+      { color: 'rgb(255,140,0)',   label: 'ITCZ (tropical convergence)' },
+      { color: 'rgb(50,100,255)',  label: 'Polar front' },
+      { color: 'rgb(255,220,50)',  label: 'Subtropical high' },
+      { color: 'rgb(160,160,160)', label: 'Orographic front' },
+      { color: 'rgb(255,255,150)', label: 'Jet stream' },
+    ],
+  },
 };
+
+// ── Weather state ─────────────────────────────────────────────────────────────
+let weatherMonth = 0;         // currently displayed month (0 = January)
+let weatherLayerPausedSim = false;
+
+/** Build an RGBA texture from weather pattern data. */
+function renderWeatherPattern(result: api.WeatherPatternResult): Uint8Array {
+  const cellCount = GRID_SIZE * GRID_SIZE;
+  const rgba = new Uint8Array(cellCount * 4);
+
+  for (let i = 0; i < cellCount; i++) {
+    let r = 0, g = 0, b = 0, a = 0;
+    const front = result.frontType?.[i] ?? 0;
+    const jet   = result.jetStreamIntensity?.[i] ?? 0;
+
+    if (front === 1) {        // ITCZ
+      r = 255; g = 140; b = 0; a = 180;
+    } else if (front === 2) { // polar front
+      r = 50; g = 100; b = 255; a = 180;
+    } else if (front === 3) { // subtropical high
+      r = 255; g = 220; b = 50; a = 180;
+    } else if (front === 4) { // orographic
+      r = 160; g = 160; b = 160; a = 180;
+    } else if (jet > 0.1) {   // jet stream
+      const t = Math.min(1, jet);
+      r = Math.round(200 + t * 55);
+      g = Math.round(200 + t * 55);
+      b = Math.round(100 * (1 - t));
+      a = Math.round(100 + t * 100);
+    }
+
+    rgba[i * 4 + 0] = r;
+    rgba[i * 4 + 1] = g;
+    rgba[i * 4 + 2] = b;
+    rgba[i * 4 + 3] = a;
+  }
+
+  return rgba;
+}
 
 /**
  * Fetch map data for a specific non-plate layer and convert to a displayable RGBA texture.
@@ -479,6 +528,32 @@ shell.onLayerToggle(async (layer: string, active: boolean) => {
         renderer.updatePlateMap(new Uint16Array(plateData), GRID_SIZE);
       }
       renderer.setPlateOverlayVisible(active);
+    } else if (layer === 'weather') {
+      if (active) {
+        activeDataLayers.add(layer);
+        // Pause simulation while browsing weather patterns
+        if (!paused) {
+          paused = true;
+          shell.setPaused(true);
+          weatherLayerPausedSim = true;
+        }
+        shell.showWeatherMonthSelector(weatherMonth);
+        const result = await api.getWeatherPattern(weatherMonth);
+        const rgba = renderWeatherPattern(result);
+        renderer.updateColorMap(rgba, GRID_SIZE);
+        renderer.setBiomeOverlayVisible(true);
+      } else {
+        activeDataLayers.delete(layer);
+        shell.hideWeatherMonthSelector();
+        if (weatherLayerPausedSim) {
+          paused = false;
+          shell.setPaused(false);
+          weatherLayerPausedSim = false;
+        }
+        if (activeDataLayers.size === 0) {
+          renderer.setBiomeOverlayVisible(false);
+        }
+      }
     } else {
       if (active) {
         activeDataLayers.add(layer);
@@ -513,6 +588,20 @@ shell.onLayerToggle(async (layer: string, active: boolean) => {
     }
   } catch (err) {
     console.error(`Failed to toggle layer ${layer}:`, err);
+  }
+});
+
+// Re-fetch and display weather when month changes
+shell.onWeatherMonthChange(async (month: number) => {
+  weatherMonth = month;
+  if (activeDataLayers.has('weather')) {
+    try {
+      const result = await api.getWeatherPattern(month);
+      const rgba = renderWeatherPattern(result);
+      renderer.updateColorMap(rgba, GRID_SIZE);
+    } catch (err) {
+      console.error('Weather month change failed:', err);
+    }
   }
 });
 
@@ -577,6 +666,13 @@ shell.onInspectClick((x: number, y: number) => {
 });
 
 // ── Wire UI callbacks ───────────────────────────────────────────────────────
+
+shell.onAbortRequest(() => {
+  pendingSimRequest = false;
+  simRequestStartMs = 0;
+  shell.setProgressText('');
+  resetAgentStatuses();
+});
 
 shell.onNewPlanet(() => {
   doGeneratePlanet(randomSeed());
@@ -649,6 +745,8 @@ const SIM_UPDATE_INTERVAL = 200; // ms between backend simulation calls
 
 /** Flag to prevent overlapping backend requests. */
 let pendingSimRequest = false;
+/** Timestamp (ms) when the current sim request was dispatched. */
+let simRequestStartMs = 0;
 
 // ── Agent status tracking ───────────────────────────────────────────────────
 // Track the last known status of each simulation engine phase.  Updated via
@@ -743,6 +841,7 @@ function loop(now: number): void {
     // Send simulation advance to backend at throttled intervals
     if (simAccum >= SIM_UPDATE_INTERVAL && !pendingSimRequest && deltaMa > 0) {
       pendingSimRequest = true;
+      simRequestStartMs = performance.now();
       simAccum = 0;
 
       shell.setProgressText('⏳ Advancing…');
@@ -795,6 +894,20 @@ function loop(now: number): void {
         .finally(() => {
           pendingSimRequest = false;
         });
+    }
+  }
+
+  // Freeze detection: warn when a sim request is taking too long
+  if (pendingSimRequest) {
+    const elapsedSec = Math.round((performance.now() - simRequestStartMs) / 1000);
+    if (elapsedSec >= 15) {
+      shell.setProgressText(`⚠️ Frozen? (${elapsedSec}s) — click to abort`);
+      if (elapsedSec >= 60) {
+        pendingSimRequest = false;
+        simRequestStartMs = 0;
+        shell.setProgressText('');
+        resetAgentStatuses();
+      }
     }
   }
 

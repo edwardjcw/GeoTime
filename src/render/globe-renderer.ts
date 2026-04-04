@@ -202,6 +202,22 @@ export class GlobeRenderer {
   private _isFirstPerson = false;
   private _cameraChangeCb: ((isFirstPerson: boolean) => void) | null = null;
 
+  // ── Water mesh ───────────────────────────────────────────────────────────
+  private _waterMesh: THREE.Mesh | null = null;
+
+  // ── First-person controls state ──────────────────────────────────────────
+  private _fpKeys = new Set<string>();
+  private _fpLat = 0;
+  private _fpLon = 0;
+  private _fpYaw = 0;
+  private _fpPitch = 0;
+  private _fpPointerLocked = false;
+  private _fpClickHandler: (() => void) | null = null;
+  private _fpPLChangeHandler: (() => void) | null = null;
+  private _fpMouseHandler: ((e: MouseEvent) => void) | null = null;
+  private _fpKeyDownHandler: ((e: KeyboardEvent) => void) | null = null;
+  private _fpKeyUpHandler: ((e: KeyboardEvent) => void) | null = null;
+
   constructor(container: HTMLElement) {
     // ── Renderer ──────────────────────────────────────────────────────────
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -282,6 +298,22 @@ export class GlobeRenderer {
 
     this.globeMesh = new THREE.Mesh(geometry, this.globeMaterial);
     this.scene.add(this.globeMesh);
+
+    // ── Ocean water sphere (sits at sea level = radius 1.0) ───────────────
+    // Semi-transparent sphere that visually covers all below-sea-level cells.
+    const waterGeometry = new THREE.SphereGeometry(1.0, 32, 16);
+    const waterMaterial = new THREE.MeshPhongMaterial({
+      color: 0x006994,
+      transparent: true,
+      opacity: 0.72,
+      side: THREE.FrontSide,
+      depthWrite: false,
+      shininess: 100,
+      specular: new THREE.Color(0x334466),
+    });
+    const waterMesh = new THREE.Mesh(waterGeometry, waterMaterial);
+    this.scene.add(waterMesh);
+    this._waterMesh = waterMesh;
   }
 
   // ── Public API ────────────────────────────────────────────────────────────
@@ -371,7 +403,12 @@ export class GlobeRenderer {
 
   /** Render one frame (call inside a rAF loop). */
   render(): void {
-    this.controls.update();
+    // Skip OrbitControls update when in first-person mode (we drive the camera directly)
+    if (!this._isFirstPerson) {
+      this.controls.update();
+    } else {
+      this._applyFirstPersonMovement();
+    }
 
     // Detect first-person mode transition
     const dist = this.camera.position.length();
@@ -381,9 +418,11 @@ export class GlobeRenderer {
       if (nowFP) {
         // Switch to wider FOV for ground-level perspective
         this.camera.fov = 75;
+        this.enableFirstPersonControls();
       } else {
         // Restore orbital FOV
         this.camera.fov = 50;
+        this.disableFirstPersonControls();
       }
       this._cameraChangeCb?.(nowFP);
     }
@@ -597,6 +636,7 @@ export class GlobeRenderer {
 
   /** Release all GPU resources. */
   dispose(): void {
+    this.disableFirstPersonControls();
     this.controls.dispose();
 
     this.heightTexture.dispose();
@@ -621,8 +661,154 @@ export class GlobeRenderer {
       this.biomeBaseTexture.dispose();
     }
 
+    if (this._waterMesh) {
+      (this._waterMesh.material as THREE.MeshPhongMaterial).dispose();
+      this._waterMesh.geometry.dispose();
+      this.scene.remove(this._waterMesh);
+    }
+
     this.renderer.dispose();
     this.renderer.domElement.remove();
+  }
+
+  // ── First-person controls ─────────────────────────────────────────────────
+
+  private enableFirstPersonControls(): void {
+    const canvas = this.renderer.domElement;
+
+    // Derive lat/lon from current camera position
+    const pos = this.camera.position;
+    const r = pos.length();
+    this._fpLat = Math.asin(Math.max(-1, Math.min(1, pos.y / r))) * (180 / Math.PI);
+    this._fpLon = Math.atan2(pos.z, pos.x) * (180 / Math.PI);
+    this._fpYaw = 0;
+    this._fpPitch = 0;
+
+    this.controls.enabled = false;
+
+    this._fpClickHandler = () => {
+      if (!this._fpPointerLocked) canvas.requestPointerLock();
+    };
+    canvas.addEventListener('click', this._fpClickHandler);
+
+    this._fpPLChangeHandler = () => {
+      this._fpPointerLocked = document.pointerLockElement === canvas;
+    };
+    document.addEventListener('pointerlockchange', this._fpPLChangeHandler);
+
+    this._fpMouseHandler = (e: MouseEvent) => {
+      if (this._fpPointerLocked) {
+        this._fpYaw += e.movementX * 0.15;
+        this._fpPitch = Math.max(-80, Math.min(80, this._fpPitch - e.movementY * 0.15));
+      }
+    };
+    document.addEventListener('mousemove', this._fpMouseHandler);
+
+    this._fpKeyDownHandler = (e: KeyboardEvent) => { this._fpKeys.add(e.code); };
+    this._fpKeyUpHandler = (e: KeyboardEvent) => { this._fpKeys.delete(e.code); };
+    document.addEventListener('keydown', this._fpKeyDownHandler);
+    document.addEventListener('keyup', this._fpKeyUpHandler);
+  }
+
+  private disableFirstPersonControls(): void {
+    const canvas = this.renderer.domElement;
+
+    this.controls.enabled = true;
+    this._fpPointerLocked = false;
+    this._fpKeys.clear();
+
+    if (this._fpClickHandler) {
+      canvas.removeEventListener('click', this._fpClickHandler);
+      this._fpClickHandler = null;
+    }
+    if (this._fpPLChangeHandler) {
+      document.removeEventListener('pointerlockchange', this._fpPLChangeHandler);
+      this._fpPLChangeHandler = null;
+    }
+    if (this._fpMouseHandler) {
+      document.removeEventListener('mousemove', this._fpMouseHandler);
+      this._fpMouseHandler = null;
+    }
+    if (this._fpKeyDownHandler) {
+      document.removeEventListener('keydown', this._fpKeyDownHandler);
+      this._fpKeyDownHandler = null;
+    }
+    if (this._fpKeyUpHandler) {
+      document.removeEventListener('keyup', this._fpKeyUpHandler);
+      this._fpKeyUpHandler = null;
+    }
+
+    if (document.pointerLockElement === canvas) document.exitPointerLock();
+
+    // Reset camera orientation to look at globe center
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(0, 0, 0);
+    this.controls.target.set(0, 0, 0);
+  }
+
+  private _applyFirstPersonMovement(): void {
+    // Press Escape to exit first-person mode by pulling camera back
+    if (this._fpKeys.has('Escape')) {
+      const dir = this.camera.position.clone().normalize();
+      this.camera.position.copy(dir.multiplyScalar(1.5));
+      this._fpKeys.clear();
+      return;
+    }
+
+    const SPEED_DEG = 0.05; // movement speed in degrees per frame
+    const yawRad = this._fpYaw * (Math.PI / 180);
+    const latRad = this._fpLat * (Math.PI / 180);
+    const cosLat = Math.max(Math.abs(Math.cos(latRad)), 0.01);
+
+    let dlat = 0;
+    let dlonNorm = 0;
+
+    if (this._fpKeys.has('KeyW') || this._fpKeys.has('ArrowUp')) {
+      dlat += Math.cos(yawRad); dlonNorm += Math.sin(yawRad);
+    }
+    if (this._fpKeys.has('KeyS') || this._fpKeys.has('ArrowDown')) {
+      dlat -= Math.cos(yawRad); dlonNorm -= Math.sin(yawRad);
+    }
+    if (this._fpKeys.has('KeyA') || this._fpKeys.has('ArrowLeft')) {
+      dlat += Math.sin(yawRad); dlonNorm -= Math.cos(yawRad);
+    }
+    if (this._fpKeys.has('KeyD') || this._fpKeys.has('ArrowRight')) {
+      dlat -= Math.sin(yawRad); dlonNorm += Math.cos(yawRad);
+    }
+
+    if (dlat !== 0 || dlonNorm !== 0) {
+      this._fpLat = Math.max(-89, Math.min(89, this._fpLat + dlat * SPEED_DEG));
+      this._fpLon += (dlonNorm * SPEED_DEG) / cosLat;
+      this._fpLon = ((this._fpLon + 180) % 360 + 360) % 360 - 180;
+    }
+
+    // Position camera just above globe surface at (lat, lon)
+    const latR = this._fpLat * (Math.PI / 180);
+    const lonR = this._fpLon * (Math.PI / 180);
+    const camR = 1.001;
+    const cx = camR * Math.cos(latR) * Math.cos(lonR);
+    const cy = camR * Math.sin(latR);
+    const cz = camR * Math.cos(latR) * Math.sin(lonR);
+    this.camera.position.set(cx, cy, cz);
+
+    // Surface coordinate frame
+    const up = new THREE.Vector3(cx, cy, cz).normalize();
+    const north = new THREE.Vector3(
+      -Math.sin(latR) * Math.cos(lonR),
+      Math.cos(latR),
+      -Math.sin(latR) * Math.sin(lonR),
+    );
+    const east = new THREE.Vector3(-Math.sin(lonR), 0, Math.cos(lonR));
+
+    // Compute look direction from yaw (horizontal) and pitch (vertical)
+    const pitchR = this._fpPitch * (Math.PI / 180);
+    const lookDir = new THREE.Vector3()
+      .addScaledVector(north, Math.cos(pitchR) * Math.cos(yawRad))
+      .addScaledVector(east, Math.cos(pitchR) * Math.sin(yawRad))
+      .addScaledVector(up, Math.sin(pitchR));
+
+    this.camera.up.copy(up);
+    this.camera.lookAt(cx + lookDir.x, cy + lookDir.y, cz + lookDir.z);
   }
 }
 
