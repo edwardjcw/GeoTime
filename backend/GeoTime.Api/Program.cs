@@ -1,5 +1,6 @@
 using GeoTime.Api;
 using GeoTime.Core;
+using GeoTime.Core.Engines;
 using GeoTime.Core.Kernel;
 using GeoTime.Core.Models;
 using MessagePack;
@@ -286,6 +287,12 @@ app.MapPut("/api/unreal/camera", (CameraState state, CameraStateService cam) =>
     cam.State = state;
     return Results.Ok(cam.State);
 }).WithName("UpdateCameraState");
+
+app.MapGet("/api/weather/monthly", (int month, SimulationOrchestrator sim) =>
+{
+    var result = WeatherPatternService.ComputeMonthly(month, sim.State);
+    return Results.Ok(result);
+}).WithName("GetWeatherPattern");
 
 app.Run();
 

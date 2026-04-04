@@ -77,6 +77,13 @@ export class AppShell {
   // ── First-person indicator ──────────────────────────────────────────────
   private firstPersonEl: HTMLSpanElement = document.createElement('span');
 
+  // ── Weather month selector ───────────────────────────────────────────────
+  private weatherMonthPanel: HTMLElement = document.createElement('div');
+  private weatherMonthLabel: HTMLSpanElement = document.createElement('span');
+  private _currentWeatherMonth = 0;
+  private _windToggleBtn: HTMLButtonElement | null = null;
+  private _windActive = false;
+
   // ── Callbacks ───────────────────────────────────────────────────────────
   private newPlanetCb: (() => void) | null = null;
   private pauseToggleCb: (() => void) | null = null;
@@ -92,6 +99,9 @@ export class AppShell {
   private zoomResetCb: (() => void) | null = null;
   private saveStateCb: (() => void) | null = null;
   private loadStateCb: (() => void) | null = null;
+  private weatherMonthChangeCb: ((month: number) => void) | null = null;
+  private windToggleCb: ((active: boolean) => void) | null = null;
+  private abortRequestCb: (() => void) | null = null;
 
   private sidebarOpen = true;
   private labelsVisible = true;
@@ -249,7 +259,14 @@ export class AppShell {
     });
     this.progressEl.title = 'Click to view agent status';
     this.progressEl.textContent = '';
-    this.progressEl.addEventListener('click', () => this.toggleAgentPanel());
+    this.progressEl.addEventListener('click', () => {
+      // When showing a freeze warning, clicking aborts the stuck request
+      if (this.progressEl.dataset.frozen === 'true') {
+        this.abortRequestCb?.();
+      } else {
+        this.toggleAgentPanel();
+      }
+    });
     this.progressEl.addEventListener('mouseenter', () => {
       this.progressEl.style.background = 'rgba(255,255,255,0.1)';
     });
@@ -308,6 +325,66 @@ export class AppShell {
       this.agentPanelRows.set(key, status);
     }
     this.root.appendChild(this.agentPanel);
+
+    // ── Weather Month Selector (hidden by default) ─────────────────────────
+    this.weatherMonthPanel = el('div', {
+      position: 'absolute',
+      top: '40px',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      background: 'rgba(10,10,14,0.88)',
+      border: '1px solid rgba(255,255,255,0.12)',
+      borderRadius: '6px',
+      padding: '6px 12px',
+      display: 'none',
+      alignItems: 'center',
+      gap: '10px',
+      zIndex: '19',
+      color: '#ddd',
+      fontSize: '13px',
+      fontFamily: 'monospace',
+      pointerEvents: 'auto',
+    });
+    const prevMonthBtn = document.createElement('button');
+    prevMonthBtn.textContent = '◀';
+    styleBtn(prevMonthBtn);
+    prevMonthBtn.style.padding = '2px 8px';
+    prevMonthBtn.addEventListener('click', () => {
+      this._currentWeatherMonth = (this._currentWeatherMonth + 11) % 12;
+      this.weatherMonthLabel.textContent = `Weather Month: ${MONTH_NAMES[this._currentWeatherMonth]}`;
+      this.weatherMonthChangeCb?.(this._currentWeatherMonth);
+    });
+    this.weatherMonthLabel = document.createElement('span');
+    this.weatherMonthLabel.textContent = 'Weather Month: January';
+    const nextMonthBtn = document.createElement('button');
+    nextMonthBtn.textContent = '▶';
+    styleBtn(nextMonthBtn);
+    nextMonthBtn.style.padding = '2px 8px';
+    nextMonthBtn.addEventListener('click', () => {
+      this._currentWeatherMonth = (this._currentWeatherMonth + 1) % 12;
+      this.weatherMonthLabel.textContent = `Weather Month: ${MONTH_NAMES[this._currentWeatherMonth]}`;
+      this.weatherMonthChangeCb?.(this._currentWeatherMonth);
+    });
+
+    // Wind map toggle button
+    const sep = document.createElement('span');
+    sep.textContent = '|';
+    sep.style.opacity = '0.3';
+    this._windToggleBtn = document.createElement('button');
+    this._windToggleBtn.textContent = '💨 Wind';
+    styleBtn(this._windToggleBtn);
+    this._windToggleBtn.style.padding = '2px 10px';
+    this._windToggleBtn.title = 'Toggle animated wind particle overlay';
+    this._windToggleBtn.addEventListener('click', () => {
+      this._windActive = !this._windActive;
+      if (this._windToggleBtn) {
+        this._windToggleBtn.style.background = this._windActive ? '#2a6' : 'rgba(255,255,255,0.08)';
+      }
+      this.windToggleCb?.(this._windActive);
+    });
+
+    this.weatherMonthPanel.append(prevMonthBtn, this.weatherMonthLabel, nextMonthBtn, sep, this._windToggleBtn);
+    this.root.appendChild(this.weatherMonthPanel);
 
     this.hud.append(this.fpsEl, this.triEl, this.timeEl, this.pauseBtn, this.firstPersonEl, this.progressEl);
     this.root.appendChild(this.hud);
@@ -427,7 +504,7 @@ export class AppShell {
     layerGroup.appendChild(layerTitle);
 
     // Layer names must stay in sync with the switch cases in main.ts onLayerToggle handler.
-    const layerNames = ['plates', 'temperature', 'precipitation', 'biome', 'soil', 'clouds', 'biomass', 'topo'];
+    const layerNames = ['plates', 'temperature', 'precipitation', 'biome', 'soil', 'clouds', 'biomass', 'topo', 'weather'];
     for (const name of layerNames) {
       const btn = document.createElement('button');
       btn.textContent = name;
@@ -687,6 +764,51 @@ export class AppShell {
     this.loadStateBtn.style.opacity = enabled ? '1' : '0.4';
   }
 
+  /** Register a callback invoked when the user clicks to abort a frozen sim request. */
+  onAbortRequest(cb: () => void): void {
+    this.abortRequestCb = cb;
+  }
+
+  /** Register a callback for weather month changes. */
+  onWeatherMonthChange(cb: (month: number) => void): void {
+    this.weatherMonthChangeCb = cb;
+  }
+
+  /** Register a callback for wind map toggle. */
+  onWindToggle(cb: (active: boolean) => void): void {
+    this.windToggleCb = cb;
+  }
+
+  /** Show the weather month selector panel. */
+  showWeatherMonthSelector(month: number): void {
+    this._currentWeatherMonth = month;
+    this.weatherMonthLabel.textContent = `Weather Month: ${MONTH_NAMES[month]}`;
+    this.weatherMonthPanel.style.display = 'flex';
+  }
+
+  /** Hide the weather month selector panel and reset wind state. */
+  hideWeatherMonthSelector(): void {
+    this.weatherMonthPanel.style.display = 'none';
+    // Reset wind toggle to off
+    if (this._windActive) {
+      this._windActive = false;
+      if (this._windToggleBtn) this._windToggleBtn.style.background = 'rgba(255,255,255,0.08)';
+      this.windToggleCb?.(false);
+    }
+  }
+
+  /**
+   * Programmatically deactivate a layer (e.g., when play is clicked).
+   * Updates the button visual state and fires the toggle callback.
+   */
+  deactivateLayer(name: string): void {
+    if (!this.activeLayers.has(name)) return;
+    this.activeLayers.delete(name);
+    const btn = this.layerToggles.get(name);
+    if (btn) btn.style.background = 'rgba(255,255,255,0.08)';
+    this.layerToggleCb?.(name, false);
+  }
+
   // ── Cross-Section API ──────────────────────────────────────────────────
 
   onDrawMode(cb: () => void): void {
@@ -888,6 +1010,9 @@ export class AppShell {
   /** Show a brief engine-phase progress string in the HUD. */
   setProgressText(text: string): void {
     this.progressEl.textContent = text;
+    const frozen = text.includes('⚠️ Frozen?');
+    this.progressEl.dataset.frozen = String(frozen);
+    this.progressEl.title = frozen ? 'Click to abort stuck request' : 'Click to view agent status';
     // Show a subtle indicator on the button when something is in progress
     this.progressEl.style.opacity = text ? '1' : '0.7';
   }
@@ -939,6 +1064,9 @@ export class AppShell {
     this.zoomResetCb = null;
     this.saveStateCb = null;
     this.loadStateCb = null;
+    this.weatherMonthChangeCb = null;
+    this.windToggleCb = null;
+    this.abortRequestCb = null;
   }
 
   // ── Sidebar toggle ─────────────────────────────────────────────────────
@@ -958,6 +1086,11 @@ export class AppShell {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
 
 /** Create a styled div. */
 function el(
