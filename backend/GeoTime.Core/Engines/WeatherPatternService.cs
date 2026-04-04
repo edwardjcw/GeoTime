@@ -35,7 +35,7 @@ public static class WeatherPatternService
         var oceanCurrentV  = new float[cc];
         var jetIntensity   = new float[cc];
         var frontIntensity = new float[cc];
-        var frontType      = new byte[cc];
+        var frontType      = new int[cc];
         var cyclones       = new List<CyclonePosition>();
 
         for (int row = 0; row < gs; row++)
@@ -191,7 +191,7 @@ public static class WeatherPatternService
                 }
 
                 frontIntensity[i] = (float)Math.Clamp(bestFront, 0.0, 1.0);
-                frontType[i]      = bestType;
+                frontType[i]      = (int)bestType;
             }
         }
 
@@ -330,7 +330,7 @@ public sealed class WeatherPatternResult
     public float[] FrontIntensity { get; set; } = [];
 
     /// <summary>Front type per cell: 0=none, 1=ITCZ, 2=polar_front, 3=subtropical_high, 4=orographic.</summary>
-    public byte[] FrontType { get; set; } = [];
+    public int[] FrontType { get; set; } = [];
 
     public List<CyclonePosition> CyclonePositions { get; set; } = [];
 }

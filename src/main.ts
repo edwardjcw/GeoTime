@@ -679,8 +679,16 @@ shell.onNewPlanet(() => {
 });
 
 shell.onPauseToggle(() => {
+  const wasPlaying = paused;
   paused = !paused;
   shell.setPaused(paused);
+
+  // Clicking play while weather layer is active → deactivate weather layer
+  if (wasPlaying && !paused && activeDataLayers.has('weather')) {
+    // Deactivate the weather layer via the layer toggle callback so it handles
+    // hiding the selector, resetting overlay, etc.
+    shell.deactivateLayer('weather');
+  }
 });
 
 shell.onRateChange((rate) => {

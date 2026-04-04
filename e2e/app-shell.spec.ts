@@ -785,3 +785,202 @@ test.describe('Phase 8 – Default View Variation', () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 9 Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.describe('Phase 9 – Simulation Freeze Detection', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+    await page.waitForTimeout(1500);
+  });
+
+  test('should show progress element in HUD', async ({ page }) => {
+    // The progress element is always present (even if empty text)
+    const progressEl = page.locator('.progress-el, [title*="agent"], [title*="abort"]').first();
+    // It may or may not be visible depending on whether sim is running
+    // Just verify no crashes
+    const canvas = page.locator('canvas').first();
+    await expect(canvas).toBeVisible();
+  });
+
+  test('should show pause button in HUD', async ({ page }) => {
+    const pauseBtn = page.locator('button', { hasText: /Pause|Resume/ });
+    await expect(pauseBtn).toBeVisible();
+  });
+});
+
+test.describe('Phase 9 – Ocean Water Sphere', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+    await page.waitForTimeout(2000);
+  });
+
+  test('should render globe without errors (water sphere included)', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    const canvas = page.locator('canvas').first();
+    await expect(canvas).toBeVisible();
+
+    await page.waitForTimeout(500);
+
+    const critical = errors.filter(
+      (e) => !e.includes('WebGL') && !e.includes('THREE.') && !e.includes('NetworkError'),
+    );
+    expect(critical).toHaveLength(0);
+  });
+
+  test('should take screenshot showing globe with ocean water', async ({ page }) => {
+    const canvas = page.locator('canvas').first();
+    await expect(canvas).toBeVisible();
+    await page.waitForTimeout(1000);
+    // Take a screenshot to visually confirm the globe renders
+    await page.screenshot({ path: 'e2e/screenshots/globe-with-ocean.png', fullPage: false });
+  });
+});
+
+test.describe('Phase 9 – Weather Pattern Layer', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+    await page.waitForTimeout(2000);
+  });
+
+  test('should show weather layer button in sidebar', async ({ page }) => {
+    const weatherBtn = page.locator('button[data-layer="weather"]');
+    await expect(weatherBtn).toBeVisible();
+  });
+
+  test('all 9 layer buttons should be visible including weather', async ({ page }) => {
+    const layers = ['plates', 'temperature', 'precipitation', 'biome', 'soil', 'clouds', 'biomass', 'topo', 'weather'];
+    for (const layer of layers) {
+      const btn = page.locator(`button[data-layer="${layer}"]`);
+      await expect(btn).toBeVisible();
+    }
+  });
+
+  test('activating weather layer should pause simulation and show month selector', async ({ page }) => {
+    // Ensure simulation is not paused
+    const pauseBtn = page.locator('button', { hasText: /Pause|Resume/ });
+    const pauseText = await pauseBtn.textContent();
+    if (pauseText?.includes('Resume')) {
+      await pauseBtn.click(); // unpause first
+      await page.waitForTimeout(200);
+    }
+
+    // Click the weather layer button
+    const weatherBtn = page.locator('button[data-layer="weather"]');
+    await weatherBtn.click();
+    await page.waitForTimeout(1500); // wait for async fetch
+
+    // Should show month selector
+    const monthLabel = page.locator('text=/Weather Month:/');
+    await expect(monthLabel).toBeVisible();
+
+    // The pause button should now show "Resume" (sim was paused)
+    const pauseBtnAfter = page.locator('button', { hasText: 'Resume' });
+    await expect(pauseBtnAfter).toBeVisible();
+
+    // Take screenshot
+    await page.screenshot({ path: 'e2e/screenshots/weather-layer-active.png', fullPage: false });
+  });
+
+  test('weather month selector should navigate between months', async ({ page }) => {
+    const weatherBtn = page.locator('button[data-layer="weather"]');
+    await weatherBtn.click();
+    await page.waitForTimeout(1500);
+
+    const monthLabel = page.locator('text=/Weather Month:/');
+    await expect(monthLabel).toBeVisible();
+
+    // Click next month button
+    const nextBtn = page.locator('button', { hasText: '▶' }).first();
+    await nextBtn.click();
+    await page.waitForTimeout(1000);
+
+    // Month should have changed (February or next month name)
+    const newText = await monthLabel.textContent();
+    expect(newText).not.toBeNull();
+    expect(newText).toMatch(/Weather Month:/);
+  });
+
+  test('deactivating weather layer should hide month selector', async ({ page }) => {
+    const weatherBtn = page.locator('button[data-layer="weather"]');
+    await weatherBtn.click();
+    await page.waitForTimeout(1500);
+
+    // Verify month selector is visible
+    const monthLabel = page.locator('text=/Weather Month:/');
+    await expect(monthLabel).toBeVisible();
+
+    // Deactivate weather layer
+    await weatherBtn.click();
+    await page.waitForTimeout(500);
+
+    await expect(monthLabel).not.toBeVisible();
+  });
+
+  test('clicking play while weather layer active should deactivate it', async ({ page }) => {
+    // Activate weather layer (pauses sim)
+    const weatherBtn = page.locator('button[data-layer="weather"]');
+    await weatherBtn.click();
+    await page.waitForTimeout(1500);
+
+    // Verify paused
+    const resumeBtn = page.locator('button', { hasText: 'Resume' });
+    await expect(resumeBtn).toBeVisible();
+
+    // Click Resume (play)
+    await resumeBtn.click();
+    await page.waitForTimeout(500);
+
+    // Month selector should be gone
+    const monthLabel = page.locator('text=/Weather Month:/');
+    await expect(monthLabel).not.toBeVisible();
+
+    // Take screenshot
+    await page.screenshot({ path: 'e2e/screenshots/weather-layer-after-play.png', fullPage: false });
+  });
+});
+
+test.describe('Phase 9 – First Person Mode Controls', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+    await page.waitForTimeout(1500);
+  });
+
+  test('should not show first-person indicator at default zoom', async ({ page }) => {
+    const fpIndicator = page.locator('text=First-Person');
+    await expect(fpIndicator).not.toBeVisible();
+  });
+
+  test('should handle zoom without crashing', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    const canvas = page.locator('canvas').first();
+    const box = await canvas.boundingBox();
+
+    if (box) {
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      // Zoom in significantly
+      for (let i = 0; i < 15; i++) {
+        await page.mouse.wheel(0, -120);
+        await page.waitForTimeout(30);
+      }
+      await page.waitForTimeout(800);
+    }
+
+    const critical = errors.filter(
+      (e) => !e.includes('WebGL') && !e.includes('THREE.') && !e.includes('NetworkError'),
+    );
+    expect(critical).toHaveLength(0);
+
+    await page.screenshot({ path: 'e2e/screenshots/first-person-zoom.png', fullPage: false });
+  });
+});

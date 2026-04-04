@@ -765,6 +765,18 @@ export class AppShell {
     this.weatherMonthPanel.style.display = 'none';
   }
 
+  /**
+   * Programmatically deactivate a layer (e.g., when play is clicked).
+   * Updates the button visual state and fires the toggle callback.
+   */
+  deactivateLayer(name: string): void {
+    if (!this.activeLayers.has(name)) return;
+    this.activeLayers.delete(name);
+    const btn = this.layerToggles.get(name);
+    if (btn) btn.style.background = 'rgba(255,255,255,0.08)';
+    this.layerToggleCb?.(name, false);
+  }
+
   // ── Cross-Section API ──────────────────────────────────────────────────
 
   onDrawMode(cb: () => void): void {
