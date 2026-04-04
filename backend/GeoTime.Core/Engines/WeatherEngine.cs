@@ -17,60 +17,86 @@ public sealed class WeatherEngine(int gridSize)
     public WeatherResult Tick(double _timeMa, double deltaMa, SimulationState state, Xoshiro256ss rng)
     {
         var cc = gridSize * gridSize;
+
+        // Pre-generate random rolls sequentially to maintain determinism across
+        // parallel execution.  Each cell gets 3 rolls (frontal, extratropical, tropical).
+        var roll = new double[cc * 3];
+        for (var i = 0; i < roll.Length; i++)
+            roll[i] = rng.NextFloat(0.0, 1.0);
+
         int fronts = 0, cyclones = 0, precipCells = 0;
-        var tropicals = new List<TropicalCyclone>();
+        var tropicals = new System.Collections.Concurrent.ConcurrentBag<TropicalCyclone>();
+        var lockObj = new object();
 
-        for (var row = 0; row < gridSize; row++)
-        {
-            var latDeg = 90.0 - (double)row / (gridSize - 1) * 180;
-            var absLat = Math.Abs(latDeg);
-
-            for (var col = 0; col < gridSize; col++)
+        Parallel.For(0, gridSize,
+            () => (fronts: 0, cyclones: 0, precipCells: 0),
+            (row, _, local) =>
             {
-                var i = row * gridSize + col;
-                double h = state.HeightMap[i], temp = state.TemperatureMap[i];
-                double windU = state.WindUMap[i];
-                var isOcean = h < 0;
-                var moistBase = isOcean ? 1.0 : 0.4;
-                var tempFactor = Math.Max(0, (temp + 10) / 50);
-                var moisture = moistBase * tempFactor;
+                var latDeg = 90.0 - (double)row / (gridSize - 1) * 180;
+                var absLat = Math.Abs(latDeg);
 
-                var oroMult = 1.0;
-                if (h > OROG_HEIGHT)
+                for (var col = 0; col < gridSize; col++)
                 {
-                    var nc = (col + (windU > 0 ? -1 : 1) + gridSize) % gridSize;
-                    double nh = state.HeightMap[row * gridSize + nc];
-                    oroMult = h > nh ? OROG_WINDWARD * (1 + (h - nh) / 2000) : OROG_LEEWARD;
+                    var i = row * gridSize + col;
+                    var r0 = roll[i * 3 + 0];
+                    var r1 = roll[i * 3 + 1];
+                    var r2 = roll[i * 3 + 2];
+
+                    double h = state.HeightMap[i], temp = state.TemperatureMap[i];
+                    double windU = state.WindUMap[i];
+                    var isOcean = h < 0;
+                    var moistBase = isOcean ? 1.0 : 0.4;
+                    var tempFactor = Math.Max(0, (temp + 10) / 50);
+                    var moisture = moistBase * tempFactor;
+
+                    var oroMult = 1.0;
+                    if (h > OROG_HEIGHT)
+                    {
+                        var nc = (col + (windU > 0 ? -1 : 1) + gridSize) % gridSize;
+                        double nh = state.HeightMap[row * gridSize + nc];
+                        oroMult = h > nh ? OROG_WINDWARD * (1 + (h - nh) / 2000) : OROG_LEEWARD;
+                    }
+
+                    var atPolar = absLat is > 55 and < 65;
+                    var atITCZ = absLat < 10;
+                    double frontalP = 0;
+                    if (atPolar) { frontalP = FRONTAL_PRECIP * moisture * (0.5 + r0); local.fronts++; }
+                    else if (atITCZ) { frontalP = FRONTAL_PRECIP * moisture * 1.5 * (0.7 + 0.6 * r0); local.fronts++; }
+
+                    double cyclonicP = 0;
+                    if (absLat is > 30 and < 60 && r1 < 0.002 * deltaMa)
+                    { cyclonicP = FRONTAL_PRECIP * moisture * (1 + 2 * r2); local.cyclones++; }
+
+                    if (isOcean && temp > CYCLONE_SST && absLat is > CYCLONE_LAT_MIN and < CYCLONE_LAT_MAX
+                        && r2 < 0.0005 * deltaMa)
+                    {
+                        var lon = (double)col / gridSize * 360 - 180;
+                        var intensity = Math.Clamp((int)((temp - CYCLONE_SST) / 2) + 1, 1, 5);
+                        tropicals.Add(new TropicalCyclone { Lat = latDeg, Lon = lon, Intensity = intensity });
+                        cyclonicP += FRONTAL_PRECIP * 4 * moisture;
+                    }
+
+                    var total = (frontalP + cyclonicP) * oroMult * deltaMa;
+                    state.PrecipitationMap[i] = (float)Math.Max(0, state.PrecipitationMap[i] * 0.9 + total * 0.1);
+                    if (state.PrecipitationMap[i] > 10) local.precipCells++;
+
+                    state.CloudTypeMap[i] = (byte)AssignCloud(temp, state.PrecipitationMap[i], moisture, absLat);
+                    state.CloudCoverMap[i] = (float)Math.Clamp(moisture * 0.7 + state.PrecipitationMap[i] / 5000, 0, 1);
                 }
-
-                var atPolar = absLat is > 55 and < 65;
-                var atITCZ = absLat < 10;
-                double frontalP = 0;
-                if (atPolar) { frontalP = FRONTAL_PRECIP * moisture * rng.NextFloat(0.5, 1.5); fronts++; }
-                else if (atITCZ) { frontalP = FRONTAL_PRECIP * moisture * 1.5 * rng.NextFloat(0.7, 1.3); fronts++; }
-
-                double cyclonicP = 0;
-                if (absLat is > 30 and < 60 && rng.NextFloat(0, 1) < 0.002 * deltaMa)
-                { cyclonicP = FRONTAL_PRECIP * moisture * rng.NextFloat(1, 3); cyclones++; }
-
-                if (isOcean && temp > CYCLONE_SST && absLat is > CYCLONE_LAT_MIN and < CYCLONE_LAT_MAX
-                    && rng.NextFloat(0, 1) < 0.0005 * deltaMa)
+                return local;
+            },
+            local =>
+            {
+                lock (lockObj)
                 {
-                    var lon = (double)col / gridSize * 360 - 180;
-                    var intensity = Math.Clamp((int)((temp - CYCLONE_SST) / 2) + 1, 1, 5);
-                    tropicals.Add(new TropicalCyclone { Lat = latDeg, Lon = lon, Intensity = intensity });
-                    cyclonicP += FRONTAL_PRECIP * 4 * moisture;
+                    fronts += local.fronts;
+                    cyclones += local.cyclones;
+                    precipCells += local.precipCells;
                 }
+            });
 
-                var total = (frontalP + cyclonicP) * oroMult * deltaMa;
-                state.PrecipitationMap[i] = (float)Math.Max(0, state.PrecipitationMap[i] * 0.9 + total * 0.1);
-                if (state.PrecipitationMap[i] > 10) precipCells++;
-
-                state.CloudTypeMap[i] = (byte)AssignCloud(temp, state.PrecipitationMap[i], moisture, absLat);
-                state.CloudCoverMap[i] = (float)Math.Clamp(moisture * 0.7 + state.PrecipitationMap[i] / 5000, 0, 1);
-            }
-        }
-        return new WeatherResult { FrontCount = fronts, CycloneCount = cyclones + tropicals.Count, TropicalCyclones = tropicals, PrecipCells = precipCells };
+        var tropicalList = tropicals.ToList();
+        return new WeatherResult { FrontCount = fronts, CycloneCount = cyclones + tropicalList.Count, TropicalCyclones = tropicalList, PrecipCells = precipCells };
     }
 
     private static CloudGenus AssignCloud(double temp, double precip, double moisture, double absLat)

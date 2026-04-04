@@ -169,6 +169,22 @@ app.MapGet("/api/state/organiccarbonmap/binary", (SimulationOrchestrator sim) =>
     return Results.Bytes(packed, "application/x-msgpack");
 }).WithName("GetOrganicCarbonMapBinary");
 
+// Bundle endpoint: height + temperature + precipitation as raw float32 bytes in a single
+// round-trip.  Layout: [height bytes | temp bytes | precip bytes], each array = CellCount * 4 bytes.
+// This eliminates 2 of the 3 HTTP requests and avoids JSON parsing overhead.
+app.MapGet("/api/state/bundle/binary", (SimulationOrchestrator sim) =>
+{
+    var height = sim.State.HeightMap;
+    var temp   = sim.State.TemperatureMap;
+    var precip = sim.State.PrecipitationMap;
+    var floatBytes = height.Length * sizeof(float);
+    var result = new byte[floatBytes * 3];
+    Buffer.BlockCopy(height, 0, result, 0,              floatBytes);
+    Buffer.BlockCopy(temp,   0, result, floatBytes,     floatBytes);
+    Buffer.BlockCopy(precip, 0, result, floatBytes * 2, floatBytes);
+    return Results.Bytes(result, "application/octet-stream");
+}).WithName("GetStateBundleBinary");
+
 // ── Snapshot Management Endpoints ─────────────────────────────────────────────
 
 app.MapPost("/api/snapshots/take", (SimulationOrchestrator sim) =>

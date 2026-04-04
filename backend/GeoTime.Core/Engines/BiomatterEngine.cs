@@ -229,6 +229,13 @@ public sealed class BiomatterEngine(
             double biomatter = sv.BiomatterMap[i];
             double orgCarbon = sv.OrganicCarbonMap[i];
 
+            // Fast path: skip cells that have not changed and have no existing biomatter.
+            if (!sv.DirtyMask[i] && biomatter < 1e-4f && orgCarbon < 1e-4f)
+            {
+                // No biomatter to accumulate, nothing to compute.
+                continue;
+            }
+
             var isOcean = h < 0;
             var isShallow = isOcean && -h <= 200;
 

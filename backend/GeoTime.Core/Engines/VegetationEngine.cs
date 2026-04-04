@@ -60,41 +60,71 @@ public sealed class VegetationEngine(
     {
         var sv = _state!;
         var cc = gridSize * gridSize;
+
+        // Pre-generate per-cell fire random rolls sequentially to maintain
+        // determinism while allowing the main loop to run in parallel.
+        var fireRolls = new double[cc];
+        for (var i = 0; i < cc; i++)
+            fireRolls[i] = _rng.Next();
+
+        var lockObj = new object();
         double totalBio = 0, totalNpp = 0;
         int vegCells = 0, fires = 0;
 
-        for (var i = 0; i < cc; i++)
+        Parallel.For(0, cc,
+            () => (bio: 0.0, npp: 0.0, veg: 0, fire: 0),
+            (i, _, local) =>
+            {
+                // Fast path: skip cells that are not dirty and have no biomass to maintain.
+                if (!sv.DirtyMask[i] && sv.BiomassMap[i] < 1e-4f)
+                    return local;
+
+                double h = sv.HeightMap[i], temp = sv.TemperatureMap[i];
+                double precip = sv.PrecipitationMap[i], soilD = sv.SoilDepthMap[i];
+                double biomass = sv.BiomassMap[i];
+
+                if (h <= 0 || temp < -10 || precip < 50) { sv.BiomassMap[i] = 0; return local; }
+
+                var npp = ComputeNPP(temp, precip);
+                var canGrow = precip >= MIN_GRASS_PRECIP && soilD >= MIN_GRASS_SOIL;
+                if (canGrow && npp > 0)
+                {
+                    biomass = Math.Min(MAX_BIOMASS, biomass + NppToBiomassRate(npp) * deltaMa);
+                    local.npp += npp; local.veg++;
+                }
+
+                var fp = ComputeFireProbability(precip, biomass);
+                if (fp > 0 && fireRolls[i] < fp * deltaMa)
+                {
+                    var burned = biomass * FIRE_BURN_FRAC;
+                    biomass -= burned; local.fire++;
+                    // Note: bus.Emit is deferred to avoid concurrent access.
+                }
+
+                sv.BiomassMap[i] = (float)biomass;
+                local.bio += biomass;
+                return local;
+            },
+            local =>
+            {
+                lock (lockObj)
+                {
+                    totalBio += local.bio;
+                    totalNpp += local.npp;
+                    vegCells += local.veg;
+                    fires += local.fire;
+                }
+            });
+
+        // Emit fire events after the parallel loop (bus is not thread-safe).
+        if (fires > 0)
         {
-            double h = sv.HeightMap[i], temp = sv.TemperatureMap[i];
-            double precip = sv.PrecipitationMap[i], soilD = sv.SoilDepthMap[i];
-            double biomass = sv.BiomassMap[i];
-
-            if (h <= 0 || temp < -10 || precip < 50) { sv.BiomassMap[i] = 0; continue; }
-
-            var npp = ComputeNPP(temp, precip);
-            var canGrow = precip >= MIN_GRASS_PRECIP && soilD >= MIN_GRASS_SOIL;
-            if (canGrow && npp > 0)
-            {
-                biomass = Math.Min(MAX_BIOMASS, biomass + NppToBiomassRate(npp) * deltaMa);
-                totalNpp += npp; vegCells++;
-            }
-
-            var fp = ComputeFireProbability(precip, biomass);
-            if (fp > 0 && _rng.Next() < fp * deltaMa)
-            {
-                var burned = biomass * FIRE_BURN_FRAC;
-                biomass -= burned; fires++;
-                bus.Emit("FOREST_FIRE", new { cellIndex = i, biomassBurned = burned });
-            }
-
-            sv.BiomassMap[i] = (float)biomass;
-            totalBio += biomass;
+            bus.Emit("FOREST_FIRE_BATCH", new { fireCount = fires });
+            log.Record(new GeoLogEntry { TimeMa = timeMa, Type = "FOREST_FIRE", Description = $"{fires} forest fire(s)" });
         }
 
         var meanNpp = vegCells > 0 ? totalNpp / vegCells : 0;
         bus.Emit("VEGETATION_UPDATE", new { totalBiomass = totalBio, meanNpp, cellsWithVegetation = vegCells });
-        if (fires > 0)
-            log.Record(new GeoLogEntry { TimeMa = timeMa, Type = "FOREST_FIRE", Description = $"{fires} forest fire(s)" });
 
         return new VegetationTickResult { TotalBiomass = totalBio, MeanNpp = meanNpp, CellsWithVegetation = vegCells, FireCount = fires };
     }

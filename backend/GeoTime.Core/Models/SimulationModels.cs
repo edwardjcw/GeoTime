@@ -30,6 +30,13 @@ public sealed class SimulationState
     public float[] BiomatterMap { get; }
     public float[] OrganicCarbonMap { get; }
 
+    /// <summary>
+    /// Dirty mask: true for cells that changed significantly in the last tick and
+    /// need full reprocessing in vegetation/biomatter engines.  Initialized to true
+    /// (all dirty) so the first tick processes every cell.
+    /// </summary>
+    public bool[] DirtyMask { get; }
+
     public SimulationState(int gridSize = GridConstants.GRID_SIZE)
     {
         GridSize = gridSize;
@@ -51,6 +58,10 @@ public sealed class SimulationState
         BiomassMap = new float[CellCount];
         BiomatterMap = new float[CellCount];
         OrganicCarbonMap = new float[CellCount];
+
+        // All cells start dirty so the first tick fully processes every cell.
+        DirtyMask = new bool[CellCount];
+        Array.Fill(DirtyMask, true);
     }
 }
 
