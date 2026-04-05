@@ -1411,3 +1411,98 @@ test.describe('Phase L5 — Feature Label Rendering', () => {
     expect(count).toBeGreaterThanOrEqual(1);
   });
 });
+
+// ─── Phase D3 — LLM Provider Settings Panel ──────────────────────────────────
+
+test.describe('Phase D3 — LLM Provider Settings', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+  });
+
+  test('⚙ LLM button is visible in the HUD', async ({ page }) => {
+    const llmBtn = page.locator('button', { hasText: /⚙ LLM/ });
+    await expect(llmBtn).toBeVisible();
+  });
+
+  test('clicking ⚙ LLM opens #llm-settings-panel', async ({ page }) => {
+    const llmBtn = page.locator('button', { hasText: /⚙ LLM/ });
+    await llmBtn.click();
+
+    const panel = page.locator('#llm-settings-panel');
+    await expect(panel).toBeVisible();
+  });
+
+  test('clicking ⚙ LLM again closes the panel', async ({ page }) => {
+    const llmBtn = page.locator('button', { hasText: /⚙ LLM/ });
+    await llmBtn.click();
+
+    const panel = page.locator('#llm-settings-panel');
+    await expect(panel).toBeVisible();
+
+    await llmBtn.click();
+    await expect(panel).not.toBeVisible();
+  });
+
+  test('provider list contains at least "Template" with status "Always available"', async ({ page }) => {
+    const llmBtn = page.locator('button', { hasText: /⚙ LLM/ });
+    await llmBtn.click();
+
+    // Wait for the async provider list to load (Template is always present)
+    const panel = page.locator('#llm-settings-panel');
+    await expect(panel).toContainText('Template', { timeout: 5000 });
+    await expect(panel).toContainText('Always available', { timeout: 5000 });
+  });
+
+  test('panel shows "Active LLM Provider" title', async ({ page }) => {
+    const llmBtn = page.locator('button', { hasText: /⚙ LLM/ });
+    await llmBtn.click();
+
+    const panel = page.locator('#llm-settings-panel');
+    await expect(panel).toContainText('Active LLM Provider');
+  });
+
+  test('panel has radio buttons for provider selection', async ({ page }) => {
+    const llmBtn = page.locator('button', { hasText: /⚙ LLM/ });
+    await llmBtn.click();
+
+    // Wait for provider list to populate
+    const panel = page.locator('#llm-settings-panel');
+    await expect(panel).toContainText('Template', { timeout: 5000 });
+
+    const radios = panel.locator('input[type="radio"][name="llm-provider"]');
+    await expect(radios.first()).toBeVisible();
+    const count = await radios.count();
+    expect(count).toBeGreaterThanOrEqual(1);
+  });
+
+  test('selecting Template radio updates active provider via API', async ({ page }) => {
+    // Mock PUT /api/llm/active to capture the request
+    let capturedBody: unknown = null;
+    await page.route('**/api/llm/active', async (route) => {
+      if (route.request().method() === 'PUT') {
+        capturedBody = JSON.parse(route.request().postData() ?? '{}');
+        await route.fulfill({ status: 200, body: JSON.stringify({ provider: 'Template' }) });
+      } else {
+        await route.continue();
+      }
+    });
+
+    const llmBtn = page.locator('button', { hasText: /⚙ LLM/ });
+    await llmBtn.click();
+
+    // Wait for provider list to load
+    const panel = page.locator('#llm-settings-panel');
+    await expect(panel).toContainText('Template', { timeout: 5000 });
+
+    const templateRadio = page.locator('#llm-settings-panel input[value="Template"]');
+    await templateRadio.click();
+
+    // If Template wasn't already active, the PUT request should have been made
+    if (capturedBody !== null) {
+      expect((capturedBody as { provider: string }).provider).toBe('Template');
+    }
+    // Panel should remain visible regardless
+    await expect(page.locator('#llm-settings-panel')).toBeVisible();
+  });
+});

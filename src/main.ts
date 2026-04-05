@@ -828,6 +828,57 @@ shell.onLogOpen(() => {
   refreshLogPanel();
 });
 
+// ── LLM Settings Panel wiring (Phase D3) ────────────────────────────────────
+
+/** Fetch the provider list and populate the LLM panel. */
+async function refreshLlmPanel(): Promise<void> {
+  try {
+    const providers = await api.getLlmProviders();
+    shell.setLlmProviders(providers);
+  } catch (err) {
+    console.error('Failed to load LLM providers:', err);
+  }
+}
+
+// Wire provider selection / API-key apply
+shell.onLlmSettingsChanged(async (provider, settings) => {
+  try {
+    await api.setLlmActive(provider, settings);
+    // Refresh panel to reflect new active state
+    await refreshLlmPanel();
+  } catch (err) {
+    console.error('Failed to set LLM provider:', err);
+  }
+});
+
+// Wire local-provider setup flow
+shell.onLlmSetup(async (provider) => {
+  try {
+    await api.startLlmSetup(provider);
+    // Open SSE stream for progress events
+    api.openLlmSetupProgress(provider, (event) => {
+      shell.showLlmSetupProgress(event);
+      if (event.isComplete) {
+        // Refresh provider list now that setup is done
+        refreshLlmPanel().catch((err) => console.warn('Failed to refresh LLM panel after setup:', err));
+      }
+    });
+  } catch (err) {
+    console.error(`LLM setup failed for ${provider}:`, err);
+    shell.showLlmSetupProgress({
+      step: 'Error',
+      percentTotal: 0,
+      detail: '',
+      isComplete: false,
+      isError: true,
+      errorMessage: String(err),
+    });
+  }
+});
+
+// Fetch provider list once on startup so the panel is ready when opened
+refreshLlmPanel().catch((err) => console.debug('LLM panel refresh failed at startup (backend may not be ready):', err));
+
 // ── Render loop ─────────────────────────────────────────────────────────────
 // The render loop now only handles display and periodically asks the backend
 // to advance the simulation and fetches updated state.

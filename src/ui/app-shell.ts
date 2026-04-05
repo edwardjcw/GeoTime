@@ -104,6 +104,15 @@ export class AppShell {
   private _windToggleBtn: HTMLButtonElement | null = null;
   private _windActive = false;
 
+  // ── LLM Settings panel (Phase D3) ───────────────────────────────────────
+  private _llmBtn: HTMLButtonElement = document.createElement('button');
+  private _llmPanel: HTMLElement = document.createElement('div');
+  private _llmPanelOpen = false;
+  private _llmProviderListEl: HTMLElement = document.createElement('div');
+  private _llmSetupPanelEl: HTMLElement = document.createElement('div');
+  private _llmSettingsChangedCb: ((provider: string, settings?: { apiKey?: string; model?: string; baseUrl?: string }) => void) | null = null;
+  private _llmSetupCb: ((provider: string) => void) | null = null;
+
   // ── Callbacks ───────────────────────────────────────────────────────────
   private newPlanetCb: (() => void) | null = null;
   private pauseToggleCb: (() => void) | null = null;
@@ -497,7 +506,71 @@ export class AppShell {
 
     this.root.appendChild(this.logPanel);
 
-    this.hud.append(this.fpsEl, this.triEl, this.timeEl, this.pauseBtn, this.firstPersonEl, this.computeEl, this.progressEl, this.logBtn);
+    // ── LLM Settings button and panel (Phase D3) ──────────────────────────
+    this._llmBtn = document.createElement('button');
+    this._llmBtn.textContent = '⚙ LLM';
+    this._llmBtn.title = 'LLM provider settings';
+    Object.assign(this._llmBtn.style, {
+      background: 'none',
+      border: 'none',
+      color: '#ccc',
+      cursor: 'pointer',
+      fontSize: '12px',
+      padding: '2px 6px',
+      borderRadius: '3px',
+      fontFamily: 'monospace',
+    });
+    this._llmBtn.addEventListener('click', () => this._toggleLlmPanel());
+    this._llmBtn.addEventListener('mouseenter', () => { this._llmBtn.style.background = 'rgba(255,255,255,0.1)'; });
+    this._llmBtn.addEventListener('mouseleave', () => { this._llmBtn.style.background = this._llmPanelOpen ? 'rgba(255,255,255,0.15)' : 'none'; });
+
+    // LLM settings side-panel (non-blocking; globe stays visible)
+    this._llmPanel = el('div', {
+      position: 'absolute',
+      top: '36px',
+      right: '260px',
+      width: '320px',
+      maxHeight: 'calc(100% - 56px)',
+      background: 'rgba(10,10,18,0.96)',
+      border: '1px solid rgba(255,255,255,0.14)',
+      borderRadius: '6px',
+      padding: '12px 14px',
+      display: 'none',
+      flexDirection: 'column',
+      gap: '8px',
+      zIndex: '28',
+      color: '#ddd',
+      fontSize: '12px',
+      fontFamily: 'monospace',
+      overflowY: 'auto',
+      pointerEvents: 'auto',
+    });
+    this._llmPanel.id = 'llm-settings-panel';
+
+    const llmTitle = document.createElement('div');
+    llmTitle.textContent = 'Active LLM Provider';
+    Object.assign(llmTitle.style, { fontWeight: 'bold', fontSize: '13px', marginBottom: '4px' });
+    this._llmPanel.appendChild(llmTitle);
+
+    this._llmProviderListEl = el('div', { display: 'flex', flexDirection: 'column', gap: '6px' });
+    this._llmProviderListEl.textContent = 'Loading…';
+    this._llmPanel.appendChild(this._llmProviderListEl);
+
+    // Setup sub-panel (shown when user clicks Setup ▶ next to a provider)
+    this._llmSetupPanelEl = el('div', {
+      display: 'none',
+      flexDirection: 'column',
+      gap: '4px',
+      marginTop: '8px',
+      padding: '8px',
+      background: 'rgba(255,255,255,0.04)',
+      borderRadius: '4px',
+    });
+    this._llmPanel.appendChild(this._llmSetupPanelEl);
+
+    this.root.appendChild(this._llmPanel);
+
+    this.hud.append(this.fpsEl, this.triEl, this.timeEl, this.pauseBtn, this.firstPersonEl, this.computeEl, this.progressEl, this.logBtn, this._llmBtn);
     this.root.appendChild(this.hud);
 
     // ── Sidebar ───────────────────────────────────────────────────────────
@@ -1267,6 +1340,183 @@ export class AppShell {
   /** Whether the log panel is currently open. */
   get isLogPanelOpen(): boolean { return this.logPanelOpen; }
 
+  // ── LLM Settings Panel API (Phase D3) ──────────────────────────────────
+
+  /**
+   * Populate the LLM provider list panel with the given provider info.
+   * Called by main.ts after fetching GET /api/llm/providers.
+   */
+  setLlmProviders(providers: Array<{
+    name: string;
+    displayName: string;
+    isAvailable: boolean;
+    needsSetup: boolean;
+    activeModel: string | null;
+    statusMessage: string;
+    isActive: boolean;
+  }>): void {
+    this._llmProviderListEl.innerHTML = '';
+    for (const p of providers) {
+      const row = el('div', { display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 0' });
+
+      // Radio button
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'llm-provider';
+      radio.value = p.name;
+      radio.checked = p.isActive;
+      row.appendChild(radio);
+
+      // Name + status
+      const nameEl = document.createElement('span');
+      nameEl.textContent = p.displayName;
+      nameEl.style.flex = '1';
+      nameEl.style.opacity = p.isAvailable ? '1' : '0.5';
+      row.appendChild(nameEl);
+
+      const statusEl = document.createElement('span');
+      statusEl.textContent = p.isAvailable ? `✓ ${p.statusMessage}` : `✗ ${p.statusMessage}`;
+      statusEl.style.fontSize = '10px';
+      statusEl.style.color = p.isAvailable ? '#4c8' : '#f84';
+      statusEl.style.flex = '1.5';
+      row.appendChild(statusEl);
+
+      // Setup button for local providers that need it
+      if (p.needsSetup) {
+        const setupBtn = document.createElement('button');
+        setupBtn.textContent = 'Setup ▶';
+        styleBtn(setupBtn);
+        setupBtn.style.padding = '2px 6px';
+        setupBtn.style.fontSize = '10px';
+        setupBtn.addEventListener('click', () => {
+          this._llmSetupCb?.(p.name);
+          this._showSetupProgress(p.name);
+        });
+        row.appendChild(setupBtn);
+      }
+
+      this._llmProviderListEl.appendChild(row);
+
+      // API key field for cloud providers
+      if (p.name === 'Gemini' || p.name === 'OpenAi' || p.name === 'Anthropic') {
+        const keyRow = el('div', { display: 'none', gap: '4px', paddingLeft: '20px', alignItems: 'center' });
+        const keyInput = document.createElement('input');
+        keyInput.type = 'password';
+        keyInput.placeholder = 'API key';
+        keyInput.style.flex = '1';
+        Object.assign(keyInput.style, {
+          background: 'rgba(255,255,255,0.07)',
+          border: '1px solid rgba(255,255,255,0.15)',
+          borderRadius: '3px',
+          color: '#eee',
+          fontSize: '11px',
+          padding: '3px 6px',
+        });
+        const applyBtn = document.createElement('button');
+        applyBtn.textContent = 'Apply';
+        styleBtn(applyBtn);
+        applyBtn.style.fontSize = '10px';
+        applyBtn.style.padding = '2px 8px';
+        applyBtn.addEventListener('click', () => {
+          if (keyInput.value) {
+            this._llmSettingsChangedCb?.(p.name, { apiKey: keyInput.value });
+          } else {
+            this._llmSettingsChangedCb?.(p.name);
+          }
+        });
+        keyRow.append(keyInput, applyBtn);
+
+        radio.addEventListener('change', () => {
+          if (radio.checked) keyRow.style.display = 'flex';
+        });
+        if (p.isActive) keyRow.style.display = 'flex';
+
+        this._llmProviderListEl.appendChild(keyRow);
+      } else {
+        // For non-cloud providers, selecting the radio triggers the save immediately
+        radio.addEventListener('change', () => {
+          if (radio.checked) this._llmSettingsChangedCb?.(p.name);
+        });
+      }
+    }
+  }
+
+  /**
+   * Show a setup progress event inside the setup sub-panel.
+   * Called by main.ts from the EventSource handler.
+   */
+  showLlmSetupProgress(event: {
+    step: string;
+    percentTotal: number;
+    detail: string;
+    isComplete: boolean;
+    isError: boolean;
+    errorMessage: string | null;
+  }): void {
+    this._llmSetupPanelEl.style.display = 'flex';
+    this._llmSetupPanelEl.innerHTML = '';
+
+    const stepEl = document.createElement('div');
+    stepEl.textContent = event.isError ? `❌ ${event.errorMessage ?? 'Error'}` : `⏳ ${event.step}`;
+    stepEl.style.fontWeight = 'bold';
+    stepEl.style.color = event.isError ? '#f84' : event.isComplete ? '#4c8' : '#ccc';
+    this._llmSetupPanelEl.appendChild(stepEl);
+
+    const progressEl = document.createElement('progress');
+    progressEl.value = event.percentTotal;
+    progressEl.max = 100;
+    progressEl.style.width = '100%';
+    progressEl.style.accentColor = '#4af';
+    this._llmSetupPanelEl.appendChild(progressEl);
+
+    if (event.detail) {
+      const detailEl = document.createElement('div');
+      detailEl.textContent = event.detail;
+      Object.assign(detailEl.style, { fontSize: '10px', opacity: '0.65', fontFamily: 'monospace' });
+      this._llmSetupPanelEl.appendChild(detailEl);
+    }
+
+    if (event.isComplete) {
+      stepEl.textContent = '✓ Complete — provider ready';
+      stepEl.style.color = '#4c8';
+    }
+  }
+
+  /**
+   * Register a callback invoked when the user changes the active LLM provider
+   * or updates its settings (e.g., API key). The callback should call PUT /api/llm/active.
+   */
+  onLlmSettingsChanged(cb: (
+    provider: string,
+    settings?: { apiKey?: string; model?: string; baseUrl?: string }
+  ) => void): void {
+    this._llmSettingsChangedCb = cb;
+  }
+
+  /** Register a callback invoked when the user clicks Setup ▶ for a local provider. */
+  onLlmSetup(cb: (provider: string) => void): void {
+    this._llmSetupCb = cb;
+  }
+
+  /** Programmatically open the LLM settings panel. */
+  openLlmPanel(): void {
+    if (!this._llmPanelOpen) this._toggleLlmPanel();
+  }
+
+  private _showSetupProgress(provider: string): void {
+    this._llmSetupPanelEl.style.display = 'flex';
+    this._llmSetupPanelEl.innerHTML = '';
+    const msg = document.createElement('div');
+    msg.textContent = `⏳ Starting setup for ${provider}…`;
+    this._llmSetupPanelEl.appendChild(msg);
+  }
+
+  private _toggleLlmPanel(): void {
+    this._llmPanelOpen = !this._llmPanelOpen;
+    this._llmPanel.style.display = this._llmPanelOpen ? 'flex' : 'none';
+    this._llmBtn.style.background = this._llmPanelOpen ? 'rgba(255,255,255,0.15)' : 'none';
+  }
+
   dispose(): void {
     this.root.innerHTML = '';
     this.newPlanetCb = null;
@@ -1287,6 +1537,8 @@ export class AppShell {
     this.weatherMonthChangeCb = null;
     this.windToggleCb = null;
     this.abortRequestCb = null;
+    this._llmSettingsChangedCb = null;
+    this._llmSetupCb = null;
   }
 
   // ── Sidebar toggle ─────────────────────────────────────────────────────

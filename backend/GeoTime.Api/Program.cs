@@ -1,4 +1,5 @@
 using GeoTime.Api;
+using GeoTime.Api.Llm;
 using GeoTime.Core;
 using GeoTime.Core.Compute;
 using GeoTime.Core.Engines;
@@ -15,6 +16,40 @@ builder.Services.AddSingleton<CameraStateService>();
 builder.Services.AddSignalR();
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
     p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
+
+// ── LLM Provider Services (Phase D3) ─────────────────────────────────────────
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<LlmSettingsService>();
+builder.Services.AddSingleton<GeminiProvider>(sp =>
+    new GeminiProvider(sp.GetRequiredService<LlmSettingsService>(),
+                       sp.GetRequiredService<IHttpClientFactory>().CreateClient("Gemini")));
+builder.Services.AddSingleton<OpenAiProvider>(sp =>
+    new OpenAiProvider(sp.GetRequiredService<LlmSettingsService>(),
+                       sp.GetRequiredService<IHttpClientFactory>().CreateClient("OpenAi")));
+builder.Services.AddSingleton<AnthropicProvider>(sp =>
+    new AnthropicProvider(sp.GetRequiredService<LlmSettingsService>(),
+                          sp.GetRequiredService<IHttpClientFactory>().CreateClient("Anthropic")));
+builder.Services.AddSingleton<OllamaProvider>(sp =>
+    new OllamaProvider(sp.GetRequiredService<LlmSettingsService>(),
+                       sp.GetRequiredService<IHttpClientFactory>().CreateClient("Ollama")));
+builder.Services.AddSingleton<LlamaSharpProvider>(sp =>
+    new LlamaSharpProvider(sp.GetRequiredService<LlmSettingsService>()));
+builder.Services.AddSingleton<TemplateFallbackProvider>();
+builder.Services.AddSingleton<LlmProviderFactory>(sp => new LlmProviderFactory(
+    sp.GetRequiredService<LlmSettingsService>(),
+    new ILlmProvider[]
+    {
+        sp.GetRequiredService<GeminiProvider>(),
+        sp.GetRequiredService<OpenAiProvider>(),
+        sp.GetRequiredService<AnthropicProvider>(),
+        sp.GetRequiredService<OllamaProvider>(),
+        sp.GetRequiredService<LlamaSharpProvider>(),
+        sp.GetRequiredService<TemplateFallbackProvider>(),
+    }));
+builder.Services.AddSingleton<LocalLlmSetupService>(sp => new LocalLlmSetupService(
+    sp.GetRequiredService<LlmSettingsService>(),
+    sp.GetRequiredService<IHttpClientFactory>().CreateClient("Setup"),
+    sp.GetRequiredService<LlamaSharpProvider>()));
 
 var app = builder.Build();
 
@@ -441,6 +476,92 @@ app.MapGet("/api/state/features/labels", (SimulationOrchestrator sim) =>
     return Results.Ok(labels);
 }).WithName("GetFeatureLabels");
 
+// ── LLM Settings Endpoints (Phase D3) ────────────────────────────────────────
+
+// GET /api/llm/providers — list all providers with current status
+app.MapGet("/api/llm/providers", async (LlmProviderFactory factory, LlmSettingsService settings) =>
+{
+    var activeProvider = settings.ActiveProvider;
+    var tasks = factory.GetAllProviders().Select(async p =>
+    {
+        var status = await p.GetStatusAsync();
+        var cfg = settings.ProviderConfigs.TryGetValue(p.Name, out var c) ? c : new ProviderSettings();
+        return new
+        {
+            name         = p.Name,
+            displayName  = p.Name,
+            isAvailable  = p.IsAvailable,
+            needsSetup   = status.NeedsSetup,
+            activeModel  = cfg.Model,
+            statusMessage = status.StatusMessage,
+            isActive     = p.Name.Equals(activeProvider, StringComparison.OrdinalIgnoreCase),
+        };
+    });
+    var results = await Task.WhenAll(tasks);
+    return Results.Ok(results);
+}).WithName("GetLlmProviders");
+
+// GET /api/llm/active — return active provider name and its settings (key redacted)
+app.MapGet("/api/llm/active", (LlmSettingsService settings) =>
+{
+    var name = settings.ActiveProvider;
+    var cfg  = settings.ProviderConfigs.TryGetValue(name, out var c) ? c : new ProviderSettings();
+    return Results.Ok(new
+    {
+        provider = name,
+        model    = cfg.Model,
+        baseUrl  = cfg.BaseUrl,
+        hasApiKey = !string.IsNullOrWhiteSpace(cfg.ApiKey),
+    });
+}).WithName("GetActiveLlmProvider");
+
+// PUT /api/llm/active — update active provider + config at runtime
+app.MapPut("/api/llm/active", (LlmActiveRequest req, LlmSettingsService settings) =>
+{
+    settings.SetActiveProvider(req.Provider);
+    if (req.Settings != null)
+        settings.UpdateProviderConfig(req.Provider, req.Settings);
+    settings.Save();
+    return Results.Ok(new { provider = settings.ActiveProvider });
+}).WithName("SetActiveLlmProvider");
+
+// POST /api/llm/setup/{provider} — start local provider setup (Ollama or LlamaSharp)
+app.MapPost("/api/llm/setup/{provider}", (string provider, LocalLlmSetupService setup) =>
+{
+    var localProviders = new[] { "Ollama", "LlamaSharp" };
+    if (!localProviders.Any(p => p.Equals(provider, StringComparison.OrdinalIgnoreCase)))
+        return Results.BadRequest($"Setup is only available for local providers: {string.Join(", ", localProviders)}");
+
+    setup.StartSetup(provider);
+    return Results.Accepted($"/api/llm/setup/{provider}/progress",
+        new { provider, message = "Setup started. Monitor progress at the SSE endpoint." });
+}).WithName("StartLlmSetup");
+
+// GET /api/llm/setup/{provider}/progress — SSE stream of LlmSetupProgress events
+app.MapGet("/api/llm/setup/{provider}/progress", async (string provider, LocalLlmSetupService setup,
+    HttpContext ctx, CancellationToken ct) =>
+{
+    var reader = setup.GetProgressReader(provider);
+    if (reader == null)
+    {
+        ctx.Response.StatusCode = 404;
+        await ctx.Response.WriteAsync("No setup in progress for this provider.", ct);
+        return;
+    }
+
+    ctx.Response.ContentType = "text/event-stream";
+    ctx.Response.Headers.CacheControl = "no-cache";
+    ctx.Response.Headers.Connection   = "keep-alive";
+
+    await foreach (var progress in reader.ReadAllAsync(ct))
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(progress);
+        await ctx.Response.WriteAsync($"data: {json}\n\n", ct);
+        await ctx.Response.Body.FlushAsync(ct);
+        if (progress.IsComplete || progress.IsError) break;
+    }
+}).WithName("GetLlmSetupProgress");
+
 app.Run();
 
 // ── Request DTOs ──────────────────────────────────────────────────────────────
@@ -451,6 +572,7 @@ record PointDto(double Lat, double Lon);
 record CrossSectionRequest(List<PointDto> Points);
 record RestoreSnapshotRequest(double TargetTimeMa);
 record AdaptiveResolutionRequest(bool Enabled);
+record LlmActiveRequest(string Provider, GeoTime.Api.Llm.ProviderSettings? Settings);
 
 // ── Make Program class accessible for integration tests ──
 namespace GeoTime.Api
