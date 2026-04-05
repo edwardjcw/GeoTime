@@ -103,3 +103,33 @@ npx playwright test  # E2E
 - [x] `backend/GeoTime.Tests/SignalRIntegrationTests.cs` — `Hub_AdvanceSimulation_ReceivesFeaturesUpdated` (L6)
 
 **Test count**: 287 (previous) + 3 new backend = **290 total backend tests passing**; 368 (previous) + 11 new frontend = **379 total frontend tests passing**
+
+---
+
+## Bug Fixes (this session)
+
+### Bug Fix: GPU Selection (Frontend WebGL Renderer)
+
+- [x] `src/render/globe-renderer.ts` — Added `powerPreference: 'high-performance'` to `THREE.WebGLRenderer` so the browser's OS GPU selection mechanism prefers the dedicated NVIDIA GPU over the integrated Intel GPU.
+
+### Bug Fix: Tick Timing Diagnostic in Event Log
+
+- [x] `backend/GeoTime.Core/SimulationOrchestrator.cs` — After each `AdvanceSimulationCore` tick, records a `TICK_STATS` GeoLogEntry with per-phase millisecond breakdown (Tectonic / Surface / Atmo / Veg / Bio / Total). These entries appear in the event log panel to help diagnose why ticks are slow at early simulation times.
+
+### Bug Fix: Agent Status Shows "running" During Advance
+
+- [x] `src/main.ts` — When a simulation advance HTTP request is dispatched, all agent statuses are immediately set to `'running'` so the status panel shows activity during the computation. SignalR progress events update per-phase status as they arrive; the HTTP response handler sets final `'done'`/`'idle'` states.
+
+---
+
+## Phase D1 — Comprehensive Geological Data Model ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Core/Models/StratigraphyModels.cs` — New file: `LayerEventType` enum (Normal, ImpactEjecta, VolcanicAsh, VolcanicSoot, GammaRayBurst, OceanAnoxicEvent, SnowballGlacial, IronFormation, MeteoriticIron, MassExtinction, CarbonIsotopeExcursion); `StratigraphicColumn` class with `Layers`, `Surface`, `TotalThicknessM`, `ExtraordinaryLayers`
+- [x] `backend/GeoTime.Core/Models/SimulationModels.cs` — Extended `StratigraphicLayer` with event-horizon fields: `LayerEventType EventType`, `string? EventId`, `float IsotopeAnomaly`, `float OrganicCarbonFraction`, `float SootConcentrationPpm`, `bool IsGlobal`; updated `Clone()` to copy new fields
+- [x] `backend/GeoTime.Core/Engines/EventDepositionEngine.cs` — New engine: `Deposit(state, stratigraphy, tickEvents, timeMa)` processes each GeoLogEntry for the tick and deposits appropriate event-horizon layers; rules for IMPACT (1/r² ejecta falloff, global distal layer), VOLCANIC_ERUPTION (ash cone + global soot), GRB (global isotope spike), OCEAN_ANOXIC_EVENT (submerged cells), SNOWBALL_EARTH (land cells), CARBON_ISOTOPE_EXCURSION (global); all deposition in parallel
+- [x] `backend/GeoTime.Core/SimulationOrchestrator.cs` — Extended `CellInspection` with D1 fields: `StratigraphicColumn Column`, `List<string> FeatureIds`, `string? RiverName`, `string? WatershedFeatureId`, `float DistanceToPlateMarginKm`, `BoundaryType NearestMarginType`, `float EstimatedRockAgeMyears`, `List<GeoLogEntry> LocalEvents`; updated `InspectCell` to populate all new fields; wired `EventDepositionEngine` in `AdvanceSimulationCore`; captures `logLengthBefore` to pass only new-tick events to the deposition engine
+- [x] `backend/GeoTime.Tests/StratigraphyTests.cs` — Extended with 8 D1 tests: event field defaults on StratigraphicLayer, Clone copies event fields, StratigraphicColumn Surface returns top layer, ExtraordinaryLayers filters Normal layers, EventDepositionEngine deposits ImpactEjecta in nearby cells, GRB deposits in all cells with IsotopeAnomaly > 0, ejecta thickness falls off with distance, CellInspection FeatureIds includes feature
+
+**Test count**: 290 (previous) + 8 new backend = **298 total backend tests passing**

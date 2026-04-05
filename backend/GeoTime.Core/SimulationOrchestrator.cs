@@ -55,6 +55,7 @@ public sealed class SimulationOrchestrator : IDisposable
     private CrossSectionEngine? _crossSection;
     private readonly FeatureDetectorService _featureDetector = new();
     private readonly FeatureEvolutionTracker _featureEvolution = new();
+    private readonly EventDepositionEngine _eventDeposition = new();
 
     private PlanetGeneratorResult? _planetResult;
     private uint _currentSeed;
@@ -144,6 +145,9 @@ public sealed class SimulationOrchestrator : IDisposable
         var sw    = new Stopwatch();
         var stats = new SimulationTickStats { TimeMa = Clock.T + deltaMa };
 
+        // Capture current log length so we can identify events added this tick.
+        var logLengthBefore = EventLog.Length;
+
         Clock.T += deltaMa;
 
         // Tectonic must run first (it updates boundaries, heights, plate map)
@@ -186,8 +190,29 @@ public sealed class SimulationOrchestrator : IDisposable
                 State.FeatureRegistry.LastUpdatedTick);
         }
 
+        // Phase D1: deposit event-horizon layers for events raised this tick.
+        if (_tectonic != null)
+        {
+            var tickEvents = EventLog.GetAll()
+                .Skip(logLengthBefore)
+                .ToList();
+            if (tickEvents.Count > 0)
+                _eventDeposition.Deposit(State, _tectonic.Stratigraphy, tickEvents, Clock.T);
+        }
+
         stats.TotalMs = total.ElapsedMilliseconds;
         LastTickStats = stats;
+
+        // Log per-tick timing so the event log helps diagnose slow ticks.
+        if (stats.TotalMs > 0)
+        {
+            EventLog.Record(new GeoLogEntry
+            {
+                TimeMa = Clock.T,
+                Type = "TICK_STATS",
+                Description = $"Total={stats.TotalMs}ms | Tectonic={stats.TectonicMs}ms | Surface={stats.SurfaceMs}ms | Atmo={stats.AtmosphereMs}ms | Veg={stats.VegetationMs}ms | Bio={stats.BiomatterMs}ms",
+            });
+        }
 
         onProgress?.Invoke("complete");
     }
@@ -309,6 +334,85 @@ public sealed class SimulationOrchestrator : IDisposable
                           && temp is >= BiomatterEngine.REEF_MIN_TEMP and <= BiomatterEngine.REEF_MAX_TEMP
                           && State.BiomatterMap[cellIndex] > 0;
 
+        // ── Phase D1: extended fields ─────────────────────────────────────────
+
+        // Build StratigraphicColumn from the existing stratigraphy stack.
+        StratigraphicColumn? column = null;
+        if (_tectonic != null)
+        {
+            var layers = _tectonic.Stratigraphy.GetLayers(cellIndex);
+            column = new StratigraphicColumn { Layers = [..layers] };
+        }
+
+        // Collect feature IDs that contain this cell.
+        var featureIds = State.FeatureRegistry.Features.Values
+            .Where(f => f.CellIndices.Contains(cellIndex))
+            .Select(f => f.Id)
+            .ToList();
+
+        // River name: find a river feature whose cells include this cell.
+        string? riverName = null;
+        string? watershedId = null;
+        foreach (var feat in State.FeatureRegistry.Features.Values)
+        {
+            if (feat.CellIndices.Contains(cellIndex))
+            {
+                if (feat.Type == FeatureType.River && riverName == null)
+                    riverName = feat.Current.Name;
+                if (feat.Type is FeatureType.Lake or FeatureType.Ocean or FeatureType.Sea
+                    && watershedId == null)
+                    watershedId = feat.Id;
+            }
+        }
+
+        // Nearest plate boundary distance and type.
+        float distToMarginKm = float.MaxValue;
+        var   nearestMarginType = BoundaryType.NONE;
+        if (_tectonic != null)
+        {
+            var plates = _tectonic.GetPlates().ToList();
+            var boundaries = BoundaryClassifier.Classify(State.PlateMap, plates, State.GridSize);
+            int row = cellIndex / State.GridSize;
+            int col = cellIndex % State.GridSize;
+            double cellLat = 90.0 - (row + 0.5) * 180.0 / State.GridSize;
+            double cellLon = (col + 0.5) * 360.0 / State.GridSize - 180.0;
+
+            foreach (var b in boundaries)
+            {
+                int br = b.CellIndex / State.GridSize;
+                int bc = b.CellIndex % State.GridSize;
+                double bLat = 90.0 - (br + 0.5) * 180.0 / State.GridSize;
+                double bLon = (bc + 0.5) * 360.0 / State.GridSize - 180.0;
+                float dKm = (float)(CrossSectionEngine.CentralAngle(cellLat, cellLon, bLat, bLon)
+                             * CrossSectionEngine.EARTH_RADIUS_KM);
+                if (dKm < distToMarginKm)
+                {
+                    distToMarginKm     = dKm;
+                    nearestMarginType  = b.Type;
+                }
+            }
+            if (distToMarginKm == float.MaxValue) distToMarginKm = 0f;
+        }
+
+        // Estimated rock age in million years (current time − deposition time).
+        float estimatedRockAgeMy = 0f;
+        if (column?.Surface != null)
+            estimatedRockAgeMy = (float)(Clock.T - column.Surface.AgeDeposited);
+
+        // Local events: all log entries that have a location within one cell-width (~39 km).
+        var cellWidthKm = (float)(Math.PI * CrossSectionEngine.EARTH_RADIUS_KM / State.GridSize);
+        int cellRow = cellIndex / State.GridSize;
+        int cellCol = cellIndex % State.GridSize;
+        double lat0 = 90.0 - (cellRow + 0.5) * 180.0 / State.GridSize;
+        double lon0 = (cellCol + 0.5) * 360.0 / State.GridSize - 180.0;
+        var localEvents = EventLog.GetAll()
+            .Where(e => e.Location.HasValue
+                && (float)(CrossSectionEngine.CentralAngle(lat0, lon0,
+                    e.Location.Value.Lat, e.Location.Value.Lon)
+                    * CrossSectionEngine.EARTH_RADIUS_KM) <= cellWidthKm * 2)
+            .OrderBy(e => e.TimeMa)
+            .ToList();
+
         return new CellInspection
         {
             CellIndex = cellIndex,
@@ -325,6 +429,15 @@ public sealed class SimulationOrchestrator : IDisposable
             BiomatterDensity = State.BiomatterMap[cellIndex],
             OrganicCarbon = State.OrganicCarbonMap[cellIndex],
             ReefPresent = reefPresent,
+            // D1 fields:
+            Column = column,
+            FeatureIds = featureIds,
+            RiverName = riverName,
+            WatershedFeatureId = watershedId,
+            DistanceToPlateMarginKm = distToMarginKm,
+            NearestMarginType = nearestMarginType,
+            EstimatedRockAgeMyears = estimatedRockAgeMy,
+            LocalEvents = localEvents,
         };
     }
 
@@ -480,4 +593,33 @@ public sealed class CellInspection
     public float BiomatterDensity { get; set; }
     public float OrganicCarbon { get; set; }
     public bool ReefPresent { get; set; }
+
+    // ── Phase D1: extended geological context ─────────────────────────────────
+
+    /// <summary>Full stratigraphic column for this cell (oldest layer first).</summary>
+    public StratigraphicColumn? Column { get; set; }
+
+    /// <summary>IDs of all detected geographic features that contain this cell.</summary>
+    public List<string> FeatureIds { get; set; } = [];
+
+    /// <summary>Name of the river flowing through this cell, or null.</summary>
+    public string? RiverName { get; set; }
+
+    /// <summary>Feature ID of the watershed basin this cell drains into, or null.</summary>
+    public string? WatershedFeatureId { get; set; }
+
+    /// <summary>Distance in km to the nearest tectonic plate boundary.</summary>
+    public float DistanceToPlateMarginKm { get; set; }
+
+    /// <summary>Type of the nearest plate boundary (CONVERGENT, DIVERGENT, TRANSFORM, or NONE).</summary>
+    public BoundaryType NearestMarginType { get; set; }
+
+    /// <summary>
+    /// Estimated age of the surface rock in millions of sim-years, derived from
+    /// <see cref="RockAge"/> and the current simulation time.
+    /// </summary>
+    public float EstimatedRockAgeMyears { get; set; }
+
+    /// <summary>All geologic events that have affected this cell, ordered by simulation time.</summary>
+    public List<GeoLogEntry> LocalEvents { get; set; } = [];
 }

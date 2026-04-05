@@ -1021,6 +1021,11 @@ function loop(now: number): void {
       simAccum = 0;
 
       shell.setProgressText('⏳ Advancing…');
+      // Mark all agents as running immediately so the panel shows activity during the request.
+      for (const key of Object.keys(agentStatuses)) {
+        agentStatuses[key] = 'running';
+      }
+      shell.updateAgentStatuses(agentStatuses);
       simRequestController = new AbortController();
       api.advanceSimulation(deltaMa, simRequestController.signal)
         .then(async (result) => {
