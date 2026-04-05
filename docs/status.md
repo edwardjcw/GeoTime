@@ -57,18 +57,26 @@ npx playwright test  # E2E
 
 ## Remaining Phases
 
-### Phase L3 — Hydrological & Atmospheric Feature Detection
-- Rivers via D8 flow routing (affects terrain erosion → wire into simulation, not just a label)
-- Lakes, inland seas (endorheic basins)
-- ITCZ, jet streams, monsoon belts, hurricane corridors
-- Tests: D8 flow-routing on synthetic grid, ITCZ band detection
-- **Note**: Rivers should affect terrain via enhanced erosion in river channels — integrate with `SurfaceEngine`/`ErosionEngine`
+### Phase L3 — Hydrological & Atmospheric Feature Detection ✅
 
-### Phase L4 — Temporal History and Name Evolution
-- `FeatureEvolutionTracker.cs` — tick-by-tick diff (SPLIT, MERGE, AREA_SHIFT, SUBMERGENCE, etc.)
-- `GET /api/state/features?tick=N` — already structurally supported in L2
-- `GET /api/state/features/{id}/history` endpoint
-- Tests: continent split scenario, river capture, deep-time re-exposure
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Core/Models/SimulationModels.cs` — Added `float[] RiverChannelMap` to `SimulationState` (flow-accumulation values populated by HydroDetectorService each tick; used by ErosionEngine)
+- [x] `backend/GeoTime.Core/Services/HydroDetectorService.cs` — D8 flow routing (`ComputeFlowDirection`, `ComputeFlowAccumulation`), river main-stem tracing, lake/inland-sea detection (endorheic basins), ITCZ detection, jet-stream detection (both hemispheres), monsoon belt detection, hurricane corridor detection
+- [x] `backend/GeoTime.Core/Engines/ErosionEngine.cs` — Added `RiverChannelErosionBoost` (3×) for cells where `RiverChannelMap[i] ≥ 500`; river channels erode 3× faster than general landscape
+- [x] `backend/GeoTime.Core/Services/FeatureDetectorService.cs` — Wires `HydroDetectorService.Detect()` at end of `Detect()`, after primary feature detection
+- [x] `backend/GeoTime.Tests/HydroDetectorTests.cs` — 13 unit tests: D8 flow direction (downhill, pit, valley), flow accumulation (outlet highest, source=1), river channel map written to state, ITCZ detected near equator, ITCZ always created, jet streams at mid-latitudes, lake in endorheic basin, hurricane corridor with high SST, river delta type metrics
+
+### Phase L4 — Temporal History and Name Evolution ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Core/Services/FeatureEvolutionTracker.cs` — Tick-by-tick feature matching (by ID), change classification (SUBMERGENCE, EXPOSURE, AREA_SHIFT_MAJOR), split detection (new feature overlaps old by ≥30% cells), merge detection (new feature absorbs 2+ old features), name evolution on split (directional prefix) and merge (portmanteau); type-group filtering prevents cross-category false matches
+- [x] `backend/GeoTime.Core/SimulationOrchestrator.cs` — `FeatureEvolutionTracker.Track()` called after `FeatureDetectorService.Detect()` each tick to preserve full temporal history
+- [x] `backend/GeoTime.Api/Program.cs` — Added `GET /api/state/features/{id}/history` endpoint returning the feature's full `History` list
+- [x] `backend/GeoTime.Tests/FeatureEvolutionTests.cs` — 9 unit tests: new feature retained (FEATURE_BORN), extinct feature has closing snapshot (FEATURE_EXTINCT), history accumulated across 3 ticks, AREA_SHIFT_MAJOR adds new snapshot, continent split produces child with SplitFromId, submergence changes status and name, deep-time re-exposure generates fresh name, history endpoint has multiple snapshots, split children have divergent names
+
+**Test count**: 265 (previous) + 13 (L3) + 9 (L4) = **287 total backend tests passing**
 
 ### Phase L5 — Frontend: Minimal Label Rendering
 - `src/api/backend-client.ts` — `fetchFeatureLabels()` method

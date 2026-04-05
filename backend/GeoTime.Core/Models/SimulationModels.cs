@@ -44,6 +44,15 @@ public sealed class SimulationState
     /// </summary>
     public bool[] DirtyMask { get; }
 
+    /// <summary>
+    /// Flow accumulation per cell (number of upstream cells draining through this cell).
+    /// Populated by <see cref="GeoTime.Core.Services.HydroDetectorService"/> each tick.
+    /// Zero means no upstream drainage. High values indicate major river channels.
+    /// Used by <see cref="GeoTime.Core.Engines.ErosionEngine"/> to apply enhanced
+    /// channel erosion along river beds.
+    /// </summary>
+    public float[] RiverChannelMap { get; }
+
     /// <summary>Registry of all detected geographic features on this planet.</summary>
     public FeatureRegistry FeatureRegistry { get; set; } = new();
 
@@ -72,6 +81,8 @@ public sealed class SimulationState
         // All cells start dirty so the first tick fully processes every cell.
         DirtyMask = new bool[CellCount];
         Array.Fill(DirtyMask, true);
+
+        RiverChannelMap = new float[CellCount];
     }
 }
 
