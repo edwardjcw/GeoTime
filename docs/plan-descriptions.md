@@ -2,208 +2,390 @@
 
 ## Overview
 
-When a user clicks the info icon in the cell inspector panel, a Wikipedia-style modal displays a richly written article about the geographic feature at that location (e.g., the mountain range it's part of, the ocean basin, the tectonic context, the climate, and the biome). The description references other named features (plates, oceans, ranges) by their generated names from the Label System plan.
+When a user inspects a cell, the backend assembles a **deep, expert-level geological narrative** about every feature at that location: the tectonic setting, rock formation history, erosion and sediment transport, river systems, watershed dynamics, climate drivers, biome cascades, stratigraphic column, and the full temporal biography of the feature from the planet's earliest tick to the present. The frontend is kept minimal: it only sends a `POST /api/describe` request and renders the returned HTML/text in a modal.
+
+All intelligence — feature context assembly, geological synthesis, and prose generation — runs **server-side in C#**. The LLM layer is pluggable: the user configures a preferred provider (Gemini, OpenAI, Anthropic, Ollama, local GGUF via LlamaSharp) in `appsettings.json`. If no provider is configured, the engine falls back to a rich template-based description.
+
+The description integrates **time-dependent history** (e.g., "this cell was once part of the supercontinent Velundra before the Great Rift at tick 1200 separated the Soreth and Ulvan plates") and covers **extraordinary geological events** captured in the stratigraphic column (impact ejecta layers, volcanic soot horizons, gamma-ray burst isotope anomalies, ocean anoxic event marker beds).
 
 ---
 
-## Architecture Decision: Implementation Options
+## Phase D1 — Comprehensive Geological Data Model
 
-### Option A — Template Engine *(Recommended for a first implementation)*
+**Goal**: Extend `SimulationState` and `CellInspection` to carry the full geological context that a description engine needs. Without richer data, descriptions cannot go beyond surface-level observations.
 
-Build a pure TypeScript **narrative template engine** that assembles prose from structured simulation data using fill-in-the-blank sentence patterns.
+### 1.1 — Stratigraphic Column Model (`backend/GeoTime.Core/Models/StratigraphyModels.cs`)
 
-**How it works:**
+Each cell already has a rock-type stack. Extend it with:
 
-1. When the user clicks the info icon on the inspect panel, gather all relevant context:
-   - The cell's `CellInspection` data (rock type, elevation, temp, precip, biomass, soil)
-   - The `DetectedFeature` the cell belongs to (from the `FeatureMap` built in the Label System plan)
-   - Nearby features within a radius (nearby plates, ocean/sea, mountain range)
-   - The plate the cell is on (from `/api/state/plates`)
-   - Adjacent plates (for collision context) from `/api/state/plates` + proximity to boundaries
-   - Geological events at this location from `/api/state/events`
+```csharp
+public enum LayerEventType
+{
+    Normal,           // standard sedimentation or volcanic deposition
+    ImpactEjecta,     // distal ejecta blanket from a bolide impact
+    VolcanicAsh,      // tephra horizon from a major eruption or flood basalt
+    VolcanicSoot,     // carbon-rich horizon from an extinction-scale eruption
+    GammaRayBurst,    // cosmogenic isotope spike (10Be, 26Al) from a near-field GRB
+    OceanAnoxicEvent, // black shale, pyrite framboids — ocean oxygen depletion
+    SnowballGlacial,  // diamictite horizon from global glaciation
+    IronFormation,    // banded iron formation from atmospheric oxygen rise
+    MeteoriticIron,   // siderophile-enriched layer from cosmic dust flux anomaly
+    MassExtinction,   // composite geochemical anomaly layer
+    CarbonIsotopeExcursion  // δ13C shift from carbon cycle perturbation
+}
 
-2. Build a `DescriptionContext` object:
+public record StratigraphicLayer(
+    long   SimTickDeposited,
+    float  ThicknessM,
+    RockType RockType,
+    LayerEventType EventType,
+    string? EventId,       // links to GeoLogEntry that caused this layer
+    float  IsotopeAnomaly, // fractional deviation from background (0 = normal)
+    float  OrganicCarbonFraction,
+    float  SootConcentrationPpm,
+    bool   IsGlobal        // true if this horizon is planet-wide (e.g., GRB, mega-impact)
+);
 
-```typescript
-interface DescriptionContext {
-  feature: DetectedFeature;         // primary feature (e.g., mountain range)
-  cell: CellInspection;
-  plate: PlateInfo & { name: string };
-  nearestOcean?: DetectedFeature;
-  collidingPlate?: PlateInfo & { name: string };
-  riftingPlate?: PlateInfo & { name: string };
-  nearbyRange?: DetectedFeature;
-  nearbySea?: DetectedFeature;
-  events: GeoLogEntry[];
-  biomeType: string;                // computed from temp/precip
+public class StratigraphicColumn
+{
+    public List<StratigraphicLayer> Layers { get; init; } = new();
+    // Layers ordered oldest-first; index 0 = basement
+    public StratigraphicLayer Surface => Layers.Last();
 }
 ```
 
-3. Select the correct **article template** based on feature type:
-   - `MOUNTAIN_RANGE_TEMPLATE` — leads with formation (subduction/collision), climate, notable facts
-   - `OCEAN_TEMPLATE` — leads with basin size, bordering continents, currents
-   - `CONTINENT_TEMPLATE` — leads with plate, biomes, topography
-   - `DESERT_TEMPLATE` — leads with aridity cause (rain shadow / subtropical), temperature
-   - `RAINFOREST_TEMPLATE` — leads with precipitation source, biodiversity context
-   - `ISLAND_TEMPLATE` — leads with volcanic/continental origin, isolation
-   - `SEA_TEMPLATE` — leads with enclosed/semi-enclosed geography, salinity context
-   - `LAKE_TEMPLATE` — leads with tectonic or glacial origin, depth
+Add `StratigraphicColumn[]` to `SimulationState` (one per grid cell, populated by existing engines and new event-deposition logic). Each engine that deposits material appends to the column rather than overwriting.
 
-4. Each template is a function `(ctx: DescriptionContext) => string[]` (array of paragraph strings). Templates use conditional clauses:
-   - If `ctx.collidingPlate` exists → use "formed by the subduction of the X Plate under the Y Plate"
-   - If `ctx.nearestOcean` exists → reference warm/cold ocean winds, named sea
-   - If recent volcanism in events → mention active volcanism
-   - If high precipitation → mention moisture source from adjacent ocean
+### 1.2 — Extraordinary Event Deposition (`backend/GeoTime.Core/Engines/EventDepositionEngine.cs`)
 
-5. Return a `FeatureDescription` object:
+A new engine called at the end of each tick's event processing. For each `GeoLogEntry` generated during that tick:
 
-```typescript
-interface FeatureDescription {
-  title: string;               // e.g., "The Transon Mountains"
-  subtitle: string;            // e.g., "Mountain Range · Mamoth Plate"
-  paragraphs: string[];        // 2–4 paragraphs of prose
-  stats: Array<[string, string]>;  // key-value sidebar facts
-  relatedFeatures: string[];   // names of linked features
+| Event Type | Deposition Rule |
+|------------|-----------------|
+| Bolide impact | Deposit `ImpactEjecta` layer in all cells within `ejectaRadiusKm`; global thin layer everywhere else. Ejecta thickness follows `1/r²` falloff from impact site. |
+| Major volcanic eruption (VEI ≥ 7) | Deposit `VolcanicAsh` layer downwind (use zonal wind direction from `ClimateEngine`). Very large eruptions (flood basalts, VEI ≥ 8) also deposit a `VolcanicSoot` horizon globally. |
+| Gamma-ray burst (simulated as rare random event) | Deposit `GammaRayBurst` layer globally with `IsotopeAnomaly` proportional to event intensity. Also apply a temporary spike to UV flux that suppresses surface biota. |
+| Ocean anoxic event (triggered when `O₂` in atmosphere drops below threshold) | Deposit `OceanAnoxicEvent` black-shale layer on all submerged cells. |
+| Snowball glaciation (global temperature < −20 °C average) | Deposit `SnowballGlacial` diamictite layer on all land cells. |
+| Carbon isotope excursion (rapid atmospheric CO₂ change > 50 ppm/tick) | Deposit `CarbonIsotopeExcursion` marker globally. |
+
+### 1.3 — Extended CellInspection (`backend/GeoTime.Core/SimulationOrchestrator.cs`)
+
+Extend `CellInspection` to include:
+- `StratigraphicColumn Column` — the full column for the inspected cell.
+- `List<string> FeatureIds` — IDs of all `DetectedFeature`s that contain this cell (from `FeatureRegistry`).
+- `string? RiverName` — name of the river flowing through this cell (null if none).
+- `string? WatershedFeatureId` — feature ID of the watershed basin this cell drains into.
+- `float DistanceToPlateMarginKm` — distance to the nearest plate boundary.
+- `PlateMarginType NearestMarginType` — type of the nearest boundary (subduction, rift, transform, collision).
+- `float EstimatedRockAgeMyears` — modelled age of the surface rock in millions of sim-years, based on deposition tick and tick-to-million-year scale factor.
+- `List<GeoLogEntry> LocalEvents` — all events that have affected this cell, ordered by tick.
+
+### 1.4 — Phase D1 Tests (`backend/GeoTime.Tests/StratigraphyTests.cs`)
+
+- Advance the simulation with a triggered bolide impact; verify ejecta layers appear in cells within the expected radius, with correct thickness falloff.
+- Trigger a GRB event; verify all cells have a `GammaRayBurst` layer with `IsotopeAnomaly > 0`.
+- Verify `CellInspection` returns the correct `FeatureIds` for a cell known to be inside a mountain range.
+
+---
+
+## Phase D2 — Geological Context Assembler
+
+**Goal**: Build the C# service that converts raw simulation data for a cell into a structured, richly annotated `GeologicalContext` object ready for consumption by either the template engine or the LLM.
+
+### 2.1 — GeologicalContext Model (`backend/GeoTime.Core/Models/DescriptionModels.cs`)
+
+```csharp
+public record GeologicalContext
+{
+    // === Location ===
+    public float Lat { get; init; }
+    public float Lon { get; init; }
+    public long  CurrentTick { get; init; }
+    public string SimAgeDescription { get; init; }  // e.g., "~2.4 billion years"
+
+    // === Cell-level data ===
+    public CellInspection Cell { get; init; }
+    public StratigraphicColumn Column { get; init; }
+
+    // === Feature hierarchy ===
+    public List<DetectedFeature> ContainingFeatures { get; init; }  // sorted by scale: plate > continent > mountain range > river
+    public DetectedFeature? PrimaryLandFeature { get; init; }       // most specific land feature
+    public DetectedFeature? PrimaryWaterFeature { get; init; }      // ocean / sea / lake / river
+
+    // === Tectonic context ===
+    public PlateInfo CurrentPlate { get; init; }
+    public float DistanceToPlateMarginKm { get; init; }
+    public PlateMarginType NearestMarginType { get; init; }
+    public PlateInfo? CollidingPlate { get; init; }
+    public PlateInfo? SubductingPlate { get; init; }
+    public float ConvergenceRateCmPerYear { get; init; }
+
+    // === Hydrological context ===
+    public string? RiverName { get; init; }
+    public float? RiverLengthKm { get; init; }
+    public float? CatchmentAreaKm2 { get; init; }
+    public string? RiverOutletOcean { get; init; }
+    public string? WatershedName { get; init; }
+    public bool IsInEndorheicBasin { get; init; }
+    public float? DrainageGradient { get; init; }
+
+    // === Mountain / orographic context ===
+    public bool IsInMountainRange { get; init; }
+    public string? RangeName { get; init; }
+    public float? RangeMaxElevationM { get; init; }
+    public bool IsOnWindwardSide { get; init; }
+    public bool HasRainShadow { get; init; }
+    public string? MountainOriginType { get; init; }  // "fold-belt", "volcanic arc", "hotspot shield"
+
+    // === Climate context ===
+    public string BiomeType { get; init; }
+    public float MeanTempC { get; init; }
+    public float MeanPrecipMm { get; init; }
+    public bool IsInMonsonZone { get; init; }
+    public bool IsInHurricaneCorridor { get; init; }
+    public bool IsInJetStreamZone { get; init; }
+    public string? NearestOceanCurrentName { get; init; }
+    public bool NearestCurrentIsWarm { get; init; }
+
+    // === Extraordinary events in stratigraphic record ===
+    public List<StratigraphicLayer> ExtraordinaryLayers { get; init; }
+    // Filtered: only layers where EventType != Normal
+
+    // === Full feature history (from FeatureRegistry) ===
+    public List<FeatureSnapshot> PrimaryFeatureHistory { get; init; }
+    // The full timeline of the primary land feature this cell belongs to
+
+    // === Nearby notable features ===
+    public List<(DetectedFeature Feature, float DistanceKm)> NearbyFeatures { get; init; }
+    // Up to 6 nearest named features with distance
 }
 ```
 
-**Pros**: No external dependencies, runs in browser, fully deterministic, fast.  
-**Cons**: Text can feel formulaic; limited variation.
+### 2.2 — Context Assembler Service (`backend/GeoTime.Core/Services/GeologicalContextAssembler.cs`)
+
+`Task<GeologicalContext> AssembleAsync(int cellIndex)`:
+
+1. Fetch `CellInspection` + `StratigraphicColumn` from `SimulationState`.
+2. Look up `FeatureRegistry` to find all features containing `cellIndex`; sort by scale.
+3. Identify tectonic context: find the owning plate, compute nearest boundary distance and type, find converging/subducting neighbour plate if within 500 km.
+4. Identify hydrological context from the `HydroDetector` river network: find which river (if any) this cell is part of, trace to outlet, compute gradient.
+5. Identify orographic context: is the cell in a mountain range? Compute windward/leeward classification.
+6. Identify climate zone membership from `ClimateEngine` outputs.
+7. Filter the stratigraphic column to extract extraordinary layers (EventType ≠ Normal).
+8. Retrieve the `PrimaryFeatureHistory` from the feature's `History` list.
+9. Find the 6 nearest named features within 3000 km.
+10. Return fully populated `GeologicalContext`.
+
+### 2.3 — Phase D2 Tests (`backend/GeoTime.Tests/ContextAssemblerTests.cs`)
+
+- For a cell known to be on a subduction zone, verify `NearestMarginType == Subduction` and `SubductingPlate != null`.
+- For a cell with a known impact layer in its column, verify `ExtraordinaryLayers` is non-empty and contains `ImpactEjecta`.
+- For a cell inside a known river path, verify `RiverName` matches and `RiverLengthKm > 0`.
 
 ---
 
-### Option B — Grammar-Based Sentence Generation
+## Phase D3 — LLM Provider Abstraction
 
-Use a **Tracery-style context-free grammar** (or a custom recursive grammar) to generate more varied prose. Sentences are defined as grammar rules with multiple alternatives randomly selected per generation.
+**Goal**: Define a clean `ILlmProvider` interface and implement it for every supported backend. The caller (`DescriptionService`) never knows which provider is active. Provider selection and configuration is entirely in `appsettings.json`.
 
-**Example grammar fragment:**
+### 3.1 — Provider Interface (`backend/GeoTime.Api/Llm/ILlmProvider.cs`)
 
+```csharp
+public interface ILlmProvider
+{
+    string Name { get; }
+    bool IsAvailable { get; }
+    Task<string> GenerateAsync(string systemPrompt, string userPrompt,
+                               CancellationToken ct = default);
+}
 ```
-mountain_range_intro:
-  "The {name} {range_word} {formation_verb} from {tectonic_cause}."
-  | "{age} {name} forms a {adj} barrier across {continent_name}."
 
-tectonic_cause:
-  "the collision of the {plate1} and {plate2}"
-  | "a deep subduction zone beneath the {plate1}"
-  | "ancient rifting of the {plate1}"
-```
+### 3.2 — Provider Implementations
 
-Each rule maps to an array of templates with variables. The variables are resolved from the `DescriptionContext`. Multiple alternatives per slot (adjectives, verbs, sentence structures) produce varied text across playthroughs.
+#### `GeminiProvider` (primary)
+- Uses Google Generative AI REST API (`generativelanguage.googleapis.com`).
+- Config keys: `Llm:Gemini:ApiKey`, `Llm:Gemini:Model` (default `gemini-2.0-flash`).
+- HTTP client sends `POST /v1beta/models/{model}:generateContent` with `systemInstruction` + `contents[user]`.
+- Handles `429` (rate limit) with exponential backoff, max 3 retries.
 
-**Implementation**: Create `src/geo/grammar-engine.ts` with a `Grammar` class that loads rule tables and resolves a start symbol recursively, seeded by the feature ID for reproducibility.
+#### `OpenAiProvider`
+- Config keys: `Llm:OpenAi:ApiKey`, `Llm:OpenAi:Model` (default `gpt-4o-mini`), `Llm:OpenAi:BaseUrl` (optional, for Azure OpenAI endpoint overriding).
+- Uses the standard chat completions endpoint.
 
-**Pros**: Much more natural variation; feels less formulaic.  
-**Cons**: Grammar authoring is labour-intensive; still requires manual rule writing; grammar must be designed carefully to avoid nonsensical combinations.
+#### `AnthropicProvider`
+- Config keys: `Llm:Anthropic:ApiKey`, `Llm:Anthropic:Model` (default `claude-haiku-3-5`).
+- Uses the Messages API with `system` + `user` turn.
 
----
+#### `OllamaProvider`
+- Connects to a local Ollama instance at `http://localhost:11434`.
+- Config keys: `Llm:Ollama:BaseUrl`, `Llm:Ollama:Model` (e.g., `gemma3`, `llama3.2`).
+- Uses `/api/chat` endpoint with `stream: false`.
+- `IsAvailable`: attempts a `GET /api/tags` health check on startup; if the server is unreachable, returns `false` without throwing.
 
-### Option C — LLM-Powered Descriptions
+#### `LlamaSharpProvider`
+- Loads a GGUF model file directly in-process using the `LLamaSharp` NuGet package.
+- Config keys: `Llm:LlamaSharp:ModelPath` (absolute path to .gguf file), `Llm:LlamaSharp:ContextSize` (default 4096), `Llm:LlamaSharp:GpuLayers` (default 0 for CPU-only).
+- `IsAvailable`: returns `false` if `ModelPath` is not set or the file does not exist, so the system silently falls back without error.
+- Model is loaded once at DI container startup (singleton scope) to avoid per-request load latency.
 
-Use a language model to write the prose paragraph given a structured JSON prompt of the simulation data.
+#### `TemplateFallbackProvider`
+- Always available (`IsAvailable = true`), zero external dependencies.
+- `GenerateAsync` ignores the prompts and instead calls the template engine (see Phase D4) to assemble deterministic prose from the structured context embedded in the user prompt as JSON.
+- Acts as the ultimate fallback when no other provider is configured or available.
 
-#### C1 — External LLM API (OpenAI / Anthropic)
+### 3.3 — Provider Selection (`backend/GeoTime.Api/Llm/LlmProviderFactory.cs`)
 
-- Add a `/api/describe` backend endpoint that accepts a `DescriptionRequest` JSON.
-- Backend assembles a system prompt ("You are a geographer writing encyclopedia articles about a fictional alien planet...") and a user message containing the structured feature data.
-- Calls OpenAI API (or Anthropic) with `gpt-4o-mini` or `claude-haiku` (fast, cheap models).
-- Returns the generated text to the frontend.
-- Add `OPENAI_API_KEY` (or equivalent) as an environment variable / config option in `backend/GeoTime.Api/appsettings.json`.
-- **Pros**: Highest quality, best variety, handles all edge cases naturally.
-- **Cons**: Requires internet + API key; adds latency (~1–2 s); not free; requires server-side secret management.
+`LlmProviderFactory` is registered as a singleton. On construction it reads `appsettings.json` and builds an ordered list of providers by a `Llm:PreferenceOrder` config array (default: `["Gemini", "OpenAi", "Anthropic", "Ollama", "LlamaSharp", "Template"]`). `GetProvider()` returns the first `IsAvailable == true` provider in the list.
 
-#### C2 — Local Small LLM via llama.cpp / Ollama
+### 3.4 — Phase D3 Tests (`backend/GeoTime.Tests/LlmProviderTests.cs`)
 
-- Add a side-car process (or use the `backend/GeoTime.Api` process) that loads a small GGUF model (e.g., Phi-3 mini 3.8B, ~2 GB RAM) via `llama.cpp` bindings for .NET (`LLamaSharp` NuGet package).
-- Add `/api/describe` endpoint that runs inference locally.
-- Use a structured prompt with `<INST>` tags appropriate for the model.
-- **Pros**: Fully offline, no API key, still natural prose.
-- **Cons**: Requires ~2–4 GB model download; adds startup time; inference is CPU-bound (~5–10 s without GPU).
-
-#### C3 — Hybrid: Template + LLM Rewrite
-
-- Run the template engine (Option A) first to get a factually correct skeleton text.
-- Pass the skeleton + data to the LLM with instructions to "rewrite in flowing encyclopedic prose, preserving all facts".
-- **Pros**: Guarantees factual accuracy; LLM only polishes; skeleton serves as fallback on LLM failure.
-- **Cons**: Two-step process; slightly more complex.
-
-**Recommendation**: Start with Option A (template engine) for an immediately working implementation. Add Option C1 (OpenAI) behind a feature flag / API key toggle so that if a key is configured, the app uses LLM-enhanced descriptions; if not, templates are used.
+- `LlmProviderFactory` with no keys configured → returns `TemplateFallbackProvider`.
+- `OllamaProvider` with unreachable URL → `IsAvailable == false`.
+- `LlamaSharpProvider` with missing model file → `IsAvailable == false`.
+- Mock `GeminiProvider` HTTP handler: verify correct request format and retry behaviour on 429.
 
 ---
 
-## Implementation Plan (Option A + C1 Hybrid)
+## Phase D4 — Geological Narrative Assembly and Template Engine
 
-### Step 1 — Description Context Builder (`src/geo/description-context-builder.ts`)
+**Goal**: Build the prompt composer that converts a `GeologicalContext` into a rich, expert-level structured prompt, and build the template fallback that can produce solid prose without an LLM.
 
-Create a `DescriptionContextBuilder` class that:
+### 4.1 — Prompt Composer (`backend/GeoTime.Core/Services/DescriptionPromptComposer.cs`)
 
-- Takes the `FeatureMap` (from the Label System plan) and the current `CellInspection`.
-- Finds which `DetectedFeature` the cell belongs to (by cell index membership or nearest centroid).
-- Fetches adjacent plate data (plate info + boundary type) — use data already fetched for the layer system.
-- Identifies "neighboring" features within a geographic radius (e.g., 2000 km) from the feature centroid.
-- Identifies recent geological events within 500 km of the cell (from event log).
-- Assembles and returns a `DescriptionContext`.
+The `ComposeSystemPrompt()` method returns a fixed system message establishing the LLM's persona:
+
+> "You are a senior planetary geologist writing encyclopedia entries for a fictional alien world. Your writing is precise, technical, and vivid — the style of a Nature article combined with a National Geographic narrative. You describe geological formations in the same depth a field geologist would: origin, deformation history, lithology, erosional history, drainage influence, and climate coupling. You reference all features, plates, rivers, and oceans by their proper names as given. You explicitly discuss any extraordinary events visible in the stratigraphic record. You describe how the formation evolved through geological time and how it is changing today."
+
+The `ComposeUserPrompt(GeologicalContext ctx)` method serialises the full context to a compact JSON block followed by explicit instructions:
+
+1. Write a 4–6 paragraph encyclopedia entry for the **primary feature** at this location.
+2. Paragraph 1: Tectonic origin — how the feature formed, plate kinematics, timescale.
+3. Paragraph 2: Lithology and stratigraphy — rock types, deformation, any extraordinary event layers visible in the record (name them: "the {EventId} impact ejecta layer, deposited at simulation year {year}").
+4. Paragraph 3: Erosion, drainage, and river systems — how water and ice shaped the feature; name any rivers, their catchment area, and outlet seas.
+5. Paragraph 4: Climate coupling — orographic effects, rain shadow, monsoon, hurricane corridor, ocean current influence.
+6. Paragraph 5: Biome and ecology cascade — how the feature determines surrounding biome distribution.
+7. Paragraph 6 (if history spans > 5 major changes): Historical biography — major changes in the feature's identity (splits, merges, submergences, renames), with simulation-year dates.
+8. End with a 2-sentence summary of what makes this feature geologically significant on this planet.
+
+### 4.2 — Template Fallback Engine (`backend/GeoTime.Core/Services/DescriptionTemplateEngine.cs`)
+
+For every `FeatureType`, implement a C# template method that reads `GeologicalContext` and builds the same 4–6 paragraph structure using conditional sentence assembly. Key expert logic encoded in templates:
+
+- **Mountain Range**: Classify origin (subduction arc → "The {RangeName} arc rises above a {dip}° eastward-dipping subduction zone…"; collision orogen → "Formed by the Himalayan-style collision of {plate1} and {plate2}…"; hotspot shield → "The broad shield of {name} reflects mantle plume magmatism…"). Include rain-shadow sentence if `HasRainShadow`. Include orogenic deformation style (fold-and-thrust belt vs. metamorphic core complex) based on convergence rate. Include erosion river-routing paragraph.
+- **River**: Describe headwater source (glacial, spring, orographic precipitation), gradient profile, valley morphology (V-shaped = young/steep; U-shaped = glacially carved; wide floodplain = mature/low gradient), delta type, sediment routing to the named ocean, and seasonal variation (perennial vs. monsoon-fed).
+- **Ocean Basin**: Describe spreading history, age of oceanic crust, bathymetric provinces (abyssal plain, mid-ocean ridge, trenches), thermohaline connection to other basins, and named boundary current systems.
+- **Continent**: Describe cratonisation age, orogenic belts along margins, drainage divide, mean elevation, climate zonation across the landmass.
+- **Impact Basin**: Describe impactor energy estimate, ejecta blanket extent, melt sheet, central uplift, and subsequent erosional and sedimentary infill history.
+- **Extraordinary layers** (any feature type): For each non-Normal layer in the column, add a dedicated sentence: "The stratigraphic column at this location preserves a {layerThicknessM}-m {EventType} horizon from {eventDescription}, characterised by {isotope/soot/geochemical signature}."
+
+### 4.3 — Phase D4 Tests (`backend/GeoTime.Tests/DescriptionTemplateTests.cs`)
+
+- For a `GeologicalContext` with `NearestMarginType = Subduction`, verify template contains "subduction" and the subducting plate name.
+- For a context with an `ImpactEjecta` extraordinary layer, verify template mentions the impact event.
+- For a context with `HasRainShadow = true`, verify template mentions "rain shadow" on the leeward side.
+- For a river feature, verify template contains the river name, outlet ocean name, and delta type.
 
 ---
 
-### Step 2 — Template Engine (`src/geo/description-templates.ts`)
+## Phase D5 — API Endpoint and Frontend Integration
 
-Implement one template function per `FeatureType`. Each template function receives `DescriptionContext` and returns `FeatureDescription`.
+**Goal**: Expose a clean `POST /api/describe` endpoint and wire the minimal frontend modal.
 
-Cover the required feature types: mountain range, ocean, sea, continent, island, lake, desert, rainforest, plate. Each template produces 2–4 prose paragraphs and a sidebar stats table. Templates reference other features by their generated names.
-
----
-
-### Step 3 — UI: Description Modal (`src/ui/app-shell.ts`)
-
-- Add a small info icon (`ℹ`) button to the inspect panel header (next to the close ✕ button).
-- When clicked, show a `#description-modal` overlay with:
-  - **Header**: feature name + type badge
-  - **Body**: 2–4 paragraph prose, styled like a compact encyclopedia article
-  - **Sidebar**: key-value stats table (elevation range, area, temperature, precipitation, rock type, dominant soil, biomass)
-  - **Footer**: "Related features" links (clickable names that pan the camera to that feature's centroid)
-  - Loading spinner while description is being generated (for LLM mode)
-- Close button (✕) and click-outside-to-dismiss behavior.
-- Styling consistent with existing dark-theme panels (`rgba(10,10,14,0.95)`, white text, bordered).
-
----
-
-### Step 4 — Backend: `/api/describe` Endpoint (optional LLM path)
-
-Add to `backend/GeoTime.Api/Program.cs`:
+### 5.1 — Description API (`backend/GeoTime.Api/Program.cs`)
 
 ```
 POST /api/describe
-Request:  DescriptionRequest  { featureType, featureName, plateName?, nearOceanName?,
-                                 collidingPlateName?, elevation, temperature,
-                                 precipitation, biome, rockType, ... }
-Response: DescriptionResponse { title, paragraphs: string[], stats: object }
+Request:  { "cellIndex": int }
+Response: {
+  "title": string,
+  "subtitle": string,
+  "paragraphs": string[],
+  "stats": [{ "label": string, "value": string }],
+  "stratigraphicSummary": [{ "age": string, "thickness": string, "rockType": string, "eventNote": string }],
+  "historyTimeline": [{ "simTick": long, "event": string, "name": string }],
+  "providerUsed": string   // "Gemini", "Ollama", "Template", etc.
+}
 ```
 
 The endpoint:
+1. Calls `GeologicalContextAssembler.AssembleAsync(cellIndex)` to build the full context.
+2. Builds stats array and stratigraphic summary from the context directly (no LLM needed for these).
+3. Builds history timeline from `PrimaryFeatureHistory`.
+4. Calls `LlmProviderFactory.GetProvider().GenerateAsync(systemPrompt, userPrompt)` for the prose paragraphs.
+5. Parses the LLM response — if it returns well-formed JSON with a `paragraphs` array, deserialise it; otherwise treat the whole response as a single paragraph block.
+6. Returns the composite response.
 
-1. Checks if `OPENAI_API_KEY` is configured in the environment.
-2. If yes: calls OpenAI chat completions with a carefully crafted system prompt establishing the fictional geographer persona and instructing it to write a 3-paragraph encyclopedia article using all provided data fields.
-3. If no: falls back to template engine logic (or returns an empty response so the frontend uses its own templates).
+Add `POST /api/describe/stream` variant that uses SSE (Server-Sent Events) to stream the LLM response token-by-token if the provider supports streaming (Gemini, OpenAI, Anthropic, Ollama all support streaming).
 
-Add `Microsoft.Extensions.AI` or `Azure.AI.OpenAI` NuGet package for the LLM call. Add `OPENAI_API_KEY` to `appsettings.Development.json` (gitignored) with a comment in `appsettings.json` documenting the key name.
+### 5.2 — Frontend: Minimal Description Modal (`src/ui/app-shell.ts`, `src/main.ts`)
+
+- Add a small `ℹ` button to the inspect panel header.
+- On click: `POST /api/describe` with the current `cellIndex`. While awaiting, show a spinner inside the modal.
+- When the response arrives, populate:
+  - Title + subtitle text.
+  - Paragraphs as `<p>` elements.
+  - Stats as a two-column `<table>`.
+  - Stratigraphic summary as a visual column strip (colour-coded by rock type using existing rock colour map) with event annotations.
+  - History timeline as a simple `<ol>` list.
+- For streaming (`/api/describe/stream`): open an `EventSource`, append tokens to the last paragraph element in real time.
+- Close button and click-outside-to-dismiss.
+
+The frontend adds zero geological logic — it is a pure rendering consumer of the backend response.
+
+### 5.3 — Configuration Reference (`backend/GeoTime.Api/appsettings.json`)
+
+Document all provider configuration keys:
+
+```json
+{
+  "Llm": {
+    "PreferenceOrder": ["Gemini", "OpenAi", "Anthropic", "Ollama", "LlamaSharp", "Template"],
+    "Gemini":     { "ApiKey": "",  "Model": "gemini-2.0-flash" },
+    "OpenAi":     { "ApiKey": "",  "Model": "gpt-4o-mini", "BaseUrl": "" },
+    "Anthropic":  { "ApiKey": "",  "Model": "claude-haiku-3-5" },
+    "Ollama":     { "BaseUrl": "http://localhost:11434", "Model": "gemma3" },
+    "LlamaSharp": { "ModelPath": "", "ContextSize": 4096, "GpuLayers": 0 }
+  }
+}
+```
+
+### 5.4 — Phase D5 Tests (`backend/GeoTime.Tests/DescriptionApiTests.cs`)
+
+- Integration test: `POST /api/describe` with no LLM configured → returns 200 with non-empty paragraphs from the template engine.
+- Integration test: stratigraphic summary array has correct count of layers for a known cell.
+- Integration test: history timeline is ordered by tick ascending.
+- Playwright E2E: click ℹ on inspect panel after planet generation, verify modal opens with title and ≥ 2 paragraphs.
+- Playwright E2E: stratigraphic strip element is present in the modal.
 
 ---
 
-### Step 5 — Frontend Wiring (`main.ts`)
+## Phase D6 — Geological Layers Visualisation (Layer Toggle Integration)
 
-- On inspect panel info-icon click: call `descriptionContextBuilder.build(cellInspection)` → call template engine locally → show modal immediately.
-- Simultaneously (if LLM enabled): POST to `/api/describe` → when response arrives, update the modal body with enhanced prose (replaces template text).
-- If LLM request takes > 3 s, the template text is already visible and the user is not blocked.
+**Goal**: Expose the extraordinary stratigraphic events as a toggleable globe overlay so users can see where impact ejecta, volcanic ash, GRB anomalies, and other global events are preserved in the rock record.
 
----
+### 6.1 — Backend: Event Layer Map Endpoint
 
-### Step 6 — Tests
+```
+GET /api/state/eventlayermap?eventType=ImpactEjecta&tick=N
+```
+Returns a flat `float[]` array (one value per grid cell, 512×512 = 262 144 values) representing the **thickness of layers of the specified type** deposited up to tick N. This is a binary scalar field suitable for rendering as a heatmap texture.
 
-- Unit tests for `DescriptionContextBuilder`: verify correct feature assignment for cells inside a continent, ocean, mountain range.
-- Unit tests for each template function: verify output contains feature name, plate name, expected biome words.
-- Unit test for `/api/describe` endpoint with mocked OpenAI client (verify fallback to template when key missing).
-- Playwright E2E: after inspecting a cell, click info icon, verify modal appears with non-empty title and at least 2 paragraphs.
+```
+GET /api/state/eventlayermap/types
+```
+Returns the list of `LayerEventType` values that have at least one layer anywhere on the planet. Used to populate the layer toggle dropdown.
+
+### 6.2 — Frontend: Event Layer Overlay
+
+- Add an "Event Layers" toggle and a sub-dropdown (populated from `/api/state/eventlayermap/types`) in the layer panel.
+- When an event type is selected, fetch the scalar field and upload it as a new `DataTexture` to the `GlobeRenderer`. Apply it as a colour tint overlay: colour palette varies by event type (orange-red for impact ejecta, grey for volcanic soot, cyan for GRB anomaly, black for anoxic event).
+- Layer blends on top of the base terrain colour using additive blending weighted by the layer thickness value.
+
+### 6.3 — Phase D6 Tests
+
+- Unit test for the event layer map endpoint: given a known impact at cell X, verify cells within ejecta radius have thickness > 0 and cells outside have thickness 0.
+- Playwright E2E: trigger event layer overlay for "VolcanicAsh", verify the globe texture changes.
 
 ---
 
@@ -211,25 +393,43 @@ Add `Microsoft.Extensions.AI` or `Azure.AI.OpenAI` NuGet package for the LLM cal
 
 | File | Change |
 |------|--------|
-| `src/geo/description-context-builder.ts` | New file |
-| `src/geo/description-templates.ts` | New file (all feature type templates) |
-| `src/shared/types.ts` | Add `DescriptionContext`, `FeatureDescription` interfaces |
-| `src/ui/app-shell.ts` | Add info icon to inspect panel; add description modal HTML + CSS |
-| `main.ts` | Wire info-icon click → context builder → template engine → modal |
-| `backend/GeoTime.Api/Program.cs` | Add `POST /api/describe` endpoint |
-| `backend/GeoTime.Core/Models/DescriptionModels.cs` | New file: `DescriptionRequest`, `DescriptionResponse` |
-| `backend/GeoTime.Api/DescriptionService.cs` | New file: LLM call + fallback logic |
-| `backend/GeoTime.Api/appsettings.json` | Document `OPENAI_API_KEY` config key |
-| `tests/description-context-builder.test.ts` | New tests |
-| `tests/description-templates.test.ts` | New tests |
-| `backend/GeoTime.Tests/DescriptionTests.cs` | New xUnit tests |
-| `e2e/app-shell.spec.ts` | Add description modal E2E test |
+| `backend/GeoTime.Core/Models/StratigraphyModels.cs` | New — stratigraphic column and event layer types |
+| `backend/GeoTime.Core/Models/DescriptionModels.cs` | New — `GeologicalContext`, `DescriptionRequest`, `DescriptionResponse` |
+| `backend/GeoTime.Core/Models/SimulationModels.cs` | Add `StratigraphicColumn[]` and extended `CellInspection` fields |
+| `backend/GeoTime.Core/Engines/EventDepositionEngine.cs` | New — event → stratigraphic layer deposition |
+| `backend/GeoTime.Core/Services/GeologicalContextAssembler.cs` | New — assembles full geological context for a cell |
+| `backend/GeoTime.Core/Services/DescriptionPromptComposer.cs` | New — system + user prompt builder |
+| `backend/GeoTime.Core/Services/DescriptionTemplateEngine.cs` | New — template fallback prose engine |
+| `backend/GeoTime.Core/SimulationOrchestrator.cs` | Call `EventDepositionEngine` after tick; extend `InspectCell` to include new fields |
+| `backend/GeoTime.Api/Llm/ILlmProvider.cs` | New — provider interface |
+| `backend/GeoTime.Api/Llm/GeminiProvider.cs` | New |
+| `backend/GeoTime.Api/Llm/OpenAiProvider.cs` | New |
+| `backend/GeoTime.Api/Llm/AnthropicProvider.cs` | New |
+| `backend/GeoTime.Api/Llm/OllamaProvider.cs` | New |
+| `backend/GeoTime.Api/Llm/LlamaSharpProvider.cs` | New |
+| `backend/GeoTime.Api/Llm/TemplateFallbackProvider.cs` | New |
+| `backend/GeoTime.Api/Llm/LlmProviderFactory.cs` | New — provider selection factory |
+| `backend/GeoTime.Api/Program.cs` | Add `POST /api/describe`, `POST /api/describe/stream`, `GET /api/state/eventlayermap` |
+| `backend/GeoTime.Api/appsettings.json` | Document all LLM provider config keys |
+| `backend/GeoTime.Tests/StratigraphyTests.cs` | New |
+| `backend/GeoTime.Tests/ContextAssemblerTests.cs` | New |
+| `backend/GeoTime.Tests/LlmProviderTests.cs` | New |
+| `backend/GeoTime.Tests/DescriptionTemplateTests.cs` | New |
+| `backend/GeoTime.Tests/DescriptionApiTests.cs` | New |
+| `src/api/backend-client.ts` | Add `describeCell()` and `fetchEventLayerMap()` |
+| `src/ui/app-shell.ts` | Add ℹ button on inspect panel; add description modal HTML; add event layer dropdown |
+| `src/main.ts` | Wire modal open/close; wire event layer toggle |
+| `src/render/globe-renderer.ts` | Add event layer overlay texture + blend |
+| `e2e/app-shell.spec.ts` | Add description modal and event layer overlay E2E tests |
 
 ---
 
 ## Dependency Check
 
-- **Template-only path**: Zero new dependencies.
-- **Grammar path**: Can be implemented from scratch with no added libraries.
-- **LLM API path**: Add `Azure.AI.OpenAI` (or `OpenAI`) NuGet package to `GeoTime.Api`. Check advisory database before adding.
-- **Local LLM path**: Add `LLamaSharp` NuGet package and a GGUF model file (downloaded separately, not committed to the repository).
+| Dependency | Purpose | Advisory check required? |
+|------------|---------|--------------------------|
+| `LLamaSharp` NuGet (+ `LLamaSharp.Backend.Cpu` or `.Cuda12`) | Local GGUF inference | Yes — check NuGet advisory DB before adding |
+| No new NuGet needed for Gemini / OpenAI / Anthropic / Ollama | All use standard `HttpClient` | No |
+| No new npm packages | All frontend changes use existing Three.js + fetch | No |
+
+The `LlamaSharpProvider` is entirely optional; the system works without it. Only add the NuGet package in a dedicated phase when a local LLM is needed.
