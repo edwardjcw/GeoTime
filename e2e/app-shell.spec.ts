@@ -1317,7 +1317,7 @@ test.describe('Bug Fix – Cell Info Panel Fields', () => {
       await expect(page.locator('text=Organic C')).toBeVisible();
       await expect(page.locator('text=Reef')).toBeVisible();
     }
-    // Take a screenshot regardless
+    // Intentional documentation screenshot – captures cell info panel state for PR review.
     await page.screenshot({ path: 'e2e/screenshots/cell-info-panel.png', fullPage: false });
   });
 });
@@ -1346,6 +1346,7 @@ test.describe('Bug Fix – Agent Status Panel', () => {
       await expect(page.locator('text=🌊 Surface')).toBeVisible();
       await expect(page.locator('text=🧬 Biomatter')).toBeVisible();
     }
+    // Intentional documentation screenshot – captures agent panel state for PR review.
     await page.screenshot({ path: 'e2e/screenshots/agent-panel-all-agents.png', fullPage: false });
   });
 
@@ -1372,6 +1373,7 @@ test.describe('Bug Fix – Agent Status Panel', () => {
       expect(json).toHaveProperty('stats');
       expect(json.stats).toHaveProperty('totalMs');
     }
+    // Intentional documentation screenshot – captures advance response stats for PR review.
     await page.screenshot({ path: 'e2e/screenshots/advance-with-stats.png', fullPage: false });
   });
 });

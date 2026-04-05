@@ -1048,7 +1048,7 @@ function loop(now: number): void {
           }
         })
         .catch((err: unknown) => {
-          if (err instanceof Error && err.name === 'AbortError') return; // user-initiated abort
+          if (err instanceof Error && err.name === 'AbortError') return; // user-initiated or timeout-based abort
           console.error('Simulation advance failed:', err);
           shell.setProgressText('');
           resetAgentStatuses();

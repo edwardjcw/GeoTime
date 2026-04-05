@@ -115,7 +115,11 @@ public sealed class SimulationOrchestrator : IDisposable
         if (_tectonic == null || deltaMa <= 0) return;
 
         // Prevent concurrent advance calls from corrupting simulation state.
-        if (!_advanceLock.Wait(0)) return;
+        if (!_advanceLock.Wait(0))
+        {
+            System.Diagnostics.Debug.WriteLine("[SimulationOrchestrator] Concurrent advance skipped — previous tick still running.");
+            return;
+        }
         try
         {
             AdvanceSimulationCore(deltaMa, onProgress);
@@ -172,8 +176,6 @@ public sealed class SimulationOrchestrator : IDisposable
         // Surface, Atmosphere, and Vegetation can run in parallel since they
         // read from state written by tectonic but write to independent fields.
         onProgress?.Invoke("surface");
-        var sw = new Stopwatch();
-        sw.Start();
 
         long surfaceMs = 0, atmoMs = 0, vegMs = 0;
         var tasks = new List<Task>();
@@ -205,8 +207,8 @@ public sealed class SimulationOrchestrator : IDisposable
         var fullSize = _gridSize; // 512
 
         // Downsample inputs to coarse grid
-        var coarseTemp   = AdaptiveResolutionService.Downsample(State.TemperatureMap,   fullSize, CoarseSize);
-        var coarsePrecip = AdaptiveResolutionService.Downsample(State.PrecipitationMap, fullSize, CoarseSize);
+        var coarseTemp    = AdaptiveResolutionService.Downsample(State.TemperatureMap,   fullSize, CoarseSize);
+        var coarsePrecip  = AdaptiveResolutionService.Downsample(State.PrecipitationMap, fullSize, CoarseSize);
         var coarseBiomass = AdaptiveResolutionService.Downsample(State.BiomassMap,       fullSize, CoarseSize);
 
         // Build a lightweight coarse SimulationState (shares height with full-res via downsampled copy)
@@ -220,8 +222,8 @@ public sealed class SimulationOrchestrator : IDisposable
         Array.Fill(coarseState.DirtyMask, true);
 
         // Build coarse engines that share the GPU service
-        var coarseAtmo  = new AtmosphereEngine(Bus, EventLog, _currentSeed, CoarseSize, 1.0, _gpu);
-        var coarseVeg   = new VegetationEngine(Bus, EventLog, _currentSeed, CoarseSize, 1.0);
+        var coarseAtmo = new AtmosphereEngine(Bus, EventLog, _currentSeed, CoarseSize, 1.0, _gpu);
+        var coarseVeg  = new VegetationEngine(Bus, EventLog, _currentSeed, CoarseSize, 1.0);
         coarseAtmo.Initialize(coarseState, _tectonic!.GetAtmosphere()!);
         coarseVeg.Initialize(coarseState);
 
