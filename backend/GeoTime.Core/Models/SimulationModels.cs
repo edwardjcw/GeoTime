@@ -44,6 +44,9 @@ public sealed class SimulationState
     /// </summary>
     public bool[] DirtyMask { get; }
 
+    /// <summary>Registry of all detected geographic features on this planet.</summary>
+    public FeatureRegistry FeatureRegistry { get; set; } = new();
+
     public SimulationState(int gridSize = GridConstants.GRID_SIZE)
     {
         GridSize = gridSize;

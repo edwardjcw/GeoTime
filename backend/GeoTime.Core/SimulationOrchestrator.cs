@@ -4,6 +4,7 @@ using GeoTime.Core.Models;
 using GeoTime.Core.Kernel;
 using GeoTime.Core.Proc;
 using GeoTime.Core.Engines;
+using GeoTime.Core.Services;
 
 namespace GeoTime.Core;
 
@@ -51,6 +52,7 @@ public sealed class SimulationOrchestrator : IDisposable
     private VegetationEngine? _vegetation;
     private BiomatterEngine? _biomatter;
     private CrossSectionEngine? _crossSection;
+    private readonly FeatureDetectorService _featureDetector = new();
 
     private PlanetGeneratorResult? _planetResult;
     private uint _currentSeed;
@@ -102,6 +104,10 @@ public sealed class SimulationOrchestrator : IDisposable
         _biomatter.Initialize(State, result.Atmosphere, _tectonic.Stratigraphy);
 
         Clock.SeekTo(SimClock.INITIAL_TIME);
+
+        // Detect features after generation so the registry is populated immediately.
+        _featureDetector.Detect(State, result.Plates, result.Hotspots,
+            EventLog.GetAll(), seed, 0L);
 
         Bus.Emit("PLANET_GENERATED", new { seed, timeMa = Clock.T });
         return result;
@@ -164,6 +170,15 @@ public sealed class SimulationOrchestrator : IDisposable
         sw.Restart();
         _biomatter?.Tick(Clock.T, deltaMa);
         stats.BiomatterMs = sw.ElapsedMilliseconds;
+
+        // Update the feature registry after all engines have processed this tick.
+        if (_tectonic != null)
+        {
+            var plates   = _tectonic.GetPlates();
+            var hotspots = _tectonic.GetHotspots();
+            _featureDetector.Detect(State, plates, hotspots,
+                EventLog.GetAll(), _currentSeed, State.FeatureRegistry.LastUpdatedTick + 1);
+        }
 
         stats.TotalMs = total.ElapsedMilliseconds;
         LastTickStats = stats;
@@ -273,6 +288,9 @@ public sealed class SimulationOrchestrator : IDisposable
 
     /// <summary>Get atmosphere info.</summary>
     public AtmosphericComposition? GetAtmosphere() => _tectonic?.GetAtmosphere();
+
+    /// <summary>Get the current feature registry.</summary>
+    public FeatureRegistry GetFeatureRegistry() => State.FeatureRegistry;
 
     /// <summary>Inspect a cell by grid index.</summary>
     public CellInspection? InspectCell(int cellIndex)

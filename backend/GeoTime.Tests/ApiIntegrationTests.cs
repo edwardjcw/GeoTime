@@ -491,6 +491,54 @@ public class ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> fact
         Assert.True(enableJson.GetProperty("enabled").GetBoolean());
     }
 
+    // ── Feature Labels API (L2) ───────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetFeatures_AfterGenerate_ReturnsRegistry()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        var response = await _client.GetAsync("/api/state/features");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.TryGetProperty("features", out var features));
+        Assert.Equal(JsonValueKind.Object, features.ValueKind);
+        Assert.True(features.EnumerateObject().Any(), "Expected at least one feature in registry");
+    }
+
+    [Fact]
+    public async Task GetFeatures_ContainsLastUpdatedTick()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        var response = await _client.GetAsync("/api/state/features");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.TryGetProperty("lastUpdatedTick", out _));
+    }
+
+    [Fact]
+    public async Task GetFeatureById_ReturnsFeature()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        var regResp = await _client.GetAsync("/api/state/features");
+        regResp.EnsureSuccessStatusCode();
+        var registry = await regResp.Content.ReadFromJsonAsync<JsonElement>();
+        var firstId = registry.GetProperty("features").EnumerateObject().First().Name;
+
+        var featureResp = await _client.GetAsync($"/api/state/features/{firstId}");
+        featureResp.EnsureSuccessStatusCode();
+        var feature = await featureResp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(feature.TryGetProperty("id", out _));
+        Assert.True(feature.TryGetProperty("type", out _));
+    }
+
+    [Fact]
+    public async Task GetFeatureById_UnknownId_ReturnsNotFound()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        var response = await _client.GetAsync("/api/state/features/nonexistent_id_xyz");
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, response.StatusCode);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private async Task<double> GetTimeMa()

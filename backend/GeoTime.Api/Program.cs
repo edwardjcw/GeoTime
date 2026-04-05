@@ -370,6 +370,35 @@ app.MapGet("/api/weather/monthly", (int month, SimulationOrchestrator sim) =>
     return Results.Ok(result);
 }).WithName("GetWeatherPattern");
 
+// ── Feature Labels (Phase L2) ─────────────────────────────────────────────────
+
+app.MapGet("/api/state/features", (SimulationOrchestrator sim, long? tick) =>
+{
+    var registry = sim.GetFeatureRegistry();
+    if (tick.HasValue)
+    {
+        // Return feature state as of the requested tick (historical snapshot)
+        var historical = new Dictionary<string, object>();
+        foreach (var (id, feat) in registry.Features)
+        {
+            var snap = feat.History.LastOrDefault(s =>
+                s.SimTickCreated <= tick.Value && s.SimTickExtinct > tick.Value);
+            if (snap != null)
+                historical[id] = new { feat.Id, feat.Type, snapshot = snap, feat.Metrics };
+        }
+        return Results.Ok(historical);
+    }
+    return Results.Ok(registry);
+}).WithName("GetFeatures");
+
+app.MapGet("/api/state/features/{id}", (string id, SimulationOrchestrator sim) =>
+{
+    var registry = sim.GetFeatureRegistry();
+    return registry.Features.TryGetValue(id, out var feature)
+        ? Results.Ok(feature)
+        : Results.NotFound($"Feature '{id}' not found");
+}).WithName("GetFeatureById");
+
 app.Run();
 
 // ── Request DTOs ──────────────────────────────────────────────────────────────
