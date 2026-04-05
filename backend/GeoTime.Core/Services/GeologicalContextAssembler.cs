@@ -364,7 +364,7 @@ public sealed class GeologicalContextAssembler
     private static List<(DetectedFeature Feature, float DistanceKm)> FindNearbyFeatures(
         float lat, float lon, int cellIndex, FeatureRegistry registry)
     {
-        var result = new List<(DetectedFeature, float)>(registry.Features.Count);
+        var result = new List<(DetectedFeature Feature, float DistanceKm)>();
         foreach (var f in registry.Features.Values)
         {
             if (f.CellIndices.Contains(cellIndex)) continue; // already in ContainingFeatures
@@ -373,7 +373,7 @@ public sealed class GeologicalContextAssembler
                                 * CrossSectionEngine.EARTH_RADIUS_KM);
             if (dKm <= 3000f) result.Add((f, dKm));
         }
-        result.Sort((a, b) => a.Item2.CompareTo(b.Item2));
+        result.Sort((a, b) => a.DistanceKm.CompareTo(b.DistanceKm));
         return result.Count > 6 ? result[..6] : result;
     }
 
