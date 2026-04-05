@@ -56,7 +56,7 @@ app.MapPost("/api/simulation/advance", async (AdvanceRequest req, SimulationOrch
             timeMa = sim.GetCurrentTime(),
         });
     });
-    return Results.Ok(new { timeMa = sim.GetCurrentTime() });
+    return (Results.Ok(new { timeMa = sim.GetCurrentTime() }));
 }).WithName("AdvanceSimulation");
 
 app.MapGet("/api/simulation/time", (SimulationOrchestrator sim) =>

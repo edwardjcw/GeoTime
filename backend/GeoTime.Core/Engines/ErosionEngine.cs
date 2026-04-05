@@ -62,6 +62,7 @@ public sealed class ErosionEngine(int gridSize)
                             AgeDeposited = timeMa, Thickness = deposit,
                             DipAngle = 1 + rng.Next() * 3,
                             DipDirection = rng.NextFloat(0, 360),
+                            Deformation = DeformationType.UNDEFORMED,
                         });
                     }
                     sedLoad[i] -= (float)(sedLoad[i] * DEPOSITION_RATE);

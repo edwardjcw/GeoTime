@@ -50,6 +50,7 @@ public sealed class VolcanismEngine
             {
                 RockType = rockType, AgeDeposited = timeMa, Thickness = heightAdded,
                 DipAngle = 5 + rng.Next() * 15, DipDirection = rng.NextFloat(0, 360),
+                Deformation = DeformationType.UNDEFORMED,
             });
 
             eruptions.Add(new EruptionRecord
@@ -80,6 +81,7 @@ public sealed class VolcanismEngine
             stratigraphy.PushLayer(b.CellIndex, new StratigraphicLayer
             {
                 RockType = RockType.IGN_PILLOW_BASALT, AgeDeposited = timeMa, Thickness = heightAdded,
+                Deformation = DeformationType.UNDEFORMED,
             });
 
             eruptions.Add(new EruptionRecord
@@ -116,6 +118,7 @@ public sealed class VolcanismEngine
             {
                 RockType = RockType.IGN_BASALT, AgeDeposited = timeMa, Thickness = heightAdded,
                 DipAngle = 2 + rng.Next() * 5, DipDirection = rng.NextFloat(0, 360),
+                Deformation = DeformationType.UNDEFORMED,
             });
 
             eruptions.Add(new EruptionRecord

@@ -59,6 +59,7 @@ public sealed class WeatheringEngine(int gridSize)
                     {
                         RockType = product, AgeDeposited = timeMa,
                         Thickness = eroded * PRODUCT_DENSITY,
+                        Deformation = DeformationType.UNDEFORMED,
                     });
                     state.HeightMap[i] -= (float)(eroded * (1 - PRODUCT_DENSITY));
                     chemW += eroded; totalDepo += eroded * PRODUCT_DENSITY; affected++;
@@ -88,6 +89,7 @@ public sealed class WeatheringEngine(int gridSize)
             strat.PushLayer(di, new StratigraphicLayer
             {
                 RockType = RockType.SED_LOESS, AgeDeposited = timeMa, Thickness = loess,
+                Deformation = DeformationType.UNDEFORMED,
             });
         }
         return new WeatheringResult { ChemicalWeathered = chemW, AeolianEroded = aeolW, TotalDeposited = totalDepo, CellsAffected = affected };
