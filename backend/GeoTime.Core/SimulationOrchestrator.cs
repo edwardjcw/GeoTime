@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using GeoTime.Core.Compute;
 using GeoTime.Core.Models;
 using GeoTime.Core.Kernel;
@@ -376,7 +377,15 @@ public sealed class SimulationOrchestrator : IDisposable
         // Ushort array (PlateMap)
         Buffer.BlockCopy(State.PlateMap, 0, data, offset, cellCount * 2);
 
-        return data;
+        // ── Phase L6: append FeatureRegistry as JSON after the binary block ──
+        // Layout: [existing binary][4 bytes: JSON length][JSON bytes]
+        var jsonBytes = JsonSerializer.SerializeToUtf8Bytes(State.FeatureRegistry);
+        var finalData = new byte[data.Length + 4 + jsonBytes.Length];
+        Buffer.BlockCopy(data, 0, finalData, 0, data.Length);
+        BitConverter.TryWriteBytes(finalData.AsSpan(data.Length), jsonBytes.Length);
+        Buffer.BlockCopy(jsonBytes, 0, finalData, data.Length + 4, jsonBytes.Length);
+
+        return finalData;
     }
 
     /// <summary>
@@ -415,6 +424,28 @@ public sealed class SimulationOrchestrator : IDisposable
 
         // Ushort array (PlateMap)
         Buffer.BlockCopy(data, offset, State.PlateMap, 0, cellCount * 2);
+        offset += cellCount * 2;
+
+        // ── Phase L6: optional FeatureRegistry JSON appended after binary block ──
+        if (offset + 4 <= data.Length)
+        {
+            var jsonLen = BitConverter.ToInt32(data, offset);
+            offset += 4;
+            if (jsonLen > 0 && offset + jsonLen <= data.Length)
+            {
+                try
+                {
+                    var registry = JsonSerializer.Deserialize<FeatureRegistry>(
+                        data.AsSpan(offset, jsonLen));
+                    if (registry != null)
+                        State.FeatureRegistry = registry;
+                }
+                catch
+                {
+                    // Ignore deserialization errors — registry is non-critical.
+                }
+            }
+        }
     }
 
     private static void WriteFloatArray(byte[] dest, ref int offset, float[] src)

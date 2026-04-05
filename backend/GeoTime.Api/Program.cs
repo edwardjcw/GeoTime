@@ -407,6 +407,39 @@ app.MapGet("/api/state/features/{id}/history", (string id, SimulationOrchestrato
         : Results.NotFound($"Feature '{id}' not found");
 }).WithName("GetFeatureHistory");
 
+// ── Feature Labels compact list (Phase L5) ────────────────────────────────────
+// Returns a minimal label payload for frontend rendering. zoomLevel is computed
+// server-side from AreaKm2 so the frontend has zero business logic.
+app.MapGet("/api/state/features/labels", (SimulationOrchestrator sim) =>
+{
+    var registry = sim.GetFeatureRegistry();
+    var labels = registry.Features.Values
+        .Where(f => f.History.Count > 0 && f.Current.Status != FeatureStatus.Extinct)
+        .Select(f =>
+        {
+            var area = f.Current.AreaKm2;
+            // zoomLevel = maximum camera distance at which this label is visible.
+            // Camera starts at 3.0 (globe radius = 1); larger area → visible further away.
+            var zoomLevel = area > 10_000_000f ? 4.0f
+                          : area > 1_000_000f  ? 3.5f
+                          : area > 100_000f    ? 2.5f
+                          : area > 10_000f     ? 2.0f
+                          : 1.8f;
+            return new
+            {
+                id        = f.Id,
+                name      = f.Current.Name,
+                type      = f.Type.ToString(),
+                centerLat = f.Current.CenterLat,
+                centerLon = f.Current.CenterLon,
+                zoomLevel,
+                status    = f.Current.Status.ToString(),
+            };
+        })
+        .ToList();
+    return Results.Ok(labels);
+}).WithName("GetFeatureLabels");
+
 app.Run();
 
 // ── Request DTOs ──────────────────────────────────────────────────────────────

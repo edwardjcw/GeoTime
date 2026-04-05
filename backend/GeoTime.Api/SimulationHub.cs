@@ -69,6 +69,9 @@ public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
             // Strategy F: push binary state bundle directly to the caller after each step.
             // Layout: [height bytes | temp bytes | precip bytes] = 3 × cellCount × 4 bytes.
             await PushStateBundleAsync();
+
+            // Phase L6: broadcast changed feature labels to all clients after each step.
+            await PushFeaturesUpdatedAsync(currentTick: sim.State.FeatureRegistry.LastUpdatedTick);
         }
 
         await Clients.Caller.SendAsync("SimulationAdvanceComplete", new
@@ -95,6 +98,38 @@ public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
         Buffer.BlockCopy(temp,   0, bundle, floatBytes,     floatBytes);
         Buffer.BlockCopy(precip, 0, bundle, floatBytes * 2, floatBytes);
         await Clients.Caller.SendAsync("StateBundleData", bundle);
+    }
+
+    /// <summary>
+    /// Broadcast <c>FeaturesUpdated</c> to all clients with the labels of features that
+    /// changed during the most recent tick (i.e. features whose latest snapshot was
+    /// created at <paramref name="currentTick"/>).
+    /// </summary>
+    private async Task PushFeaturesUpdatedAsync(long currentTick)
+    {
+        var changedLabels = sim.State.FeatureRegistry.Features.Values
+            .Where(f => f.History.Count > 0
+                     && f.Current.SimTickCreated >= currentTick
+                     && f.Current.Status != GeoTime.Core.Models.FeatureStatus.Extinct)
+            .Select(f => new
+            {
+                id        = f.Id,
+                name      = f.Current.Name,
+                type      = f.Type.ToString(),
+                centerLat = f.Current.CenterLat,
+                centerLon = f.Current.CenterLon,
+                status    = f.Current.Status.ToString(),
+            })
+            .ToList();
+
+        if (changedLabels.Count > 0)
+        {
+            await Clients.All.SendAsync("FeaturesUpdated", new
+            {
+                tick   = currentTick,
+                labels = changedLabels,
+            });
+        }
     }
 
     /// <summary>

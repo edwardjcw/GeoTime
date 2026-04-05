@@ -78,16 +78,28 @@ npx playwright test  # E2E
 
 **Test count**: 265 (previous) + 13 (L3) + 9 (L4) = **287 total backend tests passing**
 
-### Phase L5 — Frontend: Minimal Label Rendering
-- `src/api/backend-client.ts` — `fetchFeatureLabels()` method
-- `src/render/label-renderer.ts` — `<div>` overlay pool, lat/lon → screen projection, zoom culling
-- `src/ui/app-shell.ts` — "Labels" toggle in layer panel, `#label-layer` container
-- `src/main.ts` — Wire `fetchFeatureLabels()` → `labelRenderer.setLabels()` on `PLANET_GENERATED`
-- Playwright E2E: after planet generation, label container exists with ≥ 1 visible label
-- Vitest unit test: back-hemisphere culling, zoom culling
+### Phase L5 — Frontend: Minimal Label Rendering ✅
 
-### Phase L6 — Integration, Snapshot Persistence, SignalR
-- `FeatureRegistry` serialised as part of snapshot save/restore
-- `SimulationHub.cs` — broadcast `FeaturesUpdated` after each tick
-- Frontend merge of delta features on `FeaturesUpdated` event
-- Integration test: save/restore preserves feature names; SignalR test for `FeaturesUpdated`
+**Completed** (this session)
+
+- [x] `src/api/backend-client.ts` — Added `FeatureLabel` interface and `fetchFeatureLabels()` (GET /api/state/features/labels); added `FeaturesUpdated` handler to `SimulationEventHandler`
+- [x] `src/render/globe-renderer.ts` — Added `getCamera()` public method for label projection use
+- [x] `src/render/label-renderer.ts` — New `LabelRenderer` class: div pool, lat/lon → dot-product back-hemisphere culling, zoom culling, per-frame CSS positioning
+- [x] `src/ui/app-shell.ts` — Added `#label-layer` overlay div, `getLabelLayer()` method, and 'labels' button in layer panel
+- [x] `src/main.ts` — Wired `fetchFeatureLabels()` → `labelRenderer.setLabels()` on planet generated; per-frame update in render loop; 'labels' layer toggle; `onFeaturesUpdated` refresh; load-state label refresh
+- [x] `backend/GeoTime.Api/Program.cs` — Added `GET /api/state/features/labels` endpoint (compact label list with zoomLevel computed from AreaKm2)
+- [x] `tests/label-renderer.test.ts` — 11 unit tests: div pool, text content, CSS class, visibility, back-hemisphere culling, zoom culling
+- [x] `e2e/app-shell.spec.ts` — Phase L5 test suite: label-layer in DOM, labels toggle button, ≥1 label div after planet generation
+
+### Phase L6 — Integration, Snapshot Persistence, SignalR ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Core/SimulationOrchestrator.cs` — `SerializeState()` appends FeatureRegistry JSON after binary block (4-byte length + JSON bytes); `DeserializeState()` reads it back if present; backward-compatible with old snapshots
+- [x] `backend/GeoTime.Api/SimulationHub.cs` — `AdvanceSimulation` broadcasts `FeaturesUpdated` (changed feature labels for current tick) to all clients after each step via `PushFeaturesUpdatedAsync()`
+- [x] `src/api/backend-client.ts` — `SimulationEventHandler.onFeaturesUpdated` handler; `FeaturesUpdated` case in WebSocket message switch
+- [x] `src/main.ts` — `onFeaturesUpdated` triggers `fetchFeatureLabels()` refresh when labels are visible; load-state also refreshes labels
+- [x] `backend/GeoTime.Tests/ApiIntegrationTests.cs` — `GetFeatureLabels_ReturnsCompactList` (L5); `SaveAndRestoreSnapshot_PreservesFeatureNames` (L6)
+- [x] `backend/GeoTime.Tests/SignalRIntegrationTests.cs` — `Hub_AdvanceSimulation_ReceivesFeaturesUpdated` (L6)
+
+**Test count**: 287 (previous) + 3 new backend = **290 total backend tests passing**; 368 (previous) + 11 new frontend = **379 total frontend tests passing**

@@ -1377,3 +1377,37 @@ test.describe('Bug Fix – Agent Status Panel', () => {
     await page.screenshot({ path: 'e2e/screenshots/advance-with-stats.png', fullPage: false });
   });
 });
+
+// ─── Phase L5: Feature Label Rendering ──────────────────────────────────────
+
+test.describe('Phase L5 — Feature Label Rendering', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+    // Wait for planet generation to complete and labels to be fetched
+    await page.waitForTimeout(3000);
+  });
+
+  test('label layer container exists in DOM after planet generation', async ({ page }) => {
+    const labelLayer = page.locator('#label-layer');
+    await expect(labelLayer).toBeAttached();
+  });
+
+  test('labels toggle button exists in layer panel', async ({ page }) => {
+    const labelsBtn = page.locator('button[data-layer="labels"]');
+    await expect(labelsBtn).toBeVisible();
+  });
+
+  test('at least one label div is rendered after planet generation', async ({ page }) => {
+    // Labels default to visible (the container is present in DOM).
+    // Wait a bit for the async fetchFeatureLabels call to complete.
+    await page.waitForTimeout(2000);
+    const labelLayer = page.locator('#label-layer');
+    // The label layer should exist
+    await expect(labelLayer).toBeAttached();
+    // At least one div child should be present inside (even if some are hidden)
+    const labelDivs = labelLayer.locator('div');
+    const count = await labelDivs.count();
+    expect(count).toBeGreaterThanOrEqual(1);
+  });
+});

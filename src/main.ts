@@ -6,6 +6,7 @@
 import './style.css';
 import { GRID_SIZE } from './shared/types';
 import { GlobeRenderer } from './render/globe-renderer';
+import { LabelRenderer } from './render/label-renderer';
 import { renderCrossSection, exportCrossSectionPNG } from './render/cross-section-renderer';
 import { AppShell } from './ui/app-shell';
 import * as api from './api/backend-client';
@@ -21,6 +22,7 @@ if (!appEl) {
 const shell = new AppShell(appEl);
 const viewportEl = shell.getViewportElement();
 const renderer = new GlobeRenderer(viewportEl);
+const labelRenderer = new LabelRenderer(shell.getLabelLayer());
 
 // ── Simulation state (display-only buffers populated from backend) ──────────
 
@@ -89,6 +91,11 @@ async function doGeneratePlanet(seed: number): Promise<void> {
     shell.setDrawMode(false);
     drawModeActive = false;
     drawPoints = [];
+
+    // Fetch feature labels from backend and pass to label renderer (Phase L5).
+    api.fetchFeatureLabels()
+      .then((labels) => labelRenderer.setLabels(labels))
+      .catch(() => {/* labels are non-critical */});
 
     // Encode seed in URL fragment for sharing
     window.location.hash = `seed=${result.seed}`;
@@ -581,7 +588,11 @@ async function fetchLayerRgba(layer: string): Promise<Uint8Array | null> {
 
 shell.onLayerToggle(async (layer: string, active: boolean) => {
   try {
-    if (layer === 'plates') {
+    if (layer === 'labels') {
+      // Phase L5: geographic feature label overlay.
+      labelRenderer.setVisible(active);
+      return; // No globe texture change needed for labels.
+    } else if (layer === 'plates') {
       if (active) {
         const plateData = await api.getPlateMap();
         renderer.updatePlateMap(new Uint16Array(plateData), GRID_SIZE);
@@ -797,6 +808,11 @@ shell.onLoadState(async () => {
       heightMap,
       GRID_SIZE,
     );
+
+    // Phase L6: refresh feature labels after snapshot restore.
+    api.fetchFeatureLabels()
+      .then((labels) => labelRenderer.setLabels(labels))
+      .catch(() => {/* non-critical */});
   } catch (err) {
     console.error('Load state failed:', err);
   }
@@ -972,6 +988,16 @@ const simSocket = api.createSimulationSocket({
     simTimeMa = event.timeMa;
     shell.setSimTime(simTimeMa);
   },
+  onFeaturesUpdated: (event) => {
+    // Phase L6: merge changed labels into the renderer's cache.
+    // We do a full refresh via the REST endpoint to ensure consistency;
+    // the SignalR payload is used only to trigger the refresh.
+    if (labelRenderer.isVisible() && event.labels.length > 0) {
+      api.fetchFeatureLabels()
+        .then((labels) => labelRenderer.setLabels(labels))
+        .catch(() => {/* non-critical */});
+    }
+  },
 });
 
 // Connect with a short retry delay — the backend may not be ready immediately.
@@ -1086,6 +1112,16 @@ function loop(now: number): void {
   }
 
   renderer.render();
+
+  // Phase L5: update label positions after the 3D render so the camera matrix is current.
+  if (labelRenderer.isVisible()) {
+    labelRenderer.update(
+      renderer.getCamera(),
+      viewportEl.clientWidth,
+      viewportEl.clientHeight,
+      renderer.getCameraDistance(),
+    );
+  }
 }
 
 requestAnimationFrame(loop);

@@ -96,6 +96,19 @@ export interface SimulationTickEvent {
   totalSteps: number;
 }
 
+/** A compact label descriptor returned by /api/state/features/labels. */
+export interface FeatureLabel {
+  id: string;
+  name: string;
+  /** Feature type enum name, e.g. "Continent", "Ocean", "MountainRange". */
+  type: string;
+  centerLat: number;
+  centerLon: number;
+  /** Maximum camera distance (globe radius = 1) at which this label is visible. */
+  zoomLevel: number;
+  status: string;
+}
+
 async function post<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
@@ -182,6 +195,11 @@ export async function getOrganicCarbonMap(): Promise<number[]> {
 
 export async function getSoilMap(): Promise<number[]> {
   return get('/api/state/soilmap');
+}
+
+/** Fetch compact label descriptors for all active geographic features. */
+export async function fetchFeatureLabels(): Promise<FeatureLabel[]> {
+  return get('/api/state/features/labels');
 }
 
 export async function getPlates(): Promise<unknown[]> {
@@ -329,6 +347,8 @@ export type SimulationEventHandler = {
   onDisconnected?: () => void;
   /** Called when the backend reports a simulation engine phase (tectonic, surface, biomatter, complete). */
   onProgress?: (event: { phase: string; step?: number; totalSteps?: number; timeMa?: number }) => void;
+  /** Phase L6: called when one or more feature labels changed after a tick. */
+  onFeaturesUpdated?: (event: { tick: number; labels: FeatureLabel[] }) => void;
 };
 
 /**
@@ -403,6 +423,10 @@ export function createSimulationSocket(handlers: SimulationEventHandler) {
                 } else if (args[0] instanceof ArrayBuffer) {
                   handlers.onStateBundleData?.(args[0]);
                 }
+                break;
+              case 'FeaturesUpdated':
+                // Phase L6: changed feature labels pushed after each tick.
+                handlers.onFeaturesUpdated?.(args[0]);
                 break;
             }
           }
