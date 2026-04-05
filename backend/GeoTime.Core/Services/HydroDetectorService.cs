@@ -402,7 +402,10 @@ public sealed class HydroDetectorService
             rowPrecip[row] = sum / gs;
         }
 
-        // Restrict to the equatorial belt (±30°).
+        // Restrict to the equatorial belt (±ItczSearchBelt degrees).
+        // Row mapping: row = (90 - lat) / 180 * gs  (row 0 = north pole, row gs/2 = equator).
+        // lat = +(ItczSearchBelt) → rowMin = (90 - ItczSearchBelt) / 180 * gs
+        // lat = -(ItczSearchBelt) → rowMax = (90 + ItczSearchBelt) / 180 * gs
         int rowMin = (int)((90f - ItczSearchBelt) / 180f * gs);
         int rowMax = (int)((90f + ItczSearchBelt) / 180f * gs);
         rowMin = Math.Clamp(rowMin, 0, gs - 1);

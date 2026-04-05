@@ -173,7 +173,8 @@ public class HydroDetectorTests
         const int gs = 32;
         var state = new SimulationState(gs);
 
-        // Set high precipitation only near the equator (rows 14–18, i.e., ±~11°).
+        // Set high precipitation only near the equator (rows 14–18 for gs=32).
+        // Each row spans 180°/32 = 5.625°, so ±2 rows = ±11.25° from the equator.
         int equatorRow = gs / 2; // row 16
         for (int row = equatorRow - 2; row <= equatorRow + 2; row++)
         for (int col = 0; col < gs; col++)
