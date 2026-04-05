@@ -83,7 +83,7 @@ async function doGeneratePlanet(seed: number): Promise<void> {
 
     // Fetch and display the compute backend indicator (GPU vs CPU)
     api.getComputeInfo().then((info) => {
-      shell.setComputeMode(info.isGpu, info.deviceName);
+      shell.setComputeMode(info.isGpu, info.deviceName, info.memoryMb ?? 0);
     }).catch(() => {/* backend may not be ready yet – ignore */});
 
     // Close any open cross-section panel on new planet
@@ -971,7 +971,7 @@ const simSocket = api.createSimulationSocket({
   onConnected: (event) => {
     // When the hub sends compute info on connection, update the toolbar indicator.
     if (event.computeMode !== undefined && event.computeDevice !== undefined) {
-      shell.setComputeMode(event.computeMode === 'GPU', event.computeDevice);
+      shell.setComputeMode(event.computeMode === 'GPU', event.computeDevice, event.computeMemoryMb ?? 0);
     }
   },
   onProgress: (event) => {

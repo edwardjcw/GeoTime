@@ -857,11 +857,13 @@ export class AppShell {
    * Shows a GPU or CPU chip icon and the device name.
    * @param isGpu - true if an actual GPU accelerator is active
    * @param deviceName - human-readable device label from the backend
+   * @param memoryMb - on-device memory in MB (0 = unknown); shown in tooltip to confirm dedicated GPU
    */
-  setComputeMode(isGpu: boolean, deviceName: string): void {
+  setComputeMode(isGpu: boolean, deviceName: string, memoryMb = 0): void {
     const icon = isGpu ? '🖥 GPU' : '⚙️ CPU';
     this.computeEl.textContent = `${icon}`;
-    this.computeEl.title = `Backend compute: ${deviceName}`;
+    const memLabel = isGpu && memoryMb > 0 ? ` · ${memoryMb >= 1024 ? (memoryMb / 1024).toFixed(1) + ' GB' : memoryMb + ' MB'}` : '';
+    this.computeEl.title = `Backend compute: ${deviceName}${memLabel}`;
     this.computeEl.style.color = isGpu ? '#7ef' : '#adf';
   }
 

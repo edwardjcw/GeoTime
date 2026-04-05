@@ -158,6 +158,8 @@ export interface ComputeInfoResult {
   deviceName: string;
   acceleratorType: string;
   isGpu: boolean;
+  /** On-device memory in megabytes; 0 when not available. A dedicated GPU will report much more memory than integrated graphics. */
+  memoryMb: number;
 }
 
 /** Fetch the active compute backend info (GPU/CPU) from the server. */
@@ -343,7 +345,7 @@ export type SimulationEventHandler = {
   onPlateMapData?: (data: number[]) => void;
   /** Rec 8: raw float32 state bundle pushed after each advance step. */
   onStateBundleData?: (data: ArrayBuffer) => void;
-  onConnected?: (event: { timeMa: number; seed: number; computeMode?: string; computeDevice?: string }) => void;
+  onConnected?: (event: { timeMa: number; seed: number; computeMode?: string; computeDevice?: string; computeMemoryMb?: number }) => void;
   onDisconnected?: () => void;
   /** Called when the backend reports a simulation engine phase (tectonic, surface, biomatter, complete). */
   onProgress?: (event: { phase: string; step?: number; totalSteps?: number; timeMa?: number }) => void;
