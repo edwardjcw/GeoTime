@@ -473,3 +473,84 @@ export function createSimulationSocket(handlers: SimulationEventHandler) {
     requestStateBundleBinary: () => invoke('RequestStateBundleBinary'),
   };
 }
+
+// ── LLM Provider API (Phase D3) ─────────────────────────────────────────────
+
+/** A single LLM provider descriptor returned by GET /api/llm/providers. */
+export interface LlmProviderInfo {
+  name: string;
+  displayName: string;
+  isAvailable: boolean;
+  needsSetup: boolean;
+  activeModel: string | null;
+  statusMessage: string;
+  isActive: boolean;
+}
+
+/** The active provider summary returned by GET /api/llm/active. */
+export interface LlmActiveInfo {
+  provider: string;
+  model: string | null;
+  baseUrl: string | null;
+  hasApiKey: boolean;
+}
+
+/** Config payload sent with PUT /api/llm/active. */
+export interface LlmProviderSettings {
+  apiKey?: string;
+  model?: string;
+  baseUrl?: string;
+}
+
+/** Fetch all registered LLM providers with their current availability status. */
+export async function getLlmProviders(): Promise<LlmProviderInfo[]> {
+  return get('/api/llm/providers');
+}
+
+/** Fetch the current active provider name and its settings. */
+export async function getLlmActive(): Promise<LlmActiveInfo> {
+  return get('/api/llm/active');
+}
+
+/** Change the active provider (and optionally update its config) at runtime. */
+export async function setLlmActive(
+  provider: string,
+  settings?: LlmProviderSettings,
+): Promise<{ provider: string }> {
+  return post('/api/llm/active', { provider, settings: settings ?? null });
+}
+
+/** Trigger the setup flow for a local provider (Ollama or LlamaSharp). */
+export async function startLlmSetup(provider: string): Promise<void> {
+  await post(`/api/llm/setup/${provider}`);
+}
+
+/**
+ * Open an EventSource streaming setup progress for a local provider.
+ * Returns the EventSource so the caller can close it when done.
+ */
+export function openLlmSetupProgress(
+  provider: string,
+  onProgress: (event: LlmSetupProgressEvent) => void,
+): EventSource {
+  const url = `${API_BASE}/api/llm/setup/${provider}/progress`;
+  const es  = new EventSource(url);
+  es.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data) as LlmSetupProgressEvent;
+      onProgress(data);
+      if (data.isComplete || data.isError) es.close();
+    } catch {/* ignore malformed events */}
+  };
+  return es;
+}
+
+/** One progress event streamed from GET /api/llm/setup/{provider}/progress. */
+export interface LlmSetupProgressEvent {
+  step: string;
+  percentTotal: number;
+  detail: string;
+  isComplete: boolean;
+  isError: boolean;
+  errorMessage: string | null;
+}
