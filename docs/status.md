@@ -133,3 +133,15 @@ npx playwright test  # E2E
 - [x] `backend/GeoTime.Tests/StratigraphyTests.cs` — Extended with 8 D1 tests: event field defaults on StratigraphicLayer, Clone copies event fields, StratigraphicColumn Surface returns top layer, ExtraordinaryLayers filters Normal layers, EventDepositionEngine deposits ImpactEjecta in nearby cells, GRB deposits in all cells with IsotopeAnomaly > 0, ejecta thickness falls off with distance, CellInspection FeatureIds includes feature
 
 **Test count**: 290 (previous) + 8 new backend = **298 total backend tests passing**
+
+---
+
+## Phase D2 — Geological Context Assembler ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Core/Models/DescriptionModels.cs` — New file: `GeologicalContext` record with all context fields: location (Lat, Lon, CurrentTick, SimAgeDescription), cell data (CellInspection, StratigraphicColumn), feature hierarchy (ContainingFeatures sorted by scale, PrimaryLandFeature, PrimaryWaterFeature), tectonic context (CurrentPlate, DistanceToPlateMarginKm, NearestMarginType, CollidingPlate, SubductingPlate, ConvergenceRateCmPerYear), hydrological context (RiverName, RiverLengthKm, CatchmentAreaKm2, RiverOutletOcean, WatershedName, IsInEndorheicBasin, DrainageGradient), mountain/orographic context (IsInMountainRange, RangeName, RangeMaxElevationM, IsOnWindwardSide, HasRainShadow, MountainOriginType), climate context (BiomeType, MeanTempC, MeanPrecipMm, IsInMonsoonZone, IsInHurricaneCorridor, IsInJetStreamZone, NearestOceanCurrentName, NearestCurrentIsWarm), extraordinary layers, primary feature history, nearby features
+- [x] `backend/GeoTime.Core/Services/GeologicalContextAssembler.cs` — New service: `AssembleAsync(int cellIndex)` → `GeologicalContext?`; 10-step assembly: (1) CellInspection fetch, (2) feature registry lookup sorted by scale, (3) tectonic context via BoundaryClassifier (converging/subducting plates within 500 km, convergence rate in cm/yr), (4) hydrological context (river metrics, watershed, endorheic basin detection, outlet ocean), (5) orographic context (windward/leeward via precipitation comparison, rain-shadow, mountain origin type), (6) climate zone membership, (7) extraordinary layer extraction, (8) primary feature history, (9) nearby features within 3 000 km (up to 6), (10) GeologicalContext assembly
+- [x] `backend/GeoTime.Tests/ContextAssemblerTests.cs` — 18 unit tests: null for out-of-range index, valid cell returns context, lat/lon matches cell index, sim age description, plate ID matches cell, convergent boundary cell has CONVERGENT margin type, subduction zone has SubductingPlate populated, ContainingFeatures includes cell's features, features sorted by scale (plate first), impact ejecta layer in ExtraordinaryLayers, ExtraordinaryLayers excludes Normal layers, river name populated, river length km > 0, mountain range IsInMountainRange + RangeName, non-mountain cell IsInMountainRange false, NearbyFeatures ≤ 6, nearby features don't include self, nearby features ordered by distance
+
+**Test count**: 298 (previous) + 18 new backend = **316 total backend tests passing**
