@@ -539,6 +539,83 @@ public class ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> fact
         Assert.Equal(System.Net.HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    // ── Phase L5: Feature Labels Endpoint ────────────────────────────────────
+
+    [Fact]
+    public async Task GetFeatureLabels_ReturnsCompactList()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        var response = await _client.GetAsync("/api/state/features/labels");
+        response.EnsureSuccessStatusCode();
+        var labels = await response.Content.ReadFromJsonAsync<JsonElement[]>();
+        Assert.NotNull(labels);
+        Assert.True(labels.Length > 0, "Should return at least one feature label");
+        var first = labels[0];
+        Assert.True(first.TryGetProperty("id", out _),        "Label must have id");
+        Assert.True(first.TryGetProperty("name", out _),       "Label must have name");
+        Assert.True(first.TryGetProperty("type", out _),       "Label must have type");
+        Assert.True(first.TryGetProperty("centerLat", out _),  "Label must have centerLat");
+        Assert.True(first.TryGetProperty("centerLon", out _),  "Label must have centerLon");
+        Assert.True(first.TryGetProperty("zoomLevel", out _),  "Label must have zoomLevel");
+        Assert.True(first.TryGetProperty("status", out _),     "Label must have status");
+    }
+
+    // ── Phase L6: Snapshot Persistence of FeatureRegistry ────────────────────
+
+    [Fact]
+    public async Task SaveAndRestoreSnapshot_PreservesFeatureNames()
+    {
+        // Generate a planet and capture the feature names.
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+
+        var labelsBefore = await _client.GetAsync("/api/state/features/labels");
+        labelsBefore.EnsureSuccessStatusCode();
+        var beforeArray = await labelsBefore.Content.ReadFromJsonAsync<JsonElement[]>();
+        Assert.NotNull(beforeArray);
+        Assert.True(beforeArray.Length > 0);
+
+        // Collect feature names before save.
+        var namesBefore = beforeArray
+            .Select(l => l.GetProperty("name").GetString())
+            .Where(n => n != null)
+            .OrderBy(n => n)
+            .ToArray();
+
+        // Save snapshot.
+        var saveResp = await _client.PostAsJsonAsync("/api/snapshots/take", new { });
+        saveResp.EnsureSuccessStatusCode();
+
+        // Advance simulation to change state.
+        await _client.PostAsJsonAsync("/api/simulation/advance", new { deltaMa = 5.0 });
+
+        // Restore the snapshot.
+        var info = await _client.GetAsync("/api/snapshots");
+        var infoJson = await info.Content.ReadFromJsonAsync<JsonElement>();
+        var latestTime = infoJson.GetProperty("times").EnumerateArray().Max(t => t.GetDouble());
+        var restoreResp = await _client.PostAsJsonAsync(
+            "/api/snapshots/restore", new { targetTimeMa = latestTime });
+        restoreResp.EnsureSuccessStatusCode();
+
+        // Fetch labels after restore.
+        var labelsAfter = await _client.GetAsync("/api/state/features/labels");
+        labelsAfter.EnsureSuccessStatusCode();
+        var afterArray = await labelsAfter.Content.ReadFromJsonAsync<JsonElement[]>();
+        Assert.NotNull(afterArray);
+
+        var namesAfter = afterArray
+            .Select(l => l.GetProperty("name").GetString())
+            .Where(n => n != null)
+            .OrderBy(n => n)
+            .ToArray();
+
+        // The restored registry should have the same feature names as before the save.
+        Assert.Equal(namesBefore.Length, namesAfter.Length);
+        for (int i = 0; i < namesBefore.Length; i++)
+        {
+            Assert.Equal(namesBefore[i], namesAfter[i]);
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private async Task<double> GetTimeMa()

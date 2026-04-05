@@ -489,6 +489,11 @@ export class GlobeRenderer {
     return this.camera.position.length();
   }
 
+  /** Returns the Three.js perspective camera for external projection use (e.g. label renderer). */
+  getCamera(): THREE.PerspectiveCamera {
+    return this.camera;
+  }
+
   /** Register a callback for first-person mode transitions. */
   onCameraChange(cb: (isFirstPerson: boolean) => void): void {
     this._cameraChangeCb = cb;

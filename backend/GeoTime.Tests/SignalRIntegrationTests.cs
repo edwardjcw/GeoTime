@@ -194,4 +194,36 @@ public class SignalRIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> 
 
         Assert.True(received, "Should receive HeightMapData with non-empty array");
     }
+
+    // ── Phase L6: FeaturesUpdated SignalR Event ───────────────────────────────
+
+    [Fact]
+    public async Task Hub_AdvanceSimulation_ReceivesFeaturesUpdated()
+    {
+        var httpClient = factory.CreateClient();
+        await httpClient.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+
+        var server = factory.Server;
+        var connection = new HubConnectionBuilder()
+            .WithUrl(
+                new Uri(server.BaseAddress, "/hubs/simulation"),
+                o => o.HttpMessageHandlerFactory = _ => server.CreateHandler())
+            .Build();
+
+        var tcs = new TaskCompletionSource<System.Text.Json.JsonElement>();
+        connection.On<System.Text.Json.JsonElement>("FeaturesUpdated", payload =>
+            tcs.TrySetResult(payload));
+
+        await connection.StartAsync();
+        await connection.InvokeAsync("AdvanceSimulation", 5.0, 1);
+
+        var received = await Task.WhenAny(tcs.Task, Task.Delay(15000)) == tcs.Task;
+        await connection.DisposeAsync();
+
+        Assert.True(received, "Should receive FeaturesUpdated event after advance");
+        var payload = await tcs.Task;
+        Assert.True(payload.TryGetProperty("tick", out _),   "Payload should contain tick");
+        Assert.True(payload.TryGetProperty("labels", out var labelsEl), "Payload should contain labels");
+        Assert.True(labelsEl.GetArrayLength() > 0, "labels array should be non-empty");
+    }
 }

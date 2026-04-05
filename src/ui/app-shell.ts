@@ -84,6 +84,9 @@ export class AppShell {
   // ── Layer overlay elements ──────────────────────────────────────────────
   private layerToggles: Map<string, HTMLButtonElement> = new Map();
 
+  // ── Label layer container (Phase L5) ────────────────────────────────────
+  private _labelLayer: HTMLElement = document.createElement('div');
+
   // ── Save/Load elements ──────────────────────────────────────────────────
   private saveStateBtn: HTMLButtonElement = document.createElement('button');
   private loadStateBtn: HTMLButtonElement = document.createElement('button');
@@ -140,6 +143,22 @@ export class AppShell {
       overflow: 'hidden',
     });
     this.root.appendChild(this.viewport);
+
+    // ── Label layer — div overlay for geographic feature labels (Phase L5) ──
+    const labelLayer = document.createElement('div');
+    labelLayer.id = 'label-layer';
+    Object.assign(labelLayer.style, {
+      position: 'absolute',
+      top: '0',
+      left: '0',
+      right: '0',
+      bottom: '0',
+      pointerEvents: 'none',
+      zIndex: '10',
+      overflow: 'hidden',
+    });
+    this.root.appendChild(labelLayer);
+    this._labelLayer = labelLayer;
 
     // ── Inspect panel (floating, hidden by default) ───────────────────────
     this.inspectPanel = el('div', {
@@ -596,7 +615,7 @@ export class AppShell {
     layerGroup.appendChild(layerTitle);
 
     // Layer names must stay in sync with the switch cases in main.ts onLayerToggle handler.
-    const layerNames = ['plates', 'temperature', 'precipitation', 'biome', 'soil', 'clouds', 'biomass', 'topo', 'weather'];
+    const layerNames = ['plates', 'temperature', 'precipitation', 'biome', 'soil', 'clouds', 'biomass', 'topo', 'weather', 'labels'];
     for (const name of layerNames) {
       const btn = document.createElement('button');
       btn.textContent = name;
@@ -790,6 +809,11 @@ export class AppShell {
 
   getViewportElement(): HTMLElement {
     return this.viewport;
+  }
+
+  /** Returns the #label-layer container for the LabelRenderer (Phase L5). */
+  getLabelLayer(): HTMLElement {
+    return this._labelLayer;
   }
 
   setSeed(seed: number): void {
