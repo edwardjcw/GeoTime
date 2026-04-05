@@ -185,9 +185,9 @@ public record GeologicalContext
 
 ---
 
-## Phase D3 — LLM Provider Abstraction
+## Phase D3 — LLM Provider Abstraction, Runtime Settings UI, and Local LLM Setup
 
-**Goal**: Define a clean `ILlmProvider` interface and implement it for every supported backend. The caller (`DescriptionService`) never knows which provider is active. Provider selection and configuration is entirely in `appsettings.json`.
+**Goal**: Define a clean `ILlmProvider` interface and implement it for every supported backend. The caller (`DescriptionService`) never knows which provider is active. The active provider and its key/model settings are **changeable at runtime** through a settings panel in the UI — no server restart required. For local providers (Ollama and LlamaSharp), the UI offers a guided **Setup** flow that downloads and configures the provider automatically, with a live progress bar showing each step.
 
 ### 3.1 — Provider Interface (`backend/GeoTime.Api/Llm/ILlmProvider.cs`)
 
@@ -196,9 +196,23 @@ public interface ILlmProvider
 {
     string Name { get; }
     bool IsAvailable { get; }
+
+    /// <summary>Async check that actively probes the provider (e.g., HTTP ping or file check).</summary>
+    Task<LlmProviderStatus> GetStatusAsync(CancellationToken ct = default);
+
     Task<string> GenerateAsync(string systemPrompt, string userPrompt,
                                CancellationToken ct = default);
+
+    /// <summary>Token-streaming variant. Yields tokens as they arrive.</summary>
+    IAsyncEnumerable<string> StreamAsync(string systemPrompt, string userPrompt,
+                                         CancellationToken ct = default);
 }
+
+public record LlmProviderStatus(
+    bool   IsReady,
+    string StatusMessage,    // e.g., "Connected", "API key missing", "Model not downloaded"
+    bool   NeedsSetup        // true for local providers that haven't been configured yet
+);
 ```
 
 ### 3.2 — Provider Implementations
@@ -207,43 +221,218 @@ public interface ILlmProvider
 - Uses Google Generative AI REST API (`generativelanguage.googleapis.com`).
 - Config keys: `Llm:Gemini:ApiKey`, `Llm:Gemini:Model` (default `gemini-2.0-flash`).
 - HTTP client sends `POST /v1beta/models/{model}:generateContent` with `systemInstruction` + `contents[user]`.
+- Streaming: uses the `?alt=sse` variant of the same endpoint.
 - Handles `429` (rate limit) with exponential backoff, max 3 retries.
+- `NeedsSetup = false` (cloud provider, no local installation required).
 
 #### `OpenAiProvider`
 - Config keys: `Llm:OpenAi:ApiKey`, `Llm:OpenAi:Model` (default `gpt-4o-mini`), `Llm:OpenAi:BaseUrl` (optional, for Azure OpenAI endpoint overriding).
-- Uses the standard chat completions endpoint.
+- Uses the standard chat completions endpoint with SSE streaming.
+- `NeedsSetup = false`.
 
 #### `AnthropicProvider`
 - Config keys: `Llm:Anthropic:ApiKey`, `Llm:Anthropic:Model` (default `claude-haiku-3-5`).
-- Uses the Messages API with `system` + `user` turn.
+- Uses the Messages API with `system` + `user` turn; streaming via `"stream": true`.
+- `NeedsSetup = false`.
 
 #### `OllamaProvider`
-- Connects to a local Ollama instance at `http://localhost:11434`.
-- Config keys: `Llm:Ollama:BaseUrl`, `Llm:Ollama:Model` (e.g., `gemma3`, `llama3.2`).
-- Uses `/api/chat` endpoint with `stream: false`.
-- `IsAvailable`: attempts a `GET /api/tags` health check on startup; if the server is unreachable, returns `false` without throwing.
+- Connects to a local Ollama instance.
+- Config keys: `Llm:Ollama:BaseUrl` (default `http://localhost:11434`), `Llm:Ollama:Model` (e.g., `gemma3`, `llama3.2`).
+- Uses `/api/chat` with `"stream": false` for batch, `/api/chat` with `"stream": true` for streaming.
+- `IsAvailable` / `GetStatusAsync`: attempts a `GET /api/tags` health check; if the server is unreachable → `NeedsSetup = true, StatusMessage = "Ollama not running"`.
+- `NeedsSetup = true` when Ollama binary is not installed or the configured model has not been pulled.
 
 #### `LlamaSharpProvider`
 - Loads a GGUF model file directly in-process using the `LLamaSharp` NuGet package.
-- Config keys: `Llm:LlamaSharp:ModelPath` (absolute path to .gguf file), `Llm:LlamaSharp:ContextSize` (default 4096), `Llm:LlamaSharp:GpuLayers` (default 0 for CPU-only).
-- `IsAvailable`: returns `false` if `ModelPath` is not set or the file does not exist, so the system silently falls back without error.
-- Model is loaded once at DI container startup (singleton scope) to avoid per-request load latency.
+- Config keys: `Llm:LlamaSharp:ModelPath`, `Llm:LlamaSharp:ModelUrl` (GGUF download URL, used by the setup flow), `Llm:LlamaSharp:ContextSize` (default 4096), `Llm:LlamaSharp:GpuLayers` (default 0).
+- `IsAvailable` / `GetStatusAsync`: checks whether the file at `ModelPath` exists and is a valid GGUF → `NeedsSetup = true` if not.
+- Model is loaded once at DI container startup (singleton scope); reloaded without restart if the setup flow writes a new model.
 
 #### `TemplateFallbackProvider`
-- Always available (`IsAvailable = true`), zero external dependencies.
-- `GenerateAsync` ignores the prompts and instead calls the template engine (see Phase D4) to assemble deterministic prose from the structured context embedded in the user prompt as JSON.
+- Always available (`IsAvailable = true`, `NeedsSetup = false`), zero external dependencies.
+- `GenerateAsync` / `StreamAsync` call the template engine (Phase D4) to assemble deterministic prose.
 - Acts as the ultimate fallback when no other provider is configured or available.
 
-### 3.3 — Provider Selection (`backend/GeoTime.Api/Llm/LlmProviderFactory.cs`)
+### 3.3 — Provider Selection and Runtime Config (`backend/GeoTime.Api/Llm/LlmProviderFactory.cs`, `LlmSettingsService.cs`)
 
-`LlmProviderFactory` is registered as a singleton. On construction it reads `appsettings.json` and builds an ordered list of providers by a `Llm:PreferenceOrder` config array (default: `["Gemini", "OpenAi", "Anthropic", "Ollama", "LlamaSharp", "Template"]`). `GetProvider()` returns the first `IsAvailable == true` provider in the list.
+#### `LlmSettingsService` (new singleton)
+Holds the **runtime-mutable** LLM configuration that the UI can change without restarting the server. On startup it seeds itself from `appsettings.json`; any UI change persists the new settings to a `llm-settings.json` user file (in the app data directory, gitignored):
 
-### 3.4 — Phase D3 Tests (`backend/GeoTime.Tests/LlmProviderTests.cs`)
+```csharp
+public class LlmSettingsService
+{
+    public string ActiveProvider { get; private set; }  // "Gemini", "Ollama", etc.
+    public Dictionary<string, ProviderSettings> ProviderConfigs { get; }
 
+    public void SetActiveProvider(string name);
+    public void UpdateProviderConfig(string name, ProviderSettings settings);
+    public void Save();   // persist to llm-settings.json
+}
+
+public record ProviderSettings(
+    string? ApiKey,
+    string? Model,
+    string? BaseUrl,
+    string? ModelPath,
+    string? ModelUrl,
+    int?    ContextSize,
+    int?    GpuLayers
+);
+```
+
+#### `LlmProviderFactory`
+Registered as a singleton; holds references to all provider instances. `GetActiveProvider()` returns the provider matching `LlmSettingsService.ActiveProvider`. If that provider is not available, falls back down the preference list to the first available provider.
+
+### 3.4 — LLM Settings API Endpoints (`backend/GeoTime.Api/Program.cs`)
+
+```
+GET  /api/llm/providers
+→ Returns list of all providers with their current status:
+  [{ name, displayName, isAvailable, needsSetup, activeModel, statusMessage }]
+
+GET  /api/llm/active
+→ Returns the current active provider name and its settings (API key redacted).
+
+PUT  /api/llm/active
+Body: { "provider": "Gemini", "settings": { "apiKey": "...", "model": "gemini-2.0-flash" } }
+→ Updates active provider + config; saves to llm-settings.json. No restart required.
+
+POST /api/llm/setup/{provider}
+→ Triggers the setup flow for a local provider (Ollama or LlamaSharp).
+→ Returns 202 Accepted immediately; progress is streamed via SSE on /api/llm/setup/{provider}/progress.
+
+GET  /api/llm/setup/{provider}/progress   (SSE endpoint)
+→ Streams LlmSetupProgress events until setup completes or fails.
+```
+
+### 3.5 — Local LLM Setup Service (`backend/GeoTime.Api/Llm/LocalLlmSetupService.cs`)
+
+`LocalLlmSetupService` orchestrates the full installation flow for local providers. Each step reports progress via a `Channel<LlmSetupProgress>` that the SSE endpoint drains and forwards to the browser.
+
+```csharp
+public record LlmSetupProgress(
+    string Step,           // e.g., "Checking prerequisites", "Downloading Ollama installer",
+                           //        "Installing Ollama", "Pulling model gemma3",
+                           //        "Loading model", "Verifying", "Complete"
+    int    PercentTotal,   // 0–100 overall progress
+    string Detail,         // e.g., "487 MB / 2.1 GB  (23%)" during download
+    bool   IsComplete,
+    bool   IsError,
+    string? ErrorMessage
+);
+```
+
+#### Ollama Setup Flow
+
+1. **Check prerequisites** — Detect OS; verify curl/wget available.
+2. **Check if Ollama is installed** — Test `ollama --version` subprocess.
+3. **Download Ollama installer** — If not installed: stream-download the appropriate installer binary from `https://ollama.com/install.sh` (Linux/macOS) or `.exe` (Windows), reporting byte progress.
+4. **Install Ollama** — Run the installer subprocess; capture stdout/stderr; report each installer log line as a `Detail` update.
+5. **Start Ollama service** — Run `ollama serve` as a background process; wait up to 30 s for `/api/tags` health check to respond.
+6. **Pull model** — Run `ollama pull {model}`; parse the JSON progress output Ollama emits (`{"status":"pulling manifest"}`, `{"status":"downloading","completed":N,"total":N}`) and map to percentage `Detail`.
+7. **Verify** — Send a short test prompt via `OllamaProvider`; verify non-empty response.
+8. **Complete** — Mark `IsComplete = true`; `LlmSettingsService.SetActiveProvider("Ollama")`.
+
+#### LlamaSharp Setup Flow
+
+1. **Check prerequisites** — Verify sufficient disk space (configurable, default 5 GB) and that `Llm:LlamaSharp:ModelPath` directory is writable.
+2. **Determine model URL** — Use `Llm:LlamaSharp:ModelUrl` from settings if set; otherwise show a default (e.g., Gemma-3 4B Q4_K_M from Hugging Face).
+3. **Download GGUF model file** — HTTP range-request streaming download with byte progress; supports resume if partial file exists (via `Range:` header).
+4. **Validate GGUF header** — Read first 4 bytes and verify `GGUF` magic number.
+5. **Load model into LlamaSharpProvider** — Call `provider.ReloadModel(path)`.
+6. **Verify** — Send a test prompt; verify response.
+7. **Complete** — Persist `ModelPath` to `llm-settings.json`; mark active provider.
+
+### 3.6 — LLM Settings UI (`src/ui/app-shell.ts`, `src/main.ts`)
+
+The frontend is kept minimal: it calls the API and renders the response. All logic lives on the server.
+
+#### Settings Button
+- Add a **⚙ LLM** settings button to the existing toolbar (next to layer toggles).
+- On click, open a `#llm-settings-panel` side-panel (not a blocking modal, so the globe remains visible).
+
+#### Provider Selection Panel
+
+The panel fetches `GET /api/llm/providers` on open and renders:
+
+```
+Active LLM Provider
+┌─────────────────────────────────────────────────────────────┐
+│  ◉ Gemini          ✓ Connected   [Model: gemini-2.0-flash ▼]│
+│  ○ OpenAI          ✓ Connected   [Model: gpt-4o-mini     ▼]│
+│  ○ Anthropic       ✗ No API key  [Model: claude-haiku-3-5▼]│
+│  ○ Ollama          ⚠ Not running  [Model: gemma3         ▼] [Setup ▶]│
+│  ○ LlamaSharp      ⚠ Not set up  [Model: gemma-3-4b-q4  ▼] [Setup ▶]│
+│  ○ Template        ✓ Always available                       │
+└─────────────────────────────────────────────────────────────┘
+  [API Key / URL field for selected cloud provider]
+  [Save & Apply]
+```
+
+- Selecting a radio button and clicking **Save & Apply** calls `PUT /api/llm/active`.
+- Cloud providers show an API key input field (password type) that submits only when changed.
+- Status indicators update live: every 10 s the panel re-fetches `GET /api/llm/providers` if it is open.
+
+#### Local LLM Setup Flow
+
+When the user clicks **Setup ▶** next to Ollama or LlamaSharp:
+
+1. A `#llm-setup-progress` sub-panel slides open below the provider row.
+2. Frontend calls `POST /api/llm/setup/{provider}` (fire-and-forget).
+3. Frontend opens an `EventSource` on `GET /api/llm/setup/{provider}/progress`.
+4. Each `LlmSetupProgress` SSE event updates:
+   - **Step label**: e.g., "Downloading Ollama installer…"
+   - **Progress bar**: `<progress value={percentTotal} max="100">` styled with the app's dark theme.
+   - **Detail line**: e.g., "487 MB / 2.1 GB (23%)" — monospace, dimmed.
+   - **Step list**: a vertical checklist (`✓`, `⏳`, `○`) of all steps, with the current step highlighted.
+5. On `IsComplete = true`: close the `EventSource`; show a green ✓ "Ready" badge; refresh the provider list.
+6. On `IsError = true`: show the `ErrorMessage` in red; offer a **Retry** button (calls `POST /api/llm/setup/{provider}` again).
+7. The user can close the sub-panel at any time; setup continues in the background and the panel can be re-opened to see progress.
+
+The frontend adds zero setup logic — it only opens an `EventSource` and renders the progress events it receives.
+
+### 3.7 — Phase D3 Tests
+
+**Backend (`backend/GeoTime.Tests/LlmProviderTests.cs`)**
 - `LlmProviderFactory` with no keys configured → returns `TemplateFallbackProvider`.
-- `OllamaProvider` with unreachable URL → `IsAvailable == false`.
-- `LlamaSharpProvider` with missing model file → `IsAvailable == false`.
-- Mock `GeminiProvider` HTTP handler: verify correct request format and retry behaviour on 429.
+- `OllamaProvider` with unreachable URL → `GetStatusAsync` returns `NeedsSetup = true`.
+- `LlamaSharpProvider` with missing model file → `GetStatusAsync` returns `NeedsSetup = true`.
+- Mock `GeminiProvider` HTTP handler: verify correct request format and retry on 429.
+- `PUT /api/llm/active` with valid Gemini config → `LlmSettingsService.ActiveProvider == "Gemini"`.
+- `GET /api/llm/providers` returns all 6 entries including `TemplateFallbackProvider`.
+
+**Backend (`backend/GeoTime.Tests/LocalLlmSetupTests.cs`)**
+- `LocalLlmSetupService` Ollama flow: mock subprocess executor and HTTP downloader; verify progress events emitted in correct order (Check → Download → Install → Start → Pull → Verify → Complete).
+- Resume download: verify that if a partial file exists, the download resumes using HTTP `Range:` header.
+- Failure path: mock installer subprocess returning exit code 1 → `IsError = true` event emitted with correct `ErrorMessage`.
+- GGUF validation: a file with invalid magic bytes → `IsError = true`.
+
+**Frontend (`e2e/app-shell.spec.ts`)**
+- Click ⚙ LLM button → `#llm-settings-panel` appears.
+- Provider list contains at least "Template" with status "Always available".
+- Mock `PUT /api/llm/active` → panel closes and toolbar shows active provider name.
+
+**File additions for Phase D3**
+
+| File | Change |
+|------|--------|
+| `backend/GeoTime.Api/Llm/ILlmProvider.cs` | Updated interface with `GetStatusAsync`, `StreamAsync` |
+| `backend/GeoTime.Api/Llm/LlmSettingsService.cs` | New — runtime-mutable settings |
+| `backend/GeoTime.Api/Llm/LocalLlmSetupService.cs` | New — Ollama + LlamaSharp setup orchestrator |
+| `backend/GeoTime.Api/Llm/GeminiProvider.cs` | New |
+| `backend/GeoTime.Api/Llm/OpenAiProvider.cs` | New |
+| `backend/GeoTime.Api/Llm/AnthropicProvider.cs` | New |
+| `backend/GeoTime.Api/Llm/OllamaProvider.cs` | New |
+| `backend/GeoTime.Api/Llm/LlamaSharpProvider.cs` | New |
+| `backend/GeoTime.Api/Llm/TemplateFallbackProvider.cs` | New |
+| `backend/GeoTime.Api/Llm/LlmProviderFactory.cs` | New |
+| `backend/GeoTime.Api/Program.cs` | Add LLM settings + setup SSE endpoints |
+| `backend/GeoTime.Api/appsettings.json` | Document all config keys |
+| `backend/GeoTime.Tests/LlmProviderTests.cs` | New |
+| `backend/GeoTime.Tests/LocalLlmSetupTests.cs` | New |
+| `src/ui/app-shell.ts` | Add ⚙ LLM button; add settings panel + setup sub-panel HTML + CSS |
+| `src/main.ts` | Wire settings button open/close; wire `EventSource` setup progress |
+| `e2e/app-shell.spec.ts` | Add LLM settings panel E2E tests |
 
 ---
 
@@ -401,7 +590,9 @@ Returns the list of `LayerEventType` values that have at least one layer anywher
 | `backend/GeoTime.Core/Services/DescriptionPromptComposer.cs` | New — system + user prompt builder |
 | `backend/GeoTime.Core/Services/DescriptionTemplateEngine.cs` | New — template fallback prose engine |
 | `backend/GeoTime.Core/SimulationOrchestrator.cs` | Call `EventDepositionEngine` after tick; extend `InspectCell` to include new fields |
-| `backend/GeoTime.Api/Llm/ILlmProvider.cs` | New — provider interface |
+| `backend/GeoTime.Api/Llm/ILlmProvider.cs` | New — provider interface with `GetStatusAsync` and `StreamAsync` |
+| `backend/GeoTime.Api/Llm/LlmSettingsService.cs` | New — runtime-mutable provider config (persisted to `llm-settings.json`) |
+| `backend/GeoTime.Api/Llm/LocalLlmSetupService.cs` | New — Ollama + LlamaSharp guided setup with SSE progress streaming |
 | `backend/GeoTime.Api/Llm/GeminiProvider.cs` | New |
 | `backend/GeoTime.Api/Llm/OpenAiProvider.cs` | New |
 | `backend/GeoTime.Api/Llm/AnthropicProvider.cs` | New |
@@ -409,18 +600,19 @@ Returns the list of `LayerEventType` values that have at least one layer anywher
 | `backend/GeoTime.Api/Llm/LlamaSharpProvider.cs` | New |
 | `backend/GeoTime.Api/Llm/TemplateFallbackProvider.cs` | New |
 | `backend/GeoTime.Api/Llm/LlmProviderFactory.cs` | New — provider selection factory |
-| `backend/GeoTime.Api/Program.cs` | Add `POST /api/describe`, `POST /api/describe/stream`, `GET /api/state/eventlayermap` |
+| `backend/GeoTime.Api/Program.cs` | Add `POST /api/describe`, `POST /api/describe/stream`, `GET /api/state/eventlayermap`, LLM settings + setup SSE endpoints |
 | `backend/GeoTime.Api/appsettings.json` | Document all LLM provider config keys |
 | `backend/GeoTime.Tests/StratigraphyTests.cs` | New |
 | `backend/GeoTime.Tests/ContextAssemblerTests.cs` | New |
-| `backend/GeoTime.Tests/LlmProviderTests.cs` | New |
+| `backend/GeoTime.Tests/LlmProviderTests.cs` | New — provider factory, status checks, Gemini retry |
+| `backend/GeoTime.Tests/LocalLlmSetupTests.cs` | New — setup flow progress order, resume, failure, GGUF validation |
 | `backend/GeoTime.Tests/DescriptionTemplateTests.cs` | New |
 | `backend/GeoTime.Tests/DescriptionApiTests.cs` | New |
-| `src/api/backend-client.ts` | Add `describeCell()` and `fetchEventLayerMap()` |
-| `src/ui/app-shell.ts` | Add ℹ button on inspect panel; add description modal HTML; add event layer dropdown |
-| `src/main.ts` | Wire modal open/close; wire event layer toggle |
+| `src/api/backend-client.ts` | Add `describeCell()`, `fetchEventLayerMap()`, LLM settings calls |
+| `src/ui/app-shell.ts` | Add ⚙ LLM button + settings panel + setup sub-panel; add ℹ button + description modal; add event layer dropdown |
+| `src/main.ts` | Wire LLM settings panel; wire `EventSource` setup progress; wire modal open/close; wire event layer toggle |
 | `src/render/globe-renderer.ts` | Add event layer overlay texture + blend |
-| `e2e/app-shell.spec.ts` | Add description modal and event layer overlay E2E tests |
+| `e2e/app-shell.spec.ts` | Add LLM settings panel, description modal, and event layer overlay E2E tests |
 
 ---
 
