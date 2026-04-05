@@ -399,8 +399,10 @@ public sealed class SimulationOrchestrator : IDisposable
         if (column?.Surface != null)
             estimatedRockAgeMy = (float)(Clock.T - column.Surface.AgeDeposited);
 
-        // Local events: all log entries that have a location within one cell-width (~39 km).
-        var cellWidthKm = (float)(Math.PI * CrossSectionEngine.EARTH_RADIUS_KM / State.GridSize);
+        // Local events: all log entries that have a location within one equatorial cell-width.
+        // Cell width = full equatorial circumference / grid columns = 2π R / gs.
+        // We accept events within 1 cell-width radius to capture immediate-vicinity geology.
+        var cellWidthKm = (float)(2.0 * Math.PI * CrossSectionEngine.EARTH_RADIUS_KM / State.GridSize);
         int cellRow = cellIndex / State.GridSize;
         int cellCol = cellIndex % State.GridSize;
         double lat0 = 90.0 - (cellRow + 0.5) * 180.0 / State.GridSize;
@@ -409,7 +411,7 @@ public sealed class SimulationOrchestrator : IDisposable
             .Where(e => e.Location.HasValue
                 && (float)(CrossSectionEngine.CentralAngle(lat0, lon0,
                     e.Location.Value.Lat, e.Location.Value.Lon)
-                    * CrossSectionEngine.EARTH_RADIUS_KM) <= cellWidthKm * 2)
+                    * CrossSectionEngine.EARTH_RADIUS_KM) <= cellWidthKm)
             .OrderBy(e => e.TimeMa)
             .ToList();
 

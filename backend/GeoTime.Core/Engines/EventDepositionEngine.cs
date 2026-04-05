@@ -50,6 +50,32 @@ public sealed class EventDepositionEngine
     /// <summary>Planet radius used for great-circle distance calculations.</summary>
     private const double PlanetRadiusKm = CrossSectionEngine.EARTH_RADIUS_KM;
 
+    // ── Impact ejecta parameters ──────────────────────────────────────────────
+    /// <summary>Maximum ejecta thickness in metres at the impact site.</summary>
+    private const double MaxImpactEjectaThicknessM = 50.0;
+
+    /// <summary>Isotope anomaly fraction in proximal ejecta (within ejecta radius).</summary>
+    private const float ProximalIsotopeAnomaly = 0.5f;
+
+    /// <summary>Isotope anomaly fraction in distal (global thin) ejecta layer.</summary>
+    private const float DistalIsotopeAnomaly = 0.05f;
+
+    // ── Volcanic deposition parameters ────────────────────────────────────────
+    /// <summary>Radius in km around the eruption source that receives volcanic ash.</summary>
+    private const double VolcanicAshRadiusKm = 500.0;
+
+    /// <summary>Thickness in metres of the volcanic ash layer near the source.</summary>
+    private const float VolcanicAshThicknessM = 0.5f;
+
+    /// <summary>Thickness in metres of the global volcanic soot horizon.</summary>
+    private const float VolcanicSootThicknessM = 0.1f;
+
+    /// <summary>Soot concentration in ppm deposited by a major eruption.</summary>
+    private const float VolcanicSootPpm = 500f;
+
+    /// <summary>Organic carbon fraction of a volcanic soot layer.</summary>
+    private const float VolcanicSootCarbonFraction = 0.05f;
+
     /// <summary>
     /// Process all <see cref="GeoLogEntry"/> items for the current tick and deposit
     /// appropriate event-horizon layers into <paramref name="stratigraphy"/>.
@@ -119,7 +145,6 @@ public sealed class EventDepositionEngine
         var srcLat = (double)evt.Location!.Value.Lat;
         var srcLon = (double)evt.Location!.Value.Lon;
         const double ejectaRadius = DefaultEjectaRadiusKm;
-        const double maxThickness = 50.0;  // metres at ground zero
 
         Parallel.For(0, n, i =>
         {
@@ -129,12 +154,12 @@ public sealed class EventDepositionEngine
             float thick;
             if (distKm < 1.0)
             {
-                thick = (float)maxThickness;
+                thick = (float)MaxImpactEjectaThicknessM;
             }
             else if (distKm <= ejectaRadius)
             {
                 var r = distKm / ejectaRadius;
-                thick = (float)(maxThickness / (r * r + 1.0));
+                thick = (float)(MaxImpactEjectaThicknessM / (r * r + 1.0));
             }
             else
             {
@@ -148,7 +173,7 @@ public sealed class EventDepositionEngine
                 Thickness    = thick,
                 EventType    = LayerEventType.ImpactEjecta,
                 EventId      = evt.Type,
-                IsotopeAnomaly = (float)(distKm <= ejectaRadius ? 0.5 : 0.05),
+                IsotopeAnomaly = distKm <= ejectaRadius ? ProximalIsotopeAnomaly : DistalIsotopeAnomaly,
                 IsGlobal     = true,
             });
         });
@@ -162,22 +187,19 @@ public sealed class EventDepositionEngine
         // GeoLogEntry, so we deposit ash near source and a thin global soot everywhere).
         var srcLat = (double)evt.Location!.Value.Lat;
         var srcLon = (double)evt.Location!.Value.Lon;
-        const double ashRadiusKm = 500.0;
-        const float  ashThick    = 0.5f;
-        const float  sootThick   = 0.1f;
 
         Parallel.For(0, n, i =>
         {
             var (lat, lon) = CellToLatLon(i, gs);
             var distKm = GreatCircleKm(srcLat, srcLon, lat, lon);
 
-            if (distKm <= ashRadiusKm)
+            if (distKm <= VolcanicAshRadiusKm)
             {
                 stratigraphy.PushLayer(i, new StratigraphicLayer
                 {
                     RockType     = RockType.IGN_TUFF,
                     AgeDeposited = timeMa,
-                    Thickness    = ashThick,
+                    Thickness    = VolcanicAshThicknessM,
                     EventType    = LayerEventType.VolcanicAsh,
                     EventId      = evt.Type,
                 });
@@ -187,11 +209,11 @@ public sealed class EventDepositionEngine
             {
                 RockType              = RockType.SED_SHALE,
                 AgeDeposited          = timeMa,
-                Thickness             = sootThick,
+                Thickness             = VolcanicSootThicknessM,
                 EventType             = LayerEventType.VolcanicSoot,
                 EventId               = evt.Type,
-                SootConcentrationPpm  = 500f,
-                OrganicCarbonFraction = 0.05f,
+                SootConcentrationPpm  = VolcanicSootPpm,
+                OrganicCarbonFraction = VolcanicSootCarbonFraction,
                 IsGlobal              = true,
             });
         });
