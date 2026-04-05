@@ -1448,13 +1448,10 @@ test.describe('Phase D3 — LLM Provider Settings', () => {
     const llmBtn = page.locator('button', { hasText: /⚙ LLM/ });
     await llmBtn.click();
 
-    // Wait for the async provider list to load
-    await page.waitForTimeout(2000);
-
+    // Wait for the async provider list to load (Template is always present)
     const panel = page.locator('#llm-settings-panel');
-    const panelText = await panel.textContent();
-    expect(panelText).toContain('Template');
-    expect(panelText).toContain('Always available');
+    await expect(panel).toContainText('Template', { timeout: 5000 });
+    await expect(panel).toContainText('Always available', { timeout: 5000 });
   });
 
   test('panel shows "Active LLM Provider" title', async ({ page }) => {
@@ -1469,10 +1466,12 @@ test.describe('Phase D3 — LLM Provider Settings', () => {
     const llmBtn = page.locator('button', { hasText: /⚙ LLM/ });
     await llmBtn.click();
 
-    await page.waitForTimeout(2000);
-
+    // Wait for provider list to populate
     const panel = page.locator('#llm-settings-panel');
+    await expect(panel).toContainText('Template', { timeout: 5000 });
+
     const radios = panel.locator('input[type="radio"][name="llm-provider"]');
+    await expect(radios.first()).toBeVisible();
     const count = await radios.count();
     expect(count).toBeGreaterThanOrEqual(1);
   });
@@ -1491,17 +1490,19 @@ test.describe('Phase D3 — LLM Provider Settings', () => {
 
     const llmBtn = page.locator('button', { hasText: /⚙ LLM/ });
     await llmBtn.click();
-    await page.waitForTimeout(2000);
+
+    // Wait for provider list to load
+    const panel = page.locator('#llm-settings-panel');
+    await expect(panel).toContainText('Template', { timeout: 5000 });
 
     const templateRadio = page.locator('#llm-settings-panel input[value="Template"]');
     await templateRadio.click();
 
-    // The change event should trigger the API call
-    await page.waitForTimeout(500);
+    // If Template wasn't already active, the PUT request should have been made
     if (capturedBody !== null) {
       expect((capturedBody as { provider: string }).provider).toBe('Template');
     }
-    // Even if the mock wasn't triggered (Template already active = no change), the panel stays open
+    // Panel should remain visible regardless
     await expect(page.locator('#llm-settings-panel')).toBeVisible();
   });
 });

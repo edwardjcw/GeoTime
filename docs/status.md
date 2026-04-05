@@ -145,3 +145,30 @@ npx playwright test  # E2E
 - [x] `backend/GeoTime.Tests/ContextAssemblerTests.cs` — 18 unit tests: null for out-of-range index, valid cell returns context, lat/lon matches cell index, sim age description, plate ID matches cell, convergent boundary cell has CONVERGENT margin type, subduction zone has SubductingPlate populated, ContainingFeatures includes cell's features, features sorted by scale (plate first), impact ejecta layer in ExtraordinaryLayers, ExtraordinaryLayers excludes Normal layers, river name populated, river length km > 0, mountain range IsInMountainRange + RangeName, non-mountain cell IsInMountainRange false, NearbyFeatures ≤ 6, nearby features don't include self, nearby features ordered by distance
 
 **Test count**: 298 (previous) + 18 new backend = **316 total backend tests passing**
+
+---
+
+## Phase D3 — LLM Provider Abstraction Layer ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Api/Llm/ILlmProvider.cs` — `ILlmProvider` interface with `Name`, `IsAvailable`, `GetStatusAsync`, `GenerateAsync`, `StreamAsync`; `LlmProviderStatus` record
+- [x] `backend/GeoTime.Api/Llm/LlmSettingsService.cs` — Runtime-mutable settings singleton; seeds from `appsettings.json` Llm section; persists user changes to `~/.config/GeoTime/llm-settings.json`; per-provider `ProviderSettings` record
+- [x] `backend/GeoTime.Api/Llm/LlmProviderFactory.cs` — Resolves active provider at runtime; falls back down preference order; always falls back to Template
+- [x] `backend/GeoTime.Api/Llm/GeminiProvider.cs` — Google Generative AI REST API; exponential back-off on 429; SSE streaming
+- [x] `backend/GeoTime.Api/Llm/OpenAiProvider.cs` — OpenAI Chat Completions API; configurable BaseUrl for Azure-compatible endpoints; SSE streaming
+- [x] `backend/GeoTime.Api/Llm/AnthropicProvider.cs` — Anthropic Messages API; SSE streaming
+- [x] `backend/GeoTime.Api/Llm/OllamaProvider.cs` — Local Ollama instance; `/api/chat` batch + streaming; model pull detection
+- [x] `backend/GeoTime.Api/Llm/LlamaSharpProvider.cs` — In-process GGUF loading stub; GGUF magic-byte validation; `NotifyModelReady()` for setup flow
+- [x] `backend/GeoTime.Api/Llm/TemplateFallbackProvider.cs` — Always-available fallback; returns structured placeholder prose
+- [x] `backend/GeoTime.Api/Llm/LocalLlmSetupService.cs` — Guided setup flows for Ollama (install + pull) and LlamaSharp (GGUF download + validate); `Channel<LlmSetupProgress>` for SSE streaming
+- [x] `backend/GeoTime.Api/Program.cs` — 5 new LLM endpoints: `GET /api/llm/providers`, `GET /api/llm/active`, `PUT /api/llm/active`, `POST /api/llm/setup/{provider}`, `GET /api/llm/setup/{provider}/progress` (SSE)
+- [x] `backend/GeoTime.Api/appsettings.json` — Documented all Llm config keys
+- [x] `backend/GeoTime.Tests/LlmProviderTests.cs` — 21 unit + integration tests (all pass)
+- [x] `backend/GeoTime.Tests/LocalLlmSetupTests.cs` — 8 setup-flow tests (all pass)
+- [x] `src/api/backend-client.ts` — Added `getLlmProviders`, `getLlmActive`, `setLlmActive`, `startLlmSetup`, `openLlmSetupProgress` + type interfaces
+- [x] `src/ui/app-shell.ts` — ⚙ LLM button in HUD; `#llm-settings-panel` with provider list, radio buttons, API key fields, Setup ▶ button, setup progress sub-panel; `setLlmProviders`, `showLlmSetupProgress`, `onLlmSettingsChanged`, `onLlmSetup` public API
+- [x] `src/main.ts` — LLM panel wiring: `refreshLlmPanel()`, `onLlmSettingsChanged`, `onLlmSetup`, startup fetch
+- [x] `e2e/app-shell.spec.ts` — 7 E2E tests for the LLM settings panel (button visibility, open/close, provider list, title, radio buttons, API interaction)
+
+**Test count**: 316 (previous) + 21 new backend = **337 total backend tests passing**; 379 frontend Vitest tests still pass

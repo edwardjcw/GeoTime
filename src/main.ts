@@ -860,7 +860,7 @@ shell.onLlmSetup(async (provider) => {
       shell.showLlmSetupProgress(event);
       if (event.isComplete) {
         // Refresh provider list now that setup is done
-        refreshLlmPanel().catch(() => {/* ignore */});
+        refreshLlmPanel().catch((err) => console.warn('Failed to refresh LLM panel after setup:', err));
       }
     });
   } catch (err) {
@@ -877,7 +877,7 @@ shell.onLlmSetup(async (provider) => {
 });
 
 // Fetch provider list once on startup so the panel is ready when opened
-refreshLlmPanel().catch(() => {/* non-critical, backend may not be ready */});
+refreshLlmPanel().catch((err) => console.debug('LLM panel refresh failed at startup (backend may not be ready):', err));
 
 // ── Render loop ─────────────────────────────────────────────────────────────
 // The render loop now only handles display and periodically asks the backend

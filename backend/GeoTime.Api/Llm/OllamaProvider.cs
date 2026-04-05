@@ -121,9 +121,9 @@ public sealed class OllamaProvider : ILlmProvider
         using var stream = await resp.Content.ReadAsStreamAsync(ct);
         using var reader = new System.IO.StreamReader(stream);
 
-        while (!reader.EndOfStream && !ct.IsCancellationRequested)
+        string? line;
+        while ((line = await reader.ReadLineAsync(ct)) != null && !ct.IsCancellationRequested)
         {
-            var line = await reader.ReadLineAsync(ct);
             if (string.IsNullOrEmpty(line)) continue;
             using var doc = JsonDocument.Parse(line);
             var text = doc.RootElement

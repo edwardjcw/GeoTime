@@ -202,9 +202,9 @@ public sealed class LocalLlmSetupService
         using var proc = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start 'ollama pull'");
 
-        while (!proc.StandardOutput.EndOfStream)
+        string? line;
+        while ((line = await proc.StandardOutput.ReadLineAsync()) != null)
         {
-            var line = await proc.StandardOutput.ReadLineAsync();
             if (string.IsNullOrWhiteSpace(line)) continue;
             try
             {
