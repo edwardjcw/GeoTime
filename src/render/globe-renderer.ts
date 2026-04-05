@@ -235,7 +235,7 @@ export class GlobeRenderer {
 
   constructor(container: HTMLElement) {
     // ── Renderer ──────────────────────────────────────────────────────────
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     container.appendChild(this.renderer.domElement);

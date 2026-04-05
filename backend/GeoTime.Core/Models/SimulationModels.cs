@@ -99,6 +99,25 @@ public sealed class StratigraphicLayer
     public SoilOrder SoilHorizon { get; set; }
     public int FormationName { get; set; }
 
+    // ── Event-horizon fields (Phase D1) ──────────────────────────────────────
+    /// <summary>Classification of the event that produced this layer, if any.</summary>
+    public LayerEventType EventType { get; set; } = LayerEventType.Normal;
+
+    /// <summary>ID of the <see cref="GeoLogEntry"/> that caused this layer (null for ordinary layers).</summary>
+    public string? EventId { get; set; }
+
+    /// <summary>Fractional isotope anomaly relative to background (0 = normal; e.g. 0.5 = +50 % above background).</summary>
+    public float IsotopeAnomaly { get; set; }
+
+    /// <summary>Organic carbon as a fraction of layer mass (0–1).</summary>
+    public float OrganicCarbonFraction { get; set; }
+
+    /// <summary>Soot concentration in parts-per-million (relevant for VolcanicSoot and MassExtinction layers).</summary>
+    public float SootConcentrationPpm { get; set; }
+
+    /// <summary>True when this horizon is planet-wide (e.g., major bolide impact, GRB, mega-eruption).</summary>
+    public bool IsGlobal { get; set; }
+
     public StratigraphicLayer Clone() => new()
     {
         RockType = RockType,
@@ -110,6 +129,12 @@ public sealed class StratigraphicLayer
         Unconformity = Unconformity,
         SoilHorizon = SoilHorizon,
         FormationName = FormationName,
+        EventType = EventType,
+        EventId = EventId,
+        IsotopeAnomaly = IsotopeAnomaly,
+        OrganicCarbonFraction = OrganicCarbonFraction,
+        SootConcentrationPpm = SootConcentrationPpm,
+        IsGlobal = IsGlobal,
     };
 }
 

@@ -107,6 +107,7 @@ app.MapGet("/api/simulation/compute-info", (SimulationOrchestrator sim) =>
         deviceName     = info.DeviceName,
         acceleratorType = info.AcceleratorType,
         isGpu          = info.Mode == ComputeMode.GPU,
+        memoryMb       = info.MemoryMb,
     });
 }).WithName("GetComputeInfo");
 

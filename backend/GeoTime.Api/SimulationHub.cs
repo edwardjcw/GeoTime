@@ -175,6 +175,7 @@ public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
             seed = sim.GetCurrentSeed(),
             computeMode = computeInfo.Mode.ToString(),
             computeDevice = computeInfo.DeviceName,
+            computeMemoryMb = computeInfo.MemoryMb,
         });
         await base.OnConnectedAsync();
     }
