@@ -15,6 +15,20 @@ public sealed class ErosionEngine(int gridSize)
     private const double MIN_SLOPE = 1e-6;
     private const double DEPO_SLOPE_THRESHOLD = 0.3;
 
+    /// <summary>
+    /// Multiplier applied to K_EROSION for cells identified as river channels
+    /// (i.e., RiverChannelMap[i] ≥ <see cref="RiverChannelErodeThreshold"/>).
+    /// Enhanced channel erosion deepens river valleys over geological time.
+    /// </summary>
+    private const double RiverChannelErosionBoost = 3.0;
+
+    /// <summary>
+    /// Minimum flow-accumulation value (from
+    /// <see cref="SimulationState.RiverChannelMap"/>) for a cell to receive the
+    /// river-channel erosion boost.
+    /// </summary>
+    private const float RiverChannelErodeThreshold = 500f;
+
     public ErosionResult Tick(double timeMa, double deltaMa, SimulationState state,
         StratigraphyStack strat, Xoshiro256ss rng)
     {
@@ -32,7 +46,11 @@ public sealed class ErosionEngine(int gridSize)
         foreach (var i in indices)
         {
             var slope = Math.Max(flow[i].slope, MIN_SLOPE);
-            var erode = Math.Min(K_EROSION * Math.Pow(area[i], M_AREA)
+            // Apply a river-channel erosion boost when the cell lies in a recognised
+            // river channel (high flow accumulation populated by HydroDetectorService).
+            double channelBoost = state.RiverChannelMap[i] >= RiverChannelErodeThreshold
+                ? RiverChannelErosionBoost : 1.0;
+            var erode = Math.Min(K_EROSION * channelBoost * Math.Pow(area[i], M_AREA)
                                            * Math.Pow(slope, N_SLOPE) * deltaMa, MAX_EROSION);
 
             if (erode > 0.01)

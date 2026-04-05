@@ -53,6 +53,7 @@ public sealed class SimulationOrchestrator : IDisposable
     private BiomatterEngine? _biomatter;
     private CrossSectionEngine? _crossSection;
     private readonly FeatureDetectorService _featureDetector = new();
+    private readonly FeatureEvolutionTracker _featureEvolution = new();
 
     private PlanetGeneratorResult? _planetResult;
     private uint _currentSeed;
@@ -176,8 +177,12 @@ public sealed class SimulationOrchestrator : IDisposable
         {
             var plates   = _tectonic.GetPlates();
             var hotspots = _tectonic.GetHotspots();
+            var prevRegistry = State.FeatureRegistry;
             _featureDetector.Detect(State, plates, hotspots,
                 EventLog.GetAll(), _currentSeed, State.FeatureRegistry.LastUpdatedTick + 1);
+            // Phase L4: carry forward history and detect change events.
+            _featureEvolution.Track(State, prevRegistry, State.FeatureRegistry,
+                State.FeatureRegistry.LastUpdatedTick);
         }
 
         stats.TotalMs = total.ElapsedMilliseconds;

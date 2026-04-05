@@ -399,6 +399,14 @@ app.MapGet("/api/state/features/{id}", (string id, SimulationOrchestrator sim) =
         : Results.NotFound($"Feature '{id}' not found");
 }).WithName("GetFeatureById");
 
+app.MapGet("/api/state/features/{id}/history", (string id, SimulationOrchestrator sim) =>
+{
+    var registry = sim.GetFeatureRegistry();
+    return registry.Features.TryGetValue(id, out var feature)
+        ? Results.Ok(feature.History)
+        : Results.NotFound($"Feature '{id}' not found");
+}).WithName("GetFeatureHistory");
+
 app.Run();
 
 // ── Request DTOs ──────────────────────────────────────────────────────────────

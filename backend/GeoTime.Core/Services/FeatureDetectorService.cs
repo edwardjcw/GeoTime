@@ -30,6 +30,8 @@ public sealed class FeatureDetectorService
 
     private uint _planetSeed;
 
+    private readonly HydroDetectorService _hydro = new();
+
     /// <summary>
     /// Run full feature detection and populate <see cref="SimulationState.FeatureRegistry"/>.
     /// </summary>
@@ -50,6 +52,10 @@ public sealed class FeatureDetectorService
         DetectBoundaryFeatures(state, plates, registry, currentTick);
         DetectHotspotChains(hotspots, registry, currentTick);
         DetectImpactBasins(events, registry, currentTick);
+
+        // Phase L3: hydrological and atmospheric feature detection.
+        // Also populates state.RiverChannelMap for the ErosionEngine.
+        _hydro.Detect(state, registry, planetSeed, currentTick);
 
         state.FeatureRegistry = registry;
     }
