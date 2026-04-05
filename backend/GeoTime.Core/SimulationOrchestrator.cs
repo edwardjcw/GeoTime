@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using GeoTime.Core.Compute;
 using GeoTime.Core.Models;
 using GeoTime.Core.Kernel;
@@ -5,6 +6,18 @@ using GeoTime.Core.Proc;
 using GeoTime.Core.Engines;
 
 namespace GeoTime.Core;
+
+/// <summary>Per-phase timing breakdown for the most recent simulation tick.</summary>
+public sealed class SimulationTickStats
+{
+    public long TectonicMs  { get; set; }
+    public long SurfaceMs   { get; set; }
+    public long AtmosphereMs { get; set; }
+    public long VegetationMs { get; set; }
+    public long BiomatterMs  { get; set; }
+    public long TotalMs      { get; set; }
+    public double TimeMa     { get; set; }
+}
 
 /// <summary>
 /// Top-level simulation orchestrator that owns all engines and state.
@@ -17,6 +30,12 @@ public sealed class SimulationOrchestrator : IDisposable
     public EventBus Bus { get; }
     public EventLog EventLog { get; }
     public SnapshotManager Snapshots { get; }
+
+    /// <summary>Timing breakdown of the most recent completed tick.</summary>
+    public SimulationTickStats LastTickStats { get; private set; } = new();
+
+    /// <summary>Prevents concurrent AdvanceSimulation calls from corrupting shared state.</summary>
+    private readonly SemaphoreSlim _advanceLock = new(1, 1);
 
     /// <summary>
     /// Strategy D (Rec 7): When true, the atmosphere and vegetation engines run at
@@ -95,11 +114,31 @@ public sealed class SimulationOrchestrator : IDisposable
     {
         if (_tectonic == null || deltaMa <= 0) return;
 
+        // Prevent concurrent advance calls from corrupting simulation state.
+        if (!_advanceLock.Wait(0)) return;
+        try
+        {
+            AdvanceSimulationCore(deltaMa, onProgress);
+        }
+        finally
+        {
+            _advanceLock.Release();
+        }
+    }
+
+    private void AdvanceSimulationCore(double deltaMa, Action<string>? onProgress)
+    {
+        var total = Stopwatch.StartNew();
+        var sw    = new Stopwatch();
+        var stats = new SimulationTickStats { TimeMa = Clock.T + deltaMa };
+
         Clock.T += deltaMa;
 
         // Tectonic must run first (it updates boundaries, heights, plate map)
         onProgress?.Invoke("tectonic");
-        _tectonic.Tick(Clock.T, deltaMa);
+        sw.Restart();
+        _tectonic!.Tick(Clock.T, deltaMa);
+        stats.TectonicMs = sw.ElapsedMilliseconds;
 
         // ── Strategy D: Adaptive Resolution ──────────────────────────────────
         // When AdaptiveResolutionEnabled, downsample temperature, precipitation, and
@@ -108,33 +147,42 @@ public sealed class SimulationOrchestrator : IDisposable
         // always operate at full resolution.
         if (AdaptiveResolutionEnabled && _gridSize == GridConstants.GRID_SIZE)
         {
-            ApplyAdaptiveResolution(deltaMa, onProgress);
+            ApplyAdaptiveResolution(deltaMa, onProgress, stats);
         }
         else
         {
             // Full-resolution path (used when gridSize != 512, e.g., in unit tests)
-            RunFullResolutionEngines(deltaMa, onProgress);
+            RunFullResolutionEngines(deltaMa, onProgress, stats);
         }
 
         // Biomatter runs after Surface to avoid concurrent modification of StratigraphyStack.
         onProgress?.Invoke("biomatter");
+        sw.Restart();
         _biomatter?.Tick(Clock.T, deltaMa);
+        stats.BiomatterMs = sw.ElapsedMilliseconds;
+
+        stats.TotalMs = total.ElapsedMilliseconds;
+        LastTickStats = stats;
 
         onProgress?.Invoke("complete");
     }
 
-    private void RunFullResolutionEngines(double deltaMa, Action<string>? onProgress)
+    private void RunFullResolutionEngines(double deltaMa, Action<string>? onProgress, SimulationTickStats stats)
     {
         // Surface, Atmosphere, and Vegetation can run in parallel since they
         // read from state written by tectonic but write to independent fields.
         onProgress?.Invoke("surface");
+        var sw = new Stopwatch();
+        sw.Start();
+
+        long surfaceMs = 0, atmoMs = 0, vegMs = 0;
         var tasks = new List<Task>();
         if (_surface != null)
-            tasks.Add(Task.Run(() => _surface.Tick(Clock.T, deltaMa)));
+            tasks.Add(Task.Run(() => { var t = Stopwatch.StartNew(); _surface.Tick(Clock.T, deltaMa); Interlocked.Exchange(ref surfaceMs, t.ElapsedMilliseconds); }));
         if (_atmosphere != null)
-            tasks.Add(Task.Run(() => _atmosphere.Tick(Clock.T, deltaMa)));
+            tasks.Add(Task.Run(() => { var t = Stopwatch.StartNew(); _atmosphere.Tick(Clock.T, deltaMa); Interlocked.Exchange(ref atmoMs, t.ElapsedMilliseconds); }));
         if (_vegetation != null)
-            tasks.Add(Task.Run(() => _vegetation.Tick(Clock.T, deltaMa)));
+            tasks.Add(Task.Run(() => { var t = Stopwatch.StartNew(); _vegetation.Tick(Clock.T, deltaMa); Interlocked.Exchange(ref vegMs, t.ElapsedMilliseconds); }));
 
         if (tasks.Count > 0)
         {
@@ -145,9 +193,13 @@ public sealed class SimulationOrchestrator : IDisposable
                     $"Parallel engine tick error: {ex.Flatten().InnerExceptions.Count} engine(s) failed");
             }
         }
+
+        stats.SurfaceMs    = surfaceMs;
+        stats.AtmosphereMs = atmoMs;
+        stats.VegetationMs = vegMs;
     }
 
-    private void ApplyAdaptiveResolution(double deltaMa, Action<string>? onProgress)
+    private void ApplyAdaptiveResolution(double deltaMa, Action<string>? onProgress, SimulationTickStats stats)
     {
         const int CoarseSize = GridConstants.COARSE_GRID_SIZE;
         var fullSize = _gridSize; // 512
@@ -173,13 +225,14 @@ public sealed class SimulationOrchestrator : IDisposable
         coarseAtmo.Initialize(coarseState, _tectonic!.GetAtmosphere()!);
         coarseVeg.Initialize(coarseState);
 
-        // Surface runs at full resolution
+        // Surface runs at full resolution; atmosphere and vegetation run on coarse grid.
         onProgress?.Invoke("surface");
+        long surfaceMs = 0, atmoMs = 0, vegMs = 0;
         var tasks = new List<Task>();
         if (_surface != null)
-            tasks.Add(Task.Run(() => _surface.Tick(Clock.T, deltaMa)));
-        tasks.Add(Task.Run(() => coarseAtmo.Tick(Clock.T, deltaMa)));
-        tasks.Add(Task.Run(() => coarseVeg.Tick(Clock.T, deltaMa)));
+            tasks.Add(Task.Run(() => { var t = Stopwatch.StartNew(); _surface.Tick(Clock.T, deltaMa); Interlocked.Exchange(ref surfaceMs, t.ElapsedMilliseconds); }));
+        tasks.Add(Task.Run(() => { var t = Stopwatch.StartNew(); coarseAtmo.Tick(Clock.T, deltaMa); Interlocked.Exchange(ref atmoMs, t.ElapsedMilliseconds); }));
+        tasks.Add(Task.Run(() => { var t = Stopwatch.StartNew(); coarseVeg.Tick(Clock.T, deltaMa); Interlocked.Exchange(ref vegMs, t.ElapsedMilliseconds); }));
 
         try { Task.WhenAll(tasks).GetAwaiter().GetResult(); }
         catch (AggregateException ex)
@@ -187,6 +240,10 @@ public sealed class SimulationOrchestrator : IDisposable
             System.Diagnostics.Debug.WriteLine(
                 $"Adaptive parallel tick error: {ex.Flatten().InnerExceptions.Count} engine(s) failed");
         }
+
+        stats.SurfaceMs    = surfaceMs;
+        stats.AtmosphereMs = atmoMs;
+        stats.VegetationMs = vegMs;
 
         // Upsample coarse results back to full resolution
         AdaptiveResolutionService.UpsampleInto(coarseState.TemperatureMap,   CoarseSize, State.TemperatureMap,   fullSize);
@@ -347,7 +404,7 @@ public sealed class SimulationOrchestrator : IDisposable
         offset += dest.Length * 4;
     }
 
-    public void Dispose() => _gpu.Dispose();
+    public void Dispose() { _gpu.Dispose(); _advanceLock.Dispose(); }
 }
 
 /// <summary>Cell inspection result.</summary>

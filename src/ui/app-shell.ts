@@ -7,11 +7,18 @@ export interface InspectInfo {
   lat: number;
   lon: number;
   elevation: number;
+  crustThickness: number;
   rockType: string;
+  rockAge: number;
+  plateId: number;
   soilOrder: string;
+  soilDepth: number;
   temperature: number;
   precipitation: number;
   biomass: number;
+  biomatterDensity: number;
+  organicCarbon: number;
+  reefPresent: boolean;
 }
 
 export class AppShell {
@@ -46,6 +53,13 @@ export class AppShell {
   private zoomInBtn: HTMLButtonElement;
   private zoomOutBtn: HTMLButtonElement;
   private zoomResetBtn: HTMLButtonElement;
+
+  // ── Log panel elements ──────────────────────────────────────────────────
+  private logPanel: HTMLElement = document.createElement('div');
+  private logPanelOpen = false;
+  private logTimingEl: HTMLElement = document.createElement('div');
+  private logEventsEl: HTMLElement = document.createElement('div');
+  private logBtn: HTMLButtonElement = document.createElement('button');
 
   // ── Inspect panel elements ──────────────────────────────────────────────
   private inspectPanel: HTMLElement;
@@ -399,7 +413,72 @@ export class AppShell {
     this.weatherMonthPanel.append(prevMonthBtn, this.weatherMonthLabel, nextMonthBtn, sep, this._windToggleBtn);
     this.root.appendChild(this.weatherMonthPanel);
 
-    this.hud.append(this.fpsEl, this.triEl, this.timeEl, this.pauseBtn, this.firstPersonEl, this.computeEl, this.progressEl);
+    // ── Log button (📊) ────────────────────────────────────────────────────
+    this.logBtn = document.createElement('button');
+    this.logBtn.textContent = '📊';
+    this.logBtn.title = 'Simulation log & timing';
+    Object.assign(this.logBtn.style, {
+      background: 'none',
+      border: 'none',
+      color: '#ccc',
+      cursor: 'pointer',
+      fontSize: '14px',
+      padding: '2px 6px',
+      borderRadius: '3px',
+      fontFamily: 'monospace',
+    });
+    this.logBtn.addEventListener('click', () => this.toggleLogPanel());
+    this.logBtn.addEventListener('mouseenter', () => { this.logBtn.style.background = 'rgba(255,255,255,0.1)'; });
+    this.logBtn.addEventListener('mouseleave', () => { this.logBtn.style.background = this.logPanelOpen ? 'rgba(255,255,255,0.15)' : 'none'; });
+
+    // ── Log panel ──────────────────────────────────────────────────────────
+    this.logPanel = el('div', {
+      position: 'absolute',
+      top: '40px',
+      right: '270px',
+      background: 'rgba(10,10,18,0.94)',
+      border: '1px solid rgba(255,255,255,0.12)',
+      borderRadius: '6px',
+      padding: '10px 14px',
+      display: 'none',
+      flexDirection: 'column',
+      gap: '6px',
+      zIndex: '30',
+      color: '#ddd',
+      fontSize: '12px',
+      fontFamily: 'monospace',
+      minWidth: '280px',
+      maxHeight: '420px',
+      overflowY: 'auto',
+      pointerEvents: 'auto',
+    });
+
+    const logTitle = document.createElement('div');
+    logTitle.textContent = '📊 Simulation Log';
+    Object.assign(logTitle.style, { fontWeight: 'bold', marginBottom: '4px', opacity: '0.85', fontSize: '12px' });
+    this.logPanel.appendChild(logTitle);
+
+    const logTimingTitle = document.createElement('div');
+    logTimingTitle.textContent = 'Last Tick Timing';
+    Object.assign(logTimingTitle.style, { opacity: '0.5', fontSize: '10px', marginTop: '4px' });
+    this.logPanel.appendChild(logTimingTitle);
+
+    this.logTimingEl = el('div', { display: 'flex', flexDirection: 'column', gap: '2px' });
+    this.logTimingEl.textContent = '—';
+    this.logPanel.appendChild(this.logTimingEl);
+
+    const logEventsTitle = document.createElement('div');
+    logEventsTitle.textContent = 'Recent Events';
+    Object.assign(logEventsTitle.style, { opacity: '0.5', fontSize: '10px', marginTop: '8px' });
+    this.logPanel.appendChild(logEventsTitle);
+
+    this.logEventsEl = el('div', { display: 'flex', flexDirection: 'column', gap: '2px' });
+    this.logEventsEl.textContent = '—';
+    this.logPanel.appendChild(this.logEventsEl);
+
+    this.root.appendChild(this.logPanel);
+
+    this.hud.append(this.fpsEl, this.triEl, this.timeEl, this.pauseBtn, this.firstPersonEl, this.computeEl, this.progressEl, this.logBtn);
     this.root.appendChild(this.hud);
 
     // ── Sidebar ───────────────────────────────────────────────────────────
@@ -916,19 +995,28 @@ export class AppShell {
     const lines: [string, string][] = [
       ['Lat/Lon', `${info.lat.toFixed(2)}°, ${info.lon.toFixed(2)}°`],
       ['Elevation', `${info.elevation.toFixed(0)} m`],
+      ['Crust Thickness', `${info.crustThickness.toFixed(1)} km`],
       ['Rock Type', info.rockType],
+      ['Rock Age', `${info.rockAge.toFixed(1)} Ma`],
+      ['Plate ID', `${info.plateId}`],
       ['Soil Order', info.soilOrder],
+      ['Soil Depth', `${info.soilDepth.toFixed(2)} m`],
       ['Temperature', `${info.temperature.toFixed(1)} °C`],
       ['Precipitation', `${info.precipitation.toFixed(0)} mm/yr`],
       ['Biomass', `${info.biomass.toFixed(1)} kg/m²`],
+      ['Biomatter', `${info.biomatterDensity.toFixed(2)} kg C/m²`],
+      ['Organic C', `${info.organicCarbon.toFixed(2)} kg C/m²`],
+      ['Reef', info.reefPresent ? '✅ present' : '—'],
     ];
     for (const [label, value] of lines) {
-      const row = el('div', { display: 'flex', justifyContent: 'space-between' });
+      const row = el('div', { display: 'flex', justifyContent: 'space-between', gap: '8px' });
       const lbl = document.createElement('span');
       lbl.textContent = label;
       lbl.style.opacity = '0.6';
+      lbl.style.flexShrink = '0';
       const val = document.createElement('span');
       val.textContent = value;
+      val.style.textAlign = 'right';
       row.append(lbl, val);
       this.inspectContent.appendChild(row);
     }
@@ -1074,9 +1162,89 @@ export class AppShell {
       : 'none';
   }
 
+  // ── Log Panel API ──────────────────────────────────────────────────────
+
+  /** Update the log panel with timing stats and recent events. */
+  updateLogPanel(
+    stats: { tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number } | null,
+    events: Array<{ timeMa: number; type: string; description: string }>,
+  ): void {
+    // Timing section
+    this.logTimingEl.innerHTML = '';
+    if (stats && stats.totalMs > 0) {
+      const phases: [string, number][] = [
+        ['⛰ Tectonic',   stats.tectonicMs],
+        ['🌊 Surface',    stats.surfaceMs],
+        ['☁️ Atmosphere', stats.atmosphereMs],
+        ['🌿 Vegetation', stats.vegetationMs],
+        ['🧬 Biomatter',  stats.biomatterMs],
+      ];
+      for (const [label, ms] of phases) {
+        const row = el('div', { display: 'flex', justifyContent: 'space-between', gap: '12px' });
+        const lbl = document.createElement('span');
+        lbl.textContent = label;
+        lbl.style.opacity = '0.7';
+        const val = document.createElement('span');
+        val.textContent = `${ms} ms`;
+        val.style.color = ms > 1000 ? '#f84' : '#4af';
+        row.append(lbl, val);
+        this.logTimingEl.appendChild(row);
+      }
+      const totalRow = el('div', { display: 'flex', justifyContent: 'space-between', gap: '12px', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '4px', marginTop: '2px' });
+      const totalLbl = document.createElement('span');
+      totalLbl.textContent = 'Total';
+      totalLbl.style.opacity = '0.9';
+      totalLbl.style.fontWeight = 'bold';
+      const totalVal = document.createElement('span');
+      totalVal.textContent = `${stats.totalMs} ms`;
+      totalVal.style.fontWeight = 'bold';
+      totalVal.style.color = '#fff';
+      totalRow.append(totalLbl, totalVal);
+      this.logTimingEl.appendChild(totalRow);
+    } else {
+      this.logTimingEl.textContent = '— no tick yet —';
+    }
+
+    // Events section
+    this.logEventsEl.innerHTML = '';
+    if (events.length === 0) {
+      this.logEventsEl.textContent = '— none —';
+    } else {
+      for (const evt of events.slice(-20).reverse()) {
+        const row = document.createElement('div');
+        row.style.fontSize = '11px';
+        row.style.opacity = '0.8';
+        row.textContent = `[${evt.timeMa.toFixed(0)} Ma] ${evt.type}: ${evt.description}`;
+        this.logEventsEl.appendChild(row);
+      }
+    }
+  }
+
+  private logOpenCb: (() => void) | null = null;
+
+  /** Register a callback invoked when the log panel is opened. */
+  onLogOpen(cb: () => void): void { this.logOpenCb = cb; }
+
+  /** Toggle the log panel visibility. */
+  private toggleLogPanel(): void {
+    this.logPanelOpen = !this.logPanelOpen;
+    this.logPanel.style.display = this.logPanelOpen ? 'flex' : 'none';
+    this.logBtn.style.background = this.logPanelOpen ? 'rgba(255,255,255,0.15)' : 'none';
+    if (this.logPanelOpen) this.logOpenCb?.();
+  }
+
+  /** Open the log panel (used programmatically). */
+  openLogPanel(): void {
+    if (!this.logPanelOpen) this.toggleLogPanel();
+  }
+
+  /** Whether the log panel is currently open. */
+  get isLogPanelOpen(): boolean { return this.logPanelOpen; }
+
   dispose(): void {
     this.root.innerHTML = '';
     this.newPlanetCb = null;
+    this.logOpenCb = null;
     this.pauseToggleCb = null;
     this.rateChangeCb = null;
     this.drawModeCb = null;
