@@ -13,8 +13,18 @@ export interface GenerateResult {
   timeMa: number;
 }
 
+export interface TickStats {
+  tectonicMs: number;
+  surfaceMs: number;
+  atmosphereMs: number;
+  vegetationMs: number;
+  biomatterMs: number;
+  totalMs: number;
+}
+
 export interface AdvanceResult {
   timeMa: number;
+  stats?: TickStats;
 }
 
 export interface SimulationTimeResult {
@@ -86,11 +96,12 @@ export interface SimulationTickEvent {
   totalSteps: number;
 }
 
-async function post<T>(path: string, body?: unknown): Promise<T> {
+async function post<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
+    signal,
   });
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
   return res.json();
@@ -116,8 +127,12 @@ export async function generatePlanet(seed: number = 0): Promise<GenerateResult> 
   return post('/api/planet/generate', { seed });
 }
 
-export async function advanceSimulation(deltaMa: number): Promise<AdvanceResult> {
-  return post('/api/simulation/advance', { deltaMa });
+export async function advanceSimulation(deltaMa: number, signal?: AbortSignal): Promise<AdvanceResult> {
+  return post('/api/simulation/advance', { deltaMa }, signal);
+}
+
+export async function getSimulationStats(): Promise<TickStats & { timeMa: number }> {
+  return get('/api/simulation/stats');
 }
 
 export async function getSimulationTime(): Promise<SimulationTimeResult> {

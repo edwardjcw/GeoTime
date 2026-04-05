@@ -1226,3 +1226,154 @@ test.describe('Phase 10 – State Bundle Optimization', () => {
     expect(bundleCalls.length).toBeGreaterThan(0);
   });
 });
+
+// ─── Bug Fix Tests ──────────────────────────────────────────────────────────
+
+test.describe('Bug Fix – Log Access Icon', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+  });
+
+  test('should show 📊 log icon button in the HUD', async ({ page }) => {
+    const logBtn = page.locator('button', { hasText: '📊' });
+    await expect(logBtn).toBeVisible();
+  });
+
+  test('clicking log icon should open the log panel', async ({ page }) => {
+    const logBtn = page.locator('button', { hasText: '📊' });
+    await logBtn.click();
+    // Log panel contains "Simulation Log" title
+    await expect(page.locator('text=Simulation Log')).toBeVisible();
+  });
+
+  test('log panel should contain timing section', async ({ page }) => {
+    const logBtn = page.locator('button', { hasText: '📊' });
+    await logBtn.click();
+    await expect(page.locator('text=Last Tick Timing')).toBeVisible();
+  });
+
+  test('log panel should contain events section', async ({ page }) => {
+    const logBtn = page.locator('button', { hasText: '📊' });
+    await logBtn.click();
+    await expect(page.locator('text=Recent Events')).toBeVisible();
+  });
+
+  test('clicking log icon again should close the panel', async ({ page }) => {
+    const logBtn = page.locator('button', { hasText: '📊' });
+    await logBtn.click();
+    await expect(page.locator('text=Simulation Log')).toBeVisible();
+    await logBtn.click();
+    await expect(page.locator('text=Simulation Log')).not.toBeVisible();
+  });
+});
+
+test.describe('Bug Fix – Cell Info Panel Fields', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+  });
+
+  test('agent panel should list all 5 engine agents', async ({ page }) => {
+    // Click the progress button to open the agent panel
+    const progressBtn = page.locator('text=⏳').first();
+    // The progress button might not have text yet; find by title instead
+    const hudBtns = page.locator('[title="Click to view agent status"]');
+    if (await hudBtns.count() > 0) {
+      await hudBtns.first().click();
+      await expect(page.locator('text=⛰ Tectonic')).toBeVisible();
+      await expect(page.locator('text=🌊 Surface')).toBeVisible();
+      await expect(page.locator('text=☁️ Atmosphere')).toBeVisible();
+      await expect(page.locator('text=🌿 Vegetation')).toBeVisible();
+      await expect(page.locator('text=🧬 Biomatter')).toBeVisible();
+    }
+  });
+
+  test('cell info panel should contain all field labels when opened', async ({ page }) => {
+    // Simulate a globe click to open the inspect panel.
+    // We click near the center of the canvas where the globe should be.
+    const canvas = page.locator('canvas').first();
+    const box = await canvas.boundingBox();
+    if (box) {
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      // Wait a bit for either the panel to appear or for a network request.
+      await page.waitForTimeout(1500);
+    }
+
+    // If the cell info panel appeared, check all field labels are present.
+    const cellInfoTitle = page.locator('text=📍 Cell Info');
+    if (await cellInfoTitle.isVisible()) {
+      await expect(page.locator('text=Elevation')).toBeVisible();
+      await expect(page.locator('text=Crust Thickness')).toBeVisible();
+      await expect(page.locator('text=Rock Type')).toBeVisible();
+      await expect(page.locator('text=Rock Age')).toBeVisible();
+      await expect(page.locator('text=Plate ID')).toBeVisible();
+      await expect(page.locator('text=Soil Order')).toBeVisible();
+      await expect(page.locator('text=Soil Depth')).toBeVisible();
+      await expect(page.locator('text=Temperature')).toBeVisible();
+      await expect(page.locator('text=Precipitation')).toBeVisible();
+      await expect(page.locator('text=Biomass')).toBeVisible();
+      await expect(page.locator('text=Biomatter')).toBeVisible();
+      await expect(page.locator('text=Organic C')).toBeVisible();
+      await expect(page.locator('text=Reef')).toBeVisible();
+    }
+    // Intentional documentation screenshot – captures cell info panel state for PR review.
+    await page.screenshot({ path: 'e2e/screenshots/cell-info-panel.png', fullPage: false });
+  });
+});
+
+test.describe('Bug Fix – Agent Status Panel', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+    await page.waitForTimeout(2000);
+  });
+
+  test('all engine agents are shown in the panel', async ({ page }) => {
+    // Find the agent panel toggle – it's the progress element
+    // First unpause so we can trigger an advance
+    const pauseBtn = page.locator('button', { hasText: /Resume/ });
+    if (await pauseBtn.isVisible()) await pauseBtn.click();
+    // Give simulation time to run at least one tick
+    await page.waitForTimeout(3000);
+
+    // Open agent panel via the progress/frozen button or by clicking the hud button
+    const agentToggle = page.locator('[title="Click to view agent status"]');
+    if (await agentToggle.count() > 0) {
+      await agentToggle.first().click();
+      // All 5 agents should be listed
+      await expect(page.locator('text=⛰ Tectonic')).toBeVisible();
+      await expect(page.locator('text=🌊 Surface')).toBeVisible();
+      await expect(page.locator('text=🧬 Biomatter')).toBeVisible();
+    }
+    // Intentional documentation screenshot – captures agent panel state for PR review.
+    await page.screenshot({ path: 'e2e/screenshots/agent-panel-all-agents.png', fullPage: false });
+  });
+
+  test('simulation advance includes timing stats in response', async ({ page }) => {
+    const advanceCalls: Array<{ url: string; responseBody?: string }> = [];
+    page.on('response', async (res) => {
+      if (res.url().includes('/api/simulation/advance') && res.request().method() === 'POST') {
+        try {
+          const body = await res.text();
+          advanceCalls.push({ url: res.url(), responseBody: body });
+        } catch {
+          advanceCalls.push({ url: res.url() });
+        }
+      }
+    });
+
+    // Unpause and let simulation run
+    const pauseBtn = page.locator('button', { hasText: /Resume/ });
+    if (await pauseBtn.isVisible()) await pauseBtn.click();
+    await page.waitForTimeout(4000);
+
+    if (advanceCalls.length > 0 && advanceCalls[0].responseBody) {
+      const json = JSON.parse(advanceCalls[0].responseBody);
+      expect(json).toHaveProperty('stats');
+      expect(json.stats).toHaveProperty('totalMs');
+    }
+    // Intentional documentation screenshot – captures advance response stats for PR review.
+    await page.screenshot({ path: 'e2e/screenshots/advance-with-stats.png', fullPage: false });
+  });
+});

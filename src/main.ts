@@ -723,27 +723,19 @@ shell.onInspectClick((x: number, y: number) => {
   const row = Math.min(Math.floor(normLat * GRID_SIZE), GRID_SIZE - 1);
   const cellIndex = row * GRID_SIZE + col;
 
-  api.inspectCell(cellIndex)
-    .then((info) => {
-      shell.showInspectPanel({
-        lat,
-        lon,
-        elevation: info.height,
-        rockType: ROCK_TYPE_NAMES[info.rockType] ?? `Type ${info.rockType}`,
-        soilOrder: SOIL_ORDER_NAMES[info.soilType] ?? `Order ${info.soilType}`,
-        temperature: info.temperature,
-        precipitation: info.precipitation,
-        biomass: info.biomass,
-      });
-    })
-    .catch((err) => {
-      console.error('Cell inspect failed:', err);
-    });
+  // Store for auto-refresh on subsequent advances.
+  selectedCellIndex = cellIndex;
+  selectedCellLat   = lat;
+  selectedCellLon   = lon;
+
+  refreshInspectCell();
 });
 
 // ── Wire UI callbacks ───────────────────────────────────────────────────────
 
 shell.onAbortRequest(() => {
+  simRequestController?.abort();
+  simRequestController = null;
   pendingSimRequest = false;
   simRequestStartMs = 0;
   shell.setProgressText('');
@@ -815,6 +807,11 @@ renderer.onCameraChange((isFirstPerson) => {
   shell.setFirstPersonMode(isFirstPerson);
 });
 
+// Wire log panel open callback
+shell.onLogOpen(() => {
+  refreshLogPanel();
+});
+
 // ── Render loop ─────────────────────────────────────────────────────────────
 // The render loop now only handles display and periodically asks the backend
 // to advance the simulation and fetches updated state.
@@ -831,6 +828,47 @@ const SIM_UPDATE_INTERVAL = 200; // ms between backend simulation calls
 let pendingSimRequest = false;
 /** Timestamp (ms) when the current sim request was dispatched. */
 let simRequestStartMs = 0;
+/** AbortController for the in-flight simulation advance fetch. */
+let simRequestController: AbortController | null = null;
+
+/** Cell index of the currently pinned inspect cell (–1 = none). */
+let selectedCellIndex = -1;
+let selectedCellLat   = 0;
+let selectedCellLon   = 0;
+
+/** Last tick timing stats for the log panel. */
+let lastTickStats: api.TickStats | null = null;
+
+/** Re-fetch and display the pinned cell's inspection data. */
+function refreshInspectCell(): void {
+  if (selectedCellIndex < 0) return;
+  const lat = selectedCellLat;
+  const lon = selectedCellLon;
+  const cellIndex = selectedCellIndex;
+  api.inspectCell(cellIndex)
+    .then((info) => {
+      shell.showInspectPanel({
+        lat,
+        lon,
+        elevation: info.height,
+        crustThickness: info.crustThickness,
+        rockType: ROCK_TYPE_NAMES[info.rockType] ?? `Type ${info.rockType}`,
+        rockAge: info.rockAge,
+        plateId: info.plateId,
+        soilOrder: SOIL_ORDER_NAMES[info.soilType] ?? `Order ${info.soilType}`,
+        soilDepth: info.soilDepth,
+        temperature: info.temperature,
+        precipitation: info.precipitation,
+        biomass: info.biomass,
+        biomatterDensity: info.biomatterDensity,
+        organicCarbon: info.organicCarbon,
+        reefPresent: info.reefPresent,
+      });
+    })
+    .catch((err) => {
+      console.error('Cell inspect failed:', err);
+    });
+}
 
 // ── Agent status tracking ───────────────────────────────────────────────────
 // Track the last known status of each simulation engine phase.  Updated via
@@ -877,6 +915,28 @@ function resetAgentStatuses(): void {
     agentStatuses[key] = 'idle';
   }
   shell.updateAgentStatuses(agentStatuses);
+}
+
+/** Update agent statuses based on last-tick timing stats so the panel shows which engines actually ran. */
+function updateAgentStatusesFromStats(stats: api.TickStats | null): void {
+  if (!stats) { resetAgentStatuses(); return; }
+  agentStatuses.tectonic   = stats.tectonicMs   > 0 ? 'done' : 'idle';
+  agentStatuses.surface    = stats.surfaceMs     > 0 ? 'done' : 'idle';
+  agentStatuses.atmosphere = stats.atmosphereMs  > 0 ? 'done' : 'idle';
+  agentStatuses.vegetation = stats.vegetationMs  > 0 ? 'done' : 'idle';
+  agentStatuses.biomatter  = stats.biomatterMs   > 0 ? 'done' : 'idle';
+  shell.updateAgentStatuses(agentStatuses);
+}
+
+/** Refresh the log panel with current timing stats and recent events. */
+function refreshLogPanel(): void {
+  api.getEvents(20)
+    .then((events) => {
+      shell.updateLogPanel(lastTickStats, events);
+    })
+    .catch(() => {
+      shell.updateLogPanel(lastTickStats, []);
+    });
 }
 
 // ── SignalR connection for real-time progress events ────────────────────────
@@ -935,18 +995,33 @@ function loop(now: number): void {
       simAccum = 0;
 
       shell.setProgressText('⏳ Advancing…');
-      api.advanceSimulation(deltaMa)
+      simRequestController = new AbortController();
+      api.advanceSimulation(deltaMa, simRequestController.signal)
         .then(async (result) => {
           simTimeMa = result.timeMa;
           shell.setSimTime(simTimeMa);
           shell.setTimelineCursor(4500 + simTimeMa);
           shell.setProgressText('');
-          resetAgentStatuses();
+
+          // Update timing stats and mark all agents done.
+          if (result.stats) {
+            lastTickStats = result.stats;
+          }
+          // Use stats from response to update the agent panel with last-tick timing.
+          updateAgentStatusesFromStats(lastTickStats);
+
+          // Refresh the log panel if it's open.
+          if (shell.isLogPanelOpen) {
+            refreshLogPanel();
+          }
 
           // Fetch updated height+temperature+precipitation in a single request.
           const bundle = await api.getStateBundle(GRID_SIZE * GRID_SIZE);
           const heightMap = bundle.heightMap;
           renderer.updateHeightMap(heightMap, GRID_SIZE);
+
+          // Auto-refresh the cell info panel if a cell is pinned.
+          refreshInspectCell();
 
           // Keep the biome base texture in sync for the default view.
           if (activeDataLayers.size === 0) {
@@ -972,13 +1047,15 @@ function loop(now: number): void {
             }
           }
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
+          if (err instanceof Error && err.name === 'AbortError') return; // user-initiated or timeout-based abort
           console.error('Simulation advance failed:', err);
           shell.setProgressText('');
           resetAgentStatuses();
         })
         .finally(() => {
           pendingSimRequest = false;
+          simRequestController = null;
         });
     }
   }
@@ -989,6 +1066,8 @@ function loop(now: number): void {
     if (elapsedSec >= 15) {
       shell.setProgressText(`⚠️ Frozen? (${elapsedSec}s) — click to abort`);
       if (elapsedSec >= 60) {
+        simRequestController?.abort();
+        simRequestController = null;
         pendingSimRequest = false;
         simRequestStartMs = 0;
         shell.setProgressText('');

@@ -46,18 +46,51 @@ app.MapPost("/api/planet/generate", (GenerateRequest req, SimulationOrchestrator
 
 app.MapPost("/api/simulation/advance", async (AdvanceRequest req, SimulationOrchestrator sim, IHubContext<SimulationHub> hubContext) =>
 {
-    sim.AdvanceSimulation(req.DeltaMa, phase =>
+    // Collect phase names in order during the synchronous simulation run.
+    var phases = new List<string>();
+    sim.AdvanceSimulation(req.DeltaMa, phase => phases.Add(phase));
+
+    // Send progress events in order *before* returning the HTTP response so
+    // the frontend receives them in the correct sequence.
+    foreach (var phase in phases)
     {
-        // Broadcast engine-phase progress to all connected SignalR clients so they
-        // can show meaningful progress feedback even when the REST endpoint is used.
-        _ = hubContext.Clients.All.SendAsync("SimulationProgress", new
+        await hubContext.Clients.All.SendAsync("SimulationProgress", new
         {
             phase,
             timeMa = sim.GetCurrentTime(),
         });
+    }
+
+    var stats = sim.LastTickStats;
+    return Results.Ok(new
+    {
+        timeMa = sim.GetCurrentTime(),
+        stats = new
+        {
+            tectonicMs  = stats.TectonicMs,
+            surfaceMs   = stats.SurfaceMs,
+            atmosphereMs = stats.AtmosphereMs,
+            vegetationMs = stats.VegetationMs,
+            biomatterMs  = stats.BiomatterMs,
+            totalMs      = stats.TotalMs,
+        },
     });
-    return (Results.Ok(new { timeMa = sim.GetCurrentTime() }));
 }).WithName("AdvanceSimulation");
+
+app.MapGet("/api/simulation/stats", (SimulationOrchestrator sim) =>
+{
+    var stats = sim.LastTickStats;
+    return Results.Ok(new
+    {
+        tectonicMs  = stats.TectonicMs,
+        surfaceMs   = stats.SurfaceMs,
+        atmosphereMs = stats.AtmosphereMs,
+        vegetationMs = stats.VegetationMs,
+        biomatterMs  = stats.BiomatterMs,
+        totalMs      = stats.TotalMs,
+        timeMa       = stats.TimeMa,
+    });
+}).WithName("GetSimulationStats");
 
 app.MapGet("/api/simulation/time", (SimulationOrchestrator sim) =>
     Results.Ok(new { timeMa = sim.GetCurrentTime(), seed = sim.GetCurrentSeed() })
