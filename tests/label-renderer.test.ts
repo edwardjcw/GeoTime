@@ -140,12 +140,19 @@ describe('LabelRenderer', () => {
   });
 
   it('should update pool size when labels change', () => {
-    renderer.setLabels([makeLabel(), makeLabel({ id: 'b' }), makeLabel({ id: 'c' })]);
+    renderer.setLabels([
+      makeLabel({ id: 'a', name: 'Alpha' }),
+      makeLabel({ id: 'b', name: 'Beta' }),
+      makeLabel({ id: 'c', name: 'Gamma' }),
+    ]);
     expect(container.querySelectorAll('div').length).toBe(3);
 
-    renderer.setLabels([makeLabel()]);
-    // Pool entries beyond 1 are hidden but not removed from DOM
-    const divs = Array.from(container.querySelectorAll('div')) as HTMLElement[];
-    expect(divs.filter((d) => d.style.display !== 'none').length + divs.filter((d) => d.textContent === 'Test Feature').length).toBeGreaterThan(0);
+    // Shrink to 1 label — pool keeps 3 DOM nodes for reuse
+    renderer.setLabels([makeLabel({ id: 'x', name: 'Xray' })]);
+    const divs = Array.from(container.querySelectorAll('div'));
+    // DOM pool is not shrunk
+    expect(divs.length).toBe(3);
+    // First div text is updated to the new single label
+    expect(divs[0].textContent).toBe('Xray');
   });
 });

@@ -109,7 +109,7 @@ public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
     {
         var changedLabels = sim.State.FeatureRegistry.Features.Values
             .Where(f => f.History.Count > 0
-                     && f.Current.SimTickCreated >= currentTick
+                     && f.Current.SimTickCreated == currentTick
                      && f.Current.Status != GeoTime.Core.Models.FeatureStatus.Extinct)
             .Select(f => new
             {
