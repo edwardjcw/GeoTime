@@ -29,21 +29,48 @@ public sealed class GpuComputeService : IDisposable
     {
         _context = Context.CreateDefault();
 
-        // GetPreferredDevice(preferCPU: false) returns the best GPU device if available,
-        // or the CPU device if no GPU is present.
-        var device = _context.GetPreferredDevice(preferCPU: false);
-        _accelerator = device.CreateAccelerator(_context);
+        // Prioritize CUDA accelerator (NVIDIA GPUs) over other options.
+        // Enumerate all devices and prefer dedicated NVIDIA GPUs.
+        Device? selectedDevice = null;
 
-        var isGpu = device.AcceleratorType != AcceleratorType.CPU;
+        // First pass: try to find a CUDA device (dedicated NVIDIA GPU)
+        foreach (var device in _context.Devices)
+        {
+            if (device.AcceleratorType == AcceleratorType.Cuda)
+            {
+                selectedDevice = device;
+                break;
+            }
+        }
+
+        // Second pass: fallback to any non-CPU device (e.g., OpenCL)
+        if (selectedDevice == null)
+        {
+            foreach (var device in _context.Devices)
+            {
+                if (device.AcceleratorType != AcceleratorType.CPU)
+                {
+                    selectedDevice = device;
+                    break;
+                }
+            }
+        }
+
+        // Final fallback: use CPU
+        selectedDevice ??= _context.GetPreferredDevice(preferCPU: true);
+
+        _accelerator = selectedDevice.CreateAccelerator(_context);
+
+        var isGpu = selectedDevice.AcceleratorType != AcceleratorType.CPU;
         var mode = isGpu ? ComputeMode.GPU : ComputeMode.CPU;
-        var modeLabel = device.AcceleratorType switch
+        var modeLabel = selectedDevice.AcceleratorType switch
         {
             AcceleratorType.Cuda   => "GPU (CUDA)",
             AcceleratorType.OpenCL => "GPU (OpenCL)",
             _                      => $"CPU (ILGPU · {Environment.ProcessorCount} threads)",
         };
 
-        Info = new ComputeInfo(mode, $"{modeLabel} – {device.Name}", device.AcceleratorType.ToString());
+        Info = new ComputeInfo(mode, $"{modeLabel} – {selectedDevice.Name}", selectedDevice.AcceleratorType.ToString());
 
         // Pre-compile kernels once at startup
         _isostasyKernel = _accelerator
@@ -82,13 +109,26 @@ public sealed class GpuComputeService : IDisposable
         using var hBuf = _accelerator.Allocate1D<float>(cc);
         using var cBuf = _accelerator.Allocate1D<float>(cc);
 
-        hBuf.CopyFromCPU(height);
-        cBuf.CopyFromCPU(crust);
+        try
+        {
+            hBuf.CopyFromCPU(height);
+            cBuf.CopyFromCPU(crust);
 
-        _isostasyKernel(cc, hBuf.View, cBuf.View, relax, factor, offset);
-        _accelerator.Synchronize();
+            _isostasyKernel(cc, hBuf.View, cBuf.View, relax, factor, offset);
+            _accelerator.Synchronize();
 
-        hBuf.CopyToCPU(height);
+            hBuf.CopyToCPU(height);
+        }
+        catch (Exception ex)
+        {
+            // Log the error and provide fallback behavior
+            System.Diagnostics.Debug.WriteLine($"GPU operation failed: {ex.Message}");
+            throw new InvalidOperationException(
+                $"GPU isostasy computation failed (accelerator: {Info.AcceleratorType}). " +
+                "This may indicate a GPU driver issue or incompatible accelerator state. " +
+                "Consider restarting or checking GPU drivers.",
+                ex);
+        }
     }
 
     // ── Temperature diffusion kernel ─────────────────────────────────────────
@@ -123,10 +163,23 @@ public sealed class GpuComputeService : IDisposable
     {
         var cc = temp.Length;
         using var buf = _accelerator.Allocate1D<float>(cc);
-        buf.CopyFromCPU(temp);
-        _diffuseKernel(cc, buf.View, gridSize, alpha);
-        _accelerator.Synchronize();
-        buf.CopyToCPU(temp);
+
+        try
+        {
+            buf.CopyFromCPU(temp);
+            _diffuseKernel(cc, buf.View, gridSize, alpha);
+            _accelerator.Synchronize();
+            buf.CopyToCPU(temp);
+        }
+        catch (Exception ex)
+        {
+            // Log the error and provide fallback behavior
+            System.Diagnostics.Debug.WriteLine($"GPU temperature diffusion failed: {ex.Message}");
+            throw new InvalidOperationException(
+                $"GPU temperature diffusion failed (accelerator: {Info.AcceleratorType}). " +
+                "This may indicate a GPU driver issue or incompatible accelerator state.",
+                ex);
+        }
     }
 
     public void Dispose()

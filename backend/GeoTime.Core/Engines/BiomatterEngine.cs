@@ -165,7 +165,7 @@ public sealed class BiomatterEngine(
     {
         if (heightM >= 0) return 0; // land
         if (heightM < REEF_MAX_DEPTH) return 0; // too deep
-        if (tempC < REEF_MIN_TEMP || tempC > REEF_MAX_TEMP) return 0;
+        if (tempC is < REEF_MIN_TEMP or > REEF_MAX_TEMP) return 0;
         // Peak at 24°C
         var tOpt = (REEF_MIN_TEMP + REEF_MAX_TEMP) / 2;
         var tRange = (REEF_MAX_TEMP - REEF_MIN_TEMP) / 2;
@@ -393,6 +393,7 @@ public sealed class BiomatterEngine(
                     RockType = temp < 5 ? RockType.SED_DIATOMITE : RockType.SED_CHERT,
                     AgeDeposited = timeMa,
                     Thickness = thickness,
+                    Deformation = DeformationType.UNDEFORMED,
                 });
                 deposited++;
             }
@@ -409,6 +410,7 @@ public sealed class BiomatterEngine(
                     RockType = RockType.SED_LIMESTONE,
                     AgeDeposited = timeMa,
                     Thickness = thickness,
+                    Deformation = DeformationType.UNDEFORMED,
                 });
                 deposited++;
             }
@@ -427,6 +429,7 @@ public sealed class BiomatterEngine(
                         RockType = RockType.SED_LIMESTONE,
                         AgeDeposited = timeMa,
                         Thickness = thickness,
+                        Deformation = DeformationType.UNDEFORMED,
                     });
                     deposited++;
                 }
@@ -444,6 +447,7 @@ public sealed class BiomatterEngine(
                         RockType = RockType.SED_PHOSPHORITE,
                         AgeDeposited = timeMa,
                         Thickness = thickness,
+                        Deformation = DeformationType.UNDEFORMED,
                     });
                     deposited++;
                 }
@@ -461,6 +465,7 @@ public sealed class BiomatterEngine(
             RockType = RockType.SED_IRONSTONE,
             AgeDeposited = timeMa,
             Thickness = thickness1,
+            Deformation = DeformationType.UNDEFORMED,
         });
         deposited++;
 
@@ -484,7 +489,7 @@ public sealed class BiomatterEngine(
 
             // Estimate temperature from burial depth (geothermal gradient ~25°C/km)
             var burialTemp = 15 + burialDepth / 1000 * 25;
-            if (burialTemp < OIL_WINDOW_MIN_TEMP || burialTemp > OIL_WINDOW_MAX_TEMP) continue;
+            if (burialTemp is < OIL_WINDOW_MIN_TEMP or > OIL_WINDOW_MAX_TEMP) continue;
 
             // Convert organic carbon to oil shale
             _strat.PushLayer(i, new StratigraphicLayer

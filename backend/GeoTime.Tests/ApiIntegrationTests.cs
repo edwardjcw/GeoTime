@@ -459,7 +459,7 @@ public class ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> fact
         var response = await _client.GetAsync("/api/simulation/compute-info");
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
         var mode = json.GetProperty("mode").GetString();
-        Assert.True(mode == "CPU" || mode == "GPU", $"mode should be CPU or GPU, got: {mode}");
+        Assert.True(mode is "CPU" or "GPU", $"mode should be CPU or GPU, got: {mode}");
     }
 
     // ── Adaptive Resolution Endpoints (Rec 7) ─────────────────────────────────

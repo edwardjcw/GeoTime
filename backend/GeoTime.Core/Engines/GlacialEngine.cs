@@ -80,6 +80,7 @@ public sealed class GlacialEngine(int gridSize)
                         RockType = RockType.SED_TILLITE, AgeDeposited = timeMa,
                         Thickness = moraine, DipAngle = rng.Next() * 5,
                         DipDirection = rng.NextFloat(0, 360), Unconformity = true,
+                        Deformation = DeformationType.UNDEFORMED,
                     });
                 }
                 break;

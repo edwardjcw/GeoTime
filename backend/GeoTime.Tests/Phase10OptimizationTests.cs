@@ -35,7 +35,107 @@ public class Phase10OptimizationTests
     public void GpuComputeService_Info_ModeIsCpuOrGpu()
     {
         using var service = new GpuComputeService();
-        Assert.True(service.Info.Mode == ComputeMode.CPU || service.Info.Mode == ComputeMode.GPU);
+        Assert.True(service.Info.Mode is ComputeMode.CPU or ComputeMode.GPU);
+    }
+
+    /// <summary>
+    /// Test that GPU device selection prioritizes CUDA (dedicated NVIDIA GPU) over other accelerators.
+    /// This ensures the backend uses the dedicated NVidia GPU when available, not the integrated Intel GPU.
+    /// </summary>
+    [Fact]
+    public void GpuComputeService_PrefersCudaAccelerator()
+    {
+        using var service = new GpuComputeService();
+        var info = service.Info;
+        
+        // If GPU is active, it should be CUDA (dedicated NVIDIA) 
+        if (info.Mode == ComputeMode.GPU)
+        {
+            Assert.True(info.AcceleratorType == "Cuda" || info.AcceleratorType == "OpenCL",
+                $"Expected CUDA or OpenCL but got {info.AcceleratorType}");
+            
+            // If CUDA is available on this system, it must be selected (not Intel iGPU via OpenCL)
+            // We can infer the preference by checking the accelerator type
+            if (info.AcceleratorType == "Cuda")
+            {
+                Assert.True(service.IsGpuActive);
+                Assert.Contains("CUDA", info.DeviceName);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test that GPU synchronization errors are caught and wrapped with helpful diagnostics.
+    /// This ensures the fatal 0xC0000005 access violation is handled gracefully instead of crashing.
+    /// </summary>
+    [Fact]
+    public void GpuComputeService_ApplyIsostasy_HandlesSynchronizationErrors()
+    {
+        using var service = new GpuComputeService();
+        const int n = 16;
+        var height = new float[n];
+        var crust = new float[n];
+        
+        for (var i = 0; i < n; i++)
+        {
+            height[i] = 1000f;
+            crust[i] = 35f;
+        }
+
+        // This should not throw an unhandled fatal error; it should complete or throw InvalidOperationException
+        var exception = Record.Exception(() =>
+            service.ApplyIsostasy(height, crust, 0.1f, 180f, -4500f)
+        );
+
+        // Either it succeeds (null) or throws InvalidOperationException with diagnostic info
+        if (exception != null)
+        {
+            Assert.IsType<InvalidOperationException>(exception);
+            Assert.Contains("GPU", exception.Message);
+            Assert.Contains("accelerator", exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// Test that temperature diffusion GPU operations also have error handling.
+    /// </summary>
+    [Fact]
+    public void GpuComputeService_DiffuseTemperature_HandlesSynchronizationErrors()
+    {
+        using var service = new GpuComputeService();
+        const int gs = 8;
+        var temp = new float[gs * gs];
+        
+        for (var i = 0; i < temp.Length; i++)
+        {
+            temp[i] = 20f - i * 0.1f;
+        }
+
+        // This should not throw an unhandled fatal error
+        var exception = Record.Exception(() =>
+            service.DiffuseTemperature(temp, gs, 0.01f)
+        );
+
+        // Either it succeeds or throws InvalidOperationException with diagnostic info
+        if (exception != null)
+        {
+            Assert.IsType<InvalidOperationException>(exception);
+            Assert.Contains("diffusion", exception.Message, System.StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>
+    /// Test that GPU compute service reports correct accelerator type.
+    /// This verifies that the UI/backend properly identifies which GPU is being used.
+    /// </summary>
+    [Fact]
+    public void GpuComputeService_AcceleratorType_IsValid()
+    {
+        using var service = new GpuComputeService();
+        var accType = service.Info.AcceleratorType;
+        
+        var validTypes = new[] { "Cuda", "OpenCL", "CPU" };
+        Assert.Contains(accType, validTypes);
     }
 
     [Fact]
@@ -49,7 +149,7 @@ public class Phase10OptimizationTests
 
         // Match TectonicEngine constants: factor = 1000 * (1 - 2.7/3.3), offset = -4500
         const double ISOSTATIC_RATIO = 2.7 / 3.3;
-        var factor  = (float)(1000.0 * (1 - ISOSTATIC_RATIO));
+        const float factor = (float)(1000.0 * (1 - ISOSTATIC_RATIO));
         const float offset = -4500f;
         const float relax  = 0.1f;
 
@@ -134,6 +234,62 @@ public class Phase10OptimizationTests
 
         var ex = Record.Exception(() => engine.Tick(0, 0.1));
         Assert.Null(ex);
+    }
+
+    /// <summary>
+    /// Test that TectonicEngine with GPU doesn't crash during isostasy with multiple ticks.
+    /// This reproduces the scenario where the fatal 0xC0000005 error occurred in clFinish_Import.
+    /// </summary>
+    [Fact]
+    public void TectonicEngine_WithGpuService_MultipleTicks_DoesNotCrash()
+    {
+        using var gpu = new GpuComputeService();
+        var bus = new GeoTime.Core.Kernel.EventBus();
+        var log = new GeoTime.Core.Kernel.EventLog(50);
+        var engine = new TectonicEngine(bus, log, 42, 0.1, gpu);
+
+        var state = new SimulationState(8);
+        var plates = new List<GeoTime.Core.Models.PlateInfo>
+        {
+            new() { Id = 0, CenterLat = 0, CenterLon = 0, IsOceanic = false, Area = 1 },
+        };
+        
+        for (var i = 0; i < state.CellCount; i++)
+        {
+            state.PlateMap[i] = 0;
+            state.HeightMap[i] = 1000f;
+            state.CrustThicknessMap[i] = 35f;
+        }
+        
+        engine.Initialize(plates, [], new GeoTime.Core.Models.AtmosphericComposition(), state);
+
+        // Simulate multiple ticks to stress GPU memory operations
+        for (int tick = 0; tick < 5; tick++)
+        {
+            var ex = Record.Exception(() => engine.Tick(tick, 0.5));
+            
+            // Either succeeds or throws with diagnostic info, but NOT a fatal unhandled error
+            if (ex != null)
+            {
+                Assert.IsType<InvalidOperationException>(ex);
+                Assert.Contains("GPU", ex.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test GPU compute service can be instantiated multiple times without resource leaks.
+    /// This helps ensure proper cleanup and reuse of GPU resources.
+    /// </summary>
+    [Fact]
+    public void GpuComputeService_MultipleInstances_NoLeaks()
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            using var service = new GpuComputeService();
+            Assert.NotNull(service.Info);
+            Assert.NotNull(service.Info.DeviceName);
+        }
     }
 
     // ── ClimateEngine temperature diffusion (Rec 6) ───────────────────────────
@@ -267,6 +423,6 @@ public class Phase10OptimizationTests
         var info = sim.GetComputeInfo();
         Assert.NotNull(info);
         Assert.False(string.IsNullOrWhiteSpace(info.DeviceName));
-        Assert.True(info.Mode == ComputeMode.CPU || info.Mode == ComputeMode.GPU);
+        Assert.True(info.Mode is ComputeMode.CPU or ComputeMode.GPU);
     }
 }

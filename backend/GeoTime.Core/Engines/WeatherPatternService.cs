@@ -205,7 +205,7 @@ public static class WeatherPatternService
         {
             double lat    = 90.0 - (double)row / (gs - 1) * 180.0;
             double absLat = Math.Abs(lat);
-            if (absLat < 35 || absLat > 55) continue;
+            if (absLat is < 35 or > 55) continue;
 
             bool inWinter = (lat > 0 && nhWinter) || (lat < 0 && shWinter);
             if (!inWinter) continue;
@@ -262,11 +262,11 @@ public static class WeatherPatternService
         {
             double lat    = 90.0 - (double)row / (gs - 1) * 180.0;
             double absLat = Math.Abs(lat);
-            if (absLat < 5 || absLat > 20) continue;
+            if (absLat is < 5 or > 20) continue;
 
             bool isNH      = lat > 0;
             bool inSeason  = isNH ? (month >= 6 && month <= 11)
-                                  : (month >= 11 || month <= 4);
+                                  : month is >= 11 or <= 4;
             if (!inSeason) continue;
 
             for (int col = Stride; col < gs - Stride; col += Stride)

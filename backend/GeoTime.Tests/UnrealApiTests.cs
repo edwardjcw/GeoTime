@@ -100,7 +100,7 @@ public class UnrealApiTests(WebApplicationFactory<GeoTime.Api.Program> factory)
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.True(json.TryGetProperty("mode", out var modeProp));
         var mode = modeProp.GetString();
-        Assert.True(mode == "orbit" || mode == "firstperson");
+        Assert.True(mode is "orbit" or "firstperson");
         Assert.True(json.TryGetProperty("altitudeKm", out _));
         Assert.True(json.TryGetProperty("lat", out _));
         Assert.True(json.TryGetProperty("lon", out _));
