@@ -554,3 +554,98 @@ export interface LlmSetupProgressEvent {
   isError: boolean;
   errorMessage: string | null;
 }
+
+// ── Description API (Phase D5) ──────────────────────────────────────────────
+
+/** One stat row returned by POST /api/describe. */
+export interface DescriptionStat {
+  label: string;
+  value: string;
+}
+
+/** One stratigraphic summary row returned by POST /api/describe. */
+export interface StratigraphicSummaryRow {
+  age: string;
+  thickness: string;
+  rockType: string;
+  eventNote: string;
+}
+
+/** One history timeline entry returned by POST /api/describe. */
+export interface HistoryTimelineEntry {
+  simTick: number;
+  event: string;
+  name: string;
+}
+
+/** Full response from POST /api/describe. */
+export interface DescriptionResponse {
+  title: string;
+  subtitle: string;
+  paragraphs: string[];
+  stats: DescriptionStat[];
+  stratigraphicSummary: StratigraphicSummaryRow[];
+  historyTimeline: HistoryTimelineEntry[];
+  providerUsed: string;
+}
+
+/** Request a geological description for the given cell index. */
+export async function describeCell(cellIndex: number): Promise<DescriptionResponse> {
+  return post<DescriptionResponse>('/api/describe', { cellIndex });
+}
+
+/**
+ * Open a streaming description via SSE. Returns an EventSource.
+ * Each event has `{ token: string }`. A final event has `{ done: true }`.
+ */
+export function describeStream(
+  cellIndex: number,
+  onToken: (token: string) => void,
+  onDone: () => void,
+): () => void {
+  let es: EventSource | null = null;
+  // Use fetch+ReadableStream for POST SSE
+  const controller = new AbortController();
+  fetch(`${API_BASE}/api/describe/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cellIndex }),
+    signal: controller.signal,
+  }).then(async (resp) => {
+    if (!resp.body) return onDone();
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop() ?? '';
+      for (const part of parts) {
+        const line = part.startsWith('data: ') ? part.slice(6) : part;
+        try {
+          const obj = JSON.parse(line) as { token?: string; done?: boolean };
+          if (obj.done) { onDone(); return; }
+          if (obj.token) onToken(obj.token);
+        } catch {/* ignore */}
+      }
+    }
+    onDone();
+  }).catch(() => onDone());
+  return () => controller.abort();
+}
+
+// ── Event Layer Map API (Phase D6) ─────────────────────────────────────────
+
+/** Fetch a float[] scalar field of event-layer thickness per cell. */
+export async function fetchEventLayerMap(
+  eventType: string,
+): Promise<number[]> {
+  return get<number[]>(`/api/state/eventlayermap?eventType=${encodeURIComponent(eventType)}`);
+}
+
+/** Fetch the list of LayerEventType values present on the planet. */
+export async function fetchEventLayerTypes(): Promise<string[]> {
+  return get<string[]>('/api/state/eventlayermap/types');
+}

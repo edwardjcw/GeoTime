@@ -323,6 +323,24 @@ public sealed class SimulationOrchestrator : IDisposable
     /// <summary>Get the current feature registry.</summary>
     public FeatureRegistry GetFeatureRegistry() => State.FeatureRegistry;
 
+    /// <summary>
+    /// Return a snapshot of all stratigraphic columns as a StratigraphicColumn?[] array
+    /// indexed by cell index.  Returns null if the planet has not been generated yet.
+    /// </summary>
+    public StratigraphicColumn?[]? GetStratigraphicColumns()
+    {
+        if (_tectonic == null) return null;
+        var cellCount = State.CellCount;
+        var result = new StratigraphicColumn?[cellCount];
+        for (int i = 0; i < cellCount; i++)
+        {
+            var layers = _tectonic.Stratigraphy.GetLayers(i);
+            if (layers.Count > 0)
+                result[i] = new StratigraphicColumn { Layers = [..layers] };
+        }
+        return result;
+    }
+
     /// <summary>Inspect a cell by grid index.</summary>
     public CellInspection? InspectCell(int cellIndex)
     {

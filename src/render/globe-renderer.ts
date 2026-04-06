@@ -87,6 +87,45 @@ void main() {
 
 // ─── Biome color shaders ────────────────────────────────────────────────────
 
+// ─── Event-layer overlay shaders (Phase D6) ──────────────────────────────────
+
+const eventLayerVertexShader = /* glsl */ `
+uniform sampler2D uHeightMap;
+uniform float uDisplacementScale;
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  float height = texture2D(uHeightMap, uv).r;
+  vec3 pos = position + normal * (height * uDisplacementScale + 0.003);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+}
+`;
+
+const eventLayerFragmentShader = /* glsl */ `
+uniform sampler2D uEventMap;
+varying vec2 vUv;
+void main() {
+  vec4 col = texture2D(uEventMap, vUv);
+  if (col.a < 0.01) discard;
+  gl_FragColor = col;
+}
+`;
+
+/** RGB colour (0-255) per event type for the heatmap overlay. */
+const EVENT_LAYER_PALETTE: Record<string, [number, number, number]> = {
+  ImpactEjecta:          [255, 140,  40],
+  VolcanicAsh:           [200, 200, 200],
+  VolcanicSoot:          [ 80,  80,  80],
+  GammaRayBurst:         [ 60, 220, 255],
+  OceanAnoxicEvent:      [ 20,  40,  20],
+  SnowballGlacial:       [200, 230, 255],
+  IronFormation:         [180,  80,  40],
+  MeteoriticIron:        [120,  60, 160],
+  MassExtinction:        [220,  40,  40],
+  CarbonIsotopeExcursion:[40,  200, 100],
+  default:               [200, 200,  80],
+};
+
 // The biome overlay reads the same heightmap as the terrain so it displaces
 // its vertices by the same amount, placing it exactly on the terrain surface
 // (plus a tiny epsilon to prevent z-fighting).
@@ -195,6 +234,11 @@ export class GlobeRenderer {
   private biomeMesh: THREE.Mesh | null = null;
   private biomeMaterial: THREE.ShaderMaterial | null = null;
   private biomeTexture: THREE.DataTexture | null = null;
+
+  // Event-layer overlay (Phase D6)
+  private eventLayerMesh: THREE.Mesh | null = null;
+  private eventLayerMaterial: THREE.ShaderMaterial | null = null;
+  private eventLayerTexture: THREE.DataTexture | null = null;
 
   private biomeBaseTexture: THREE.DataTexture | null = null;
 
@@ -639,6 +683,75 @@ export class GlobeRenderer {
       this.biomeMesh.visible = visible;
       if (visible && !this.biomeMesh.parent) {
         this.scene.add(this.biomeMesh);
+      }
+    }
+  }
+
+  /**
+   * Upload a scalar float[] event-layer thickness map and render it as a
+   * heatmap overlay on the globe.  Call `setEventLayerVisible(true)` to show it.
+   * @param values     - One thickness value per grid cell (row-major).
+   * @param gridSize   - Width/height of the square grid.
+   * @param eventType  - EventType name used to pick the colour palette.
+   */
+  updateEventLayerMap(values: number[], gridSize: number, eventType: string): void {
+    const cellCount = gridSize * gridSize;
+    const rgba = new Uint8Array(cellCount * 4);
+
+    // Find max thickness for normalisation
+    let maxVal = 0;
+    for (let i = 0; i < cellCount; i++) {
+      if (values[i] > maxVal) maxVal = values[i];
+    }
+    if (maxVal === 0) maxVal = 1;
+
+    // Pick colour palette by event type
+    const palette = EVENT_LAYER_PALETTE[eventType] ?? EVENT_LAYER_PALETTE['default'];
+
+    for (let i = 0; i < cellCount; i++) {
+      const t = Math.min(1, values[i] / maxVal);
+      if (t < 0.001) {
+        rgba[i * 4 + 3] = 0; // transparent where no layer
+        continue;
+      }
+      rgba[i * 4 + 0] = Math.round(palette[0] * t);
+      rgba[i * 4 + 1] = Math.round(palette[1] * t);
+      rgba[i * 4 + 2] = Math.round(palette[2] * t);
+      rgba[i * 4 + 3] = Math.round(180 * t);
+    }
+
+    if (this.eventLayerTexture) this.eventLayerTexture.dispose();
+    this.eventLayerTexture = new THREE.DataTexture(rgba, gridSize, gridSize, THREE.RGBAFormat, THREE.UnsignedByteType);
+    this.eventLayerTexture.magFilter = THREE.LinearFilter;
+    this.eventLayerTexture.minFilter = THREE.LinearFilter;
+    this.eventLayerTexture.flipY = true;
+    this.eventLayerTexture.needsUpdate = true;
+
+    if (!this.eventLayerMesh) {
+      this.eventLayerMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          uEventMap:          { value: this.eventLayerTexture },
+          uHeightMap:         { value: this.heightTexture },
+          uDisplacementScale: { value: DISPLACEMENT_SCALE },
+        },
+        vertexShader: eventLayerVertexShader,
+        fragmentShader: eventLayerFragmentShader,
+        transparent: true,
+        depthWrite: false,
+      });
+      this.eventLayerMesh = new THREE.Mesh(this.globeMesh.geometry, this.eventLayerMaterial);
+      this.eventLayerMesh.visible = false;
+    } else {
+      this.eventLayerMaterial!.uniforms.uEventMap.value = this.eventLayerTexture;
+    }
+  }
+
+  /** Show or hide the event-layer overlay. */
+  setEventLayerVisible(visible: boolean): void {
+    if (this.eventLayerMesh) {
+      this.eventLayerMesh.visible = visible;
+      if (visible && !this.eventLayerMesh.parent) {
+        this.scene.add(this.eventLayerMesh);
       }
     }
   }

@@ -165,3 +165,50 @@ public sealed class GeologicalContext
     /// </summary>
     public List<(DetectedFeature Feature, float DistanceKm)> NearbyFeatures { get; init; } = [];
 }
+
+// ── API transport models ─────────────────────────────────────────────────────
+
+/// <summary>Request body for POST /api/describe.</summary>
+public sealed class DescriptionRequest
+{
+    public int CellIndex { get; set; }
+}
+
+/// <summary>One row in the stratigraphic summary table.</summary>
+public sealed class StratigraphicSummaryRow
+{
+    public string Age     { get; set; } = "";
+    public string Thickness { get; set; } = "";
+    public string RockType  { get; set; } = "";
+    public string EventNote { get; set; } = "";
+}
+
+/// <summary>One entry in the history timeline list.</summary>
+public sealed class HistoryTimelineEntry
+{
+    public long   SimTick { get; set; }
+    public string Event   { get; set; } = "";
+    public string Name    { get; set; } = "";
+}
+
+/// <summary>One stat row (label + value) in the description panel.</summary>
+public sealed class DescriptionStat
+{
+    public string Label { get; set; } = "";
+    public string Value { get; set; } = "";
+}
+
+/// <summary>Full response from POST /api/describe.</summary>
+public sealed class DescriptionResponse
+{
+    public string   Title    { get; set; } = "";
+    public string   Subtitle { get; set; } = "";
+    public string[] Paragraphs { get; set; } = [];
+
+    public List<DescriptionStat>         Stats                { get; set; } = [];
+    public List<StratigraphicSummaryRow> StratigraphicSummary { get; set; } = [];
+    public List<HistoryTimelineEntry>    HistoryTimeline      { get; set; } = [];
+
+    /// <summary>Which LLM provider generated the prose (e.g. "Template", "Gemini").</summary>
+    public string ProviderUsed { get; set; } = "";
+}

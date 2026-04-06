@@ -97,6 +97,11 @@ async function doGeneratePlanet(seed: number): Promise<void> {
       .then((labels) => labelRenderer.setLabels(labels))
       .catch(() => {/* labels are non-critical */});
 
+    // Fetch available event layer types and populate dropdown (Phase D6).
+    api.fetchEventLayerTypes()
+      .then((types) => shell.setEventLayerTypes(types))
+      .catch(() => {/* event layer types are non-critical */});
+
     // Encode seed in URL fragment for sharing
     window.location.hash = `seed=${result.seed}`;
   } catch (err) {
@@ -936,6 +941,37 @@ function refreshInspectCell(): void {
       console.error('Cell inspect failed:', err);
     });
 }
+
+// ── Description Modal (Phase D5) ────────────────────────────────────────────
+
+shell.onDescribeOpen(() => {
+  if (selectedCellIndex < 0) return;
+  shell.showDescriptionModal();
+  api.describeCell(selectedCellIndex)
+    .then((resp) => {
+      shell.populateDescriptionModal(resp);
+    })
+    .catch((err) => {
+      console.error('Description failed:', err);
+    });
+});
+
+// ── Event Layer Overlay (Phase D6) ──────────────────────────────────────────
+
+shell.onEventLayerChange(async (eventType: string | null) => {
+  if (!eventType) {
+    renderer.setEventLayerVisible(false);
+    return;
+  }
+  try {
+    const values = await api.fetchEventLayerMap(eventType);
+    renderer.updateEventLayerMap(values, GRID_SIZE, eventType);
+    renderer.setEventLayerVisible(true);
+  } catch (err) {
+    console.error('Event layer fetch failed:', err);
+    renderer.setEventLayerVisible(false);
+  }
+});
 
 // ── Agent status tracking ───────────────────────────────────────────────────
 // Track the last known status of each simulation engine phase.  Updated via
