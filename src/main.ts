@@ -531,18 +531,18 @@ async function fetchLayerRgba(layer: string): Promise<Uint8Array | null> {
     //   land:  actual height mapped against fixed land reference [0, 4000]
     //           0 m → lowland green, 1500 m → highland yellow,
     //           3000 m → mountains, > 4000 m → upper peaks (never all-white).
-    const OCEAN_REF_LO = -6000, OCEAN_REF_HI = -100;
-    const LAND_REF_LO  =     0, LAND_REF_HI  = 4000;
+    const OCEAN_ELEVATION_MIN = -6000, OCEAN_ELEVATION_MAX = -100;
+    const LAND_ELEVATION_MAX  = 4000;
     for (let i = 0; i < cellCount; i++) {
       const h = data[i];
       let scaled: number;
       if (h < 0) {
         // Clamp to ocean reference range then map to topoColor ocean palette [−7000, −200].
-        const t = Math.max(0, Math.min(1, (h - OCEAN_REF_LO) / (OCEAN_REF_HI - OCEAN_REF_LO)));
+        const t = Math.max(0, Math.min(1, (h - OCEAN_ELEVATION_MIN) / (OCEAN_ELEVATION_MAX - OCEAN_ELEVATION_MIN)));
         scaled = t * (-200 - (-7000)) + (-7000); // maps to [−7000, −200]
       } else {
         // Clamp to land reference range then map to topoColor land palette [0, 4000].
-        scaled = Math.min(h, LAND_REF_HI);
+        scaled = Math.min(h, LAND_ELEVATION_MAX);
       }
       const [r, g, b] = topoColor(scaled);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 200;
@@ -1090,14 +1090,14 @@ setTimeout(() => simSocket.connect(), 500);
 // since requestAnimationFrame is paused by browsers for hidden tabs.
 
 /** Wall-clock timestamp of the most recently dispatched simulation tick. */
-let simLastWallMs = performance.now();
+let lastSimTickTimestampMs = performance.now();
 
 function simTick(): void {
   if (paused || pendingSimRequest) return;
 
   const nowMs = performance.now();
-  const dtMs = nowMs - simLastWallMs;
-  simLastWallMs = nowMs;
+  const dtMs = nowMs - lastSimTickTimestampMs;
+  lastSimTickTimestampMs = nowMs;
 
   simAccum += dtMs;
   if (simAccum < SIM_UPDATE_INTERVAL) return;

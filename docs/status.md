@@ -172,3 +172,20 @@ npx playwright test  # E2E
 - [x] `e2e/app-shell.spec.ts` — 7 E2E tests for the LLM settings panel (button visibility, open/close, provider list, title, radio buttons, API interaction)
 
 **Test count**: 316 (previous) + 21 new backend = **337 total backend tests passing**; 379 frontend Vitest tests still pass
+
+---
+
+## Bug Fixes (Session after Phase D3)
+
+### Fixes Applied
+- [x] **Labels off by default** — `LabelRenderer._visible` now starts `false`; container `display:none`; geographic labels only appear when the "labels" layer toggle is activated.
+- [x] **Event Layers dropdown** — Select element is hidden by default and only shown when the "event layers" toggle is active.
+- [x] **Cell info panel stable** — `showInspectPanel()` now updates DOM values in-place (Map cache of span elements) instead of rebuilding `innerHTML` on every refresh.
+- [x] **Log/LLM icons stable** — Added `marginLeft: auto` and `flexShrink: 0` to the log and LLM HUD buttons so they are always anchored to the right edge regardless of other HUD content changes.
+- [x] **GPU info (both)** — `GlobeRenderer.getWebGLRendererInfo()` queries `WEBGL_debug_renderer_info`; `setComputeMode()` tooltip now shows both Backend and Frontend GPU.
+- [x] **Log shows tick count** — `SimulationOrchestrator.TickCount` added, reset on `GeneratePlanet`, incremented each `AdvanceSimulationCore` call. Returned in `/api/simulation/advance` response. Log panel title shows total ticks.
+- [x] **Simulation runs when UI hidden** — Simulation advance loop moved to `setInterval(simTick, 200)` independent of `requestAnimationFrame`. The rAF loop is now rendering-only.
+- [x] **Topo layer fix** — Replaced dynamic per-run min/max normalization (which caused all-white when heights clustered) with fixed physical reference ranges: ocean [-6000, -100]→topoColor, land heights used directly (clamped to 4000m max).
+
+### Known Limitations / Not Yet Fixed
+- **Plate drift / land deformation** — `PlateInfo.AngularVelocity` is initialized but never applied to move the plate map. Implementing true plate advection on the equirectangular grid requires Rodrigues' rotation formula per cell and grid reassignment — a significant change. Heights at boundaries do change from convergent/divergent processes; but plates do not visibly migrate across the globe over geological time yet.
