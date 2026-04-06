@@ -5,6 +5,7 @@ using GeoTime.Core.Compute;
 using GeoTime.Core.Engines;
 using GeoTime.Core.Kernel;
 using GeoTime.Core.Models;
+using GeoTime.Core.Services;
 using MessagePack;
 using Microsoft.AspNetCore.SignalR;
 
@@ -13,6 +14,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddOpenApi();
 builder.Services.AddSingleton<SimulationOrchestrator>();
 builder.Services.AddSingleton<CameraStateService>();
+builder.Services.AddSingleton<GeologicalContextAssembler>(sp =>
+    new GeologicalContextAssembler(sp.GetRequiredService<SimulationOrchestrator>()));
 builder.Services.AddSignalR();
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
     p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
@@ -562,7 +565,241 @@ app.MapGet("/api/llm/setup/{provider}/progress", async (string provider, LocalLl
     }
 }).WithName("GetLlmSetupProgress");
 
+// ── Description API (Phase D5) ────────────────────────────────────────────────
+
+// POST /api/describe — assemble geological context and generate prose description
+app.MapPost("/api/describe", async (
+    DescriptionRequest req,
+    GeologicalContextAssembler assembler,
+    LlmProviderFactory factory,
+    CancellationToken ct) =>
+{
+    var ctx = await assembler.AssembleAsync(req.CellIndex);
+    if (ctx == null) return Results.BadRequest("Cell index out of range or planet not generated.");
+
+    var primaryFeature = ctx.PrimaryLandFeature ?? ctx.PrimaryWaterFeature;
+    var title    = primaryFeature?.Current.Name ?? $"Cell {req.CellIndex}";
+    var subtitle = primaryFeature != null
+        ? $"{primaryFeature.Type} — {ctx.SimAgeDescription}"
+        : ctx.SimAgeDescription;
+
+    // Build stats (no LLM needed)
+    var stats = new List<DescriptionStat>
+    {
+        new() { Label = "Location",      Value = $"{ctx.Lat:F2}°, {ctx.Lon:F2}°" },
+        new() { Label = "Elevation",     Value = $"{ctx.Cell.Height:F0} m" },
+        new() { Label = "Rock Age",      Value = $"{ctx.Cell.RockAge:F1} Ma" },
+        new() { Label = "Temperature",   Value = $"{ctx.MeanTempC:F1} °C" },
+        new() { Label = "Precipitation", Value = $"{ctx.MeanPrecipMm:F0} mm/yr" },
+        new() { Label = "Biome",         Value = ctx.BiomeType },
+        new() { Label = "Plate",         Value = $"Plate {ctx.CurrentPlate?.Id.ToString() ?? "—"}" },
+        new() { Label = "Margin Type",   Value = ctx.NearestMarginType.ToString() },
+    };
+
+    // Stratigraphic summary (no LLM needed)
+    var strat = ctx.Column.Layers
+        .OrderByDescending(l => l.AgeDeposited)
+        .Take(10)
+        .Select(l => new StratigraphicSummaryRow
+        {
+            Age       = $"{l.AgeDeposited:F1} Ma",
+            Thickness = $"{l.Thickness:F2} m",
+            RockType  = l.RockType.ToString(),
+            EventNote = l.EventType != LayerEventType.Normal ? l.EventType.ToString() : "",
+        })
+        .ToList();
+
+    // History timeline (no LLM needed), ordered by tick ascending
+    var history = ctx.PrimaryFeatureHistory
+        .OrderBy(s => s.SimTickCreated)
+        .Select(s => new HistoryTimelineEntry
+        {
+            SimTick = s.SimTickCreated,
+            Event   = s.SplitFromId != null ? "split" : s.MergedIntoId != null ? "merged" : "snapshot",
+            Name    = s.Name,
+        })
+        .ToList();
+
+    // Generate prose paragraphs
+    string[] paragraphs;
+    string providerUsed;
+
+    var provider = factory.GetActiveProvider();
+    if (provider is TemplateFallbackProvider || provider.Name == "Template")
+    {
+        // Use rich template engine (Phase D4) directly for best output
+        var paras = DescriptionTemplateEngine.Generate(ctx);
+        paragraphs  = paras.ToArray();
+        providerUsed = "Template";
+    }
+    else
+    {
+        // Use configured LLM provider; fall back to template on any provider error
+        try
+        {
+            var systemPrompt = DescriptionPromptComposer.ComposeSystemPrompt();
+            var userPrompt   = DescriptionPromptComposer.ComposeUserPrompt(ctx);
+            var prose        = await provider.GenerateAsync(systemPrompt, userPrompt, ct);
+
+            // Try to parse as JSON paragraphs array; otherwise treat as single block
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(prose);
+                if (doc.RootElement.TryGetProperty("paragraphs", out var arr))
+                {
+                    paragraphs = arr.EnumerateArray()
+                        .Select(e => e.GetString() ?? "")
+                        .Where(s => s.Length > 0)
+                        .ToArray();
+                }
+                else
+                {
+                    paragraphs = [prose];
+                }
+            }
+            catch
+            {
+                // Not JSON — split on double newlines as paragraph separator
+                paragraphs = prose
+                    .Split(["\n\n", "\r\n\r\n"], StringSplitOptions.RemoveEmptyEntries)
+                    .Select(p => p.Trim())
+                    .Where(p => p.Length > 0)
+                    .ToArray();
+                if (paragraphs.Length == 0) paragraphs = [prose];
+            }
+            providerUsed = provider.Name;
+        }
+        catch
+        {
+            // Provider unavailable at runtime — fall back to template engine
+            var paras = DescriptionTemplateEngine.Generate(ctx);
+            paragraphs  = paras.ToArray();
+            providerUsed = "Template";
+        }
+    }
+
+    return Results.Ok(new DescriptionResponse
+    {
+        Title                = title,
+        Subtitle             = subtitle,
+        Paragraphs           = paragraphs,
+        Stats                = stats,
+        StratigraphicSummary = strat,
+        HistoryTimeline      = history,
+        ProviderUsed         = providerUsed,
+    });
+}).WithName("DescribeCell");
+
+// POST /api/describe/stream — SSE streaming variant for LLM providers that support it
+app.MapPost("/api/describe/stream", async (
+    DescriptionRequest req,
+    GeologicalContextAssembler assembler,
+    LlmProviderFactory factory,
+    HttpContext httpCtx,
+    CancellationToken ct) =>
+{
+    var ctx = await assembler.AssembleAsync(req.CellIndex);
+    if (ctx == null)
+    {
+        httpCtx.Response.StatusCode = 400;
+        await httpCtx.Response.WriteAsync("Cell index out of range.", ct);
+        return;
+    }
+
+    httpCtx.Response.ContentType     = "text/event-stream";
+    httpCtx.Response.Headers.CacheControl = "no-cache";
+    httpCtx.Response.Headers.Connection   = "keep-alive";
+
+    var provider = factory.GetActiveProvider();
+    IAsyncEnumerable<string> tokens;
+
+    if (provider is TemplateFallbackProvider || provider.Name == "Template")
+    {
+        var paras = DescriptionTemplateEngine.Generate(ctx);
+        tokens = StringsToAsyncEnumerable(paras);
+    }
+    else
+    {
+        var systemPrompt = DescriptionPromptComposer.ComposeSystemPrompt();
+        var userPrompt   = DescriptionPromptComposer.ComposeUserPrompt(ctx);
+        tokens = provider.StreamAsync(systemPrompt, userPrompt, ct);
+    }
+
+    await foreach (var token in tokens.WithCancellation(ct))
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(new { token });
+        await httpCtx.Response.WriteAsync($"data: {json}\n\n", ct);
+        await httpCtx.Response.Body.FlushAsync(ct);
+    }
+
+    await httpCtx.Response.WriteAsync("data: {\"done\":true}\n\n", ct);
+    await httpCtx.Response.Body.FlushAsync(ct);
+}).WithName("DescribeCellStream");
+
+// ── Event Layer Map API (Phase D6) ────────────────────────────────────────────
+
+// GET /api/state/eventlayermap?eventType=ImpactEjecta&tick=N
+// Returns float[] (one value per cell = total thickness of that event type up to tick N)
+app.MapGet("/api/state/eventlayermap", (
+    string? eventType,
+    long? tick,
+    SimulationOrchestrator sim) =>
+{
+    if (sim.State.CellCount == 0) return Results.BadRequest("Planet not generated.");
+
+    var filterType = LayerEventType.Normal;
+    if (!string.IsNullOrWhiteSpace(eventType))
+    {
+        if (!Enum.TryParse<LayerEventType>(eventType, ignoreCase: true, out filterType))
+            return Results.BadRequest($"Unknown event type: {eventType}");
+    }
+
+    var strat = sim.GetStratigraphicColumns();
+    if (strat == null) return Results.Ok(new float[sim.State.CellCount]);
+
+    var result = new float[sim.State.CellCount];
+    for (int i = 0; i < sim.State.CellCount; i++)
+    {
+        var col = strat[i];
+        if (col == null) continue;
+        result[i] = (float)col.Layers
+            .Where(l => l.EventType == filterType)
+            .Sum(l => l.Thickness);
+    }
+    return Results.Ok(result);
+}).WithName("GetEventLayerMap");
+
+// GET /api/state/eventlayermap/types
+// Returns LayerEventType enum values that have at least one layer anywhere on the planet
+app.MapGet("/api/state/eventlayermap/types", (SimulationOrchestrator sim) =>
+{
+    var strat = sim.GetStratigraphicColumns();
+    if (strat == null) return Results.Ok(Array.Empty<string>());
+
+    var present = new HashSet<string>();
+    foreach (var col in strat)
+    {
+        if (col == null) continue;
+        foreach (var layer in col.Layers)
+        {
+            if (layer.EventType != LayerEventType.Normal)
+                present.Add(layer.EventType.ToString());
+        }
+    }
+    return Results.Ok(present.OrderBy(x => x));
+}).WithName("GetEventLayerTypes");
+
 app.Run();
+
+// Helper: yield strings as IAsyncEnumerable<string>
+static async IAsyncEnumerable<string> StringsToAsyncEnumerable(IEnumerable<string> items)
+{
+    foreach (var s in items)
+    {
+        yield return s;
+        await Task.Yield();
+    }
+}
 
 // ── Request DTOs ──────────────────────────────────────────────────────────────
 
