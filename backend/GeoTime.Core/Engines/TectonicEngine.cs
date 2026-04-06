@@ -318,7 +318,7 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         return 0;
     }
 
-    /// <summary>Recalculate plate centres from the current plate map.</summary>
+    /// <summary>Recalculate plate centers from the current plate map.</summary>
     private void UpdatePlateCenters(SimulationState state)
     {
         var gs = state.GridSize;

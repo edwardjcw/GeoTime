@@ -187,7 +187,7 @@ public class PlateAdvectionTests
         var engine = new TectonicEngine(bus, log, 42, 0.1);
         engine.Initialize(plates, [], new AtmosphericComposition { N2 = 0.78, O2 = 0.21, CO2 = 0.0004, H2O = 0.01 }, state);
 
-        // After initialisation every cell has stratigraphy
+        // After initialization every cell has stratigraphy
         Assert.True(engine.Stratigraphy.Size > 0, "Stratigraphy should be initialised");
 
         // After advection, stratigraphy should still cover most cells
