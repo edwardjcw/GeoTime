@@ -538,6 +538,19 @@ export class GlobeRenderer {
     return this.camera;
   }
 
+  /**
+   * Return the WebGL renderer name reported by the browser for the front-end GPU.
+   * Uses the WEBGL_debug_renderer_info extension when available; falls back to a generic label.
+   */
+  getWebGLRendererInfo(): string {
+    const gl = this.renderer.getContext();
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    if (ext) {
+      return gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) as string;
+    }
+    return 'WebGL (info unavailable)';
+  }
+
   /** Register a callback for first-person mode transitions. */
   onCameraChange(cb: (isFirstPerson: boolean) => void): void {
     this._cameraChangeCb = cb;

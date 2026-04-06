@@ -103,6 +103,7 @@ app.MapPost("/api/simulation/advance", async (AdvanceRequest req, SimulationOrch
     return Results.Ok(new
     {
         timeMa = sim.GetCurrentTime(),
+        tickCount = sim.TickCount,
         stats = new
         {
             tectonicMs  = stats.TectonicMs,

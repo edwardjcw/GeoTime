@@ -36,6 +36,9 @@ public sealed class SimulationOrchestrator : IDisposable
     /// <summary>Timing breakdown of the most recent completed tick.</summary>
     public SimulationTickStats LastTickStats { get; private set; } = new();
 
+    /// <summary>Total number of simulation ticks completed since planet generation.</summary>
+    public int TickCount { get; private set; }
+
     /// <summary>Prevents concurrent AdvanceSimulation calls from corrupting shared state.</summary>
     private readonly SemaphoreSlim _advanceLock = new(1, 1);
 
@@ -87,6 +90,7 @@ public sealed class SimulationOrchestrator : IDisposable
 
         EventLog.Clear();
         Snapshots.Clear();
+        TickCount = 0;
 
         _tectonic = new TectonicEngine(Bus, EventLog, seed, 0.1, _gpu);
         _tectonic.Initialize(result.Plates, result.Hotspots, result.Atmosphere, State);
@@ -149,6 +153,7 @@ public sealed class SimulationOrchestrator : IDisposable
         var logLengthBefore = EventLog.Length;
 
         Clock.T += deltaMa;
+        TickCount++;
 
         // Tectonic must run first (it updates boundaries, heights, plate map)
         onProgress?.Invoke("tectonic");
