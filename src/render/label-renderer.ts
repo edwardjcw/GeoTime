@@ -14,13 +14,15 @@ export class LabelRenderer {
   private readonly container: HTMLElement;
   private labels: FeatureLabel[] = [];
   private divPool: HTMLElement[] = [];
-  private _visible = true;
+  private _visible = false;
 
   /** Scratch vector reused per frame to avoid allocations. */
   private readonly _pos = new THREE.Vector3();
 
   constructor(container: HTMLElement) {
     this.container = container;
+    // Labels are off by default; the 'labels' layer toggle activates them.
+    this.container.style.display = 'none';
   }
 
   /** Replace the current label set. Creates/reuses DOM elements as needed. */

@@ -24,6 +24,7 @@ export interface TickStats {
 
 export interface AdvanceResult {
   timeMa: number;
+  tickCount?: number;
   stats?: TickStats;
 }
 

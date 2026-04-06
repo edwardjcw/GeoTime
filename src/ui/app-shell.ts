@@ -64,6 +64,7 @@ export class AppShell {
   // ── Inspect panel elements ──────────────────────────────────────────────
   private inspectPanel: HTMLElement;
   private inspectContent: HTMLElement;
+  private inspectValueEls: Map<string, HTMLSpanElement> = new Map();
 
   // ── Layer legend elements ───────────────────────────────────────────────
   private legendPanel: HTMLElement;
@@ -503,6 +504,9 @@ export class AppShell {
       padding: '2px 6px',
       borderRadius: '3px',
       fontFamily: 'monospace',
+      // Dedicated slot — margin-left: auto pushes this and everything after to the right.
+      marginLeft: 'auto',
+      flexShrink: '0',
     });
     this.logBtn.addEventListener('click', () => this.toggleLogPanel());
     this.logBtn.addEventListener('mouseenter', () => { this.logBtn.style.background = 'rgba(255,255,255,0.1)'; });
@@ -532,6 +536,7 @@ export class AppShell {
 
     const logTitle = document.createElement('div');
     logTitle.textContent = '📊 Simulation Log';
+    logTitle.dataset.logTitle = '1';
     Object.assign(logTitle.style, { fontWeight: 'bold', marginBottom: '4px', opacity: '0.85', fontSize: '12px' });
     this.logPanel.appendChild(logTitle);
 
@@ -568,6 +573,7 @@ export class AppShell {
       padding: '2px 6px',
       borderRadius: '3px',
       fontFamily: 'monospace',
+      flexShrink: '0',
     });
     this._llmBtn.addEventListener('click', () => this._toggleLlmPanel());
     this._llmBtn.addEventListener('mouseenter', () => { this._llmBtn.style.background = 'rgba(255,255,255,0.1)'; });
@@ -766,6 +772,8 @@ export class AppShell {
     this._eventLayerToggleBtn.addEventListener('click', () => {
       this._eventLayerActive = !this._eventLayerActive;
       this._eventLayerToggleBtn.style.background = this._eventLayerActive ? '#a62' : 'rgba(255,255,255,0.08)';
+      // Show the dropdown only when event layers is active and there are types available.
+      this._eventLayerSelect.style.display = this._eventLayerActive && this._eventLayerSelect.options.length > 1 ? 'block' : 'none';
       const type = this._eventLayerActive ? (this._eventLayerSelect.value || null) : null;
       this._eventLayerChangeCb?.(type);
     });
@@ -1006,16 +1014,19 @@ export class AppShell {
 
   /**
    * Update the compute-backend indicator in the toolbar.
-   * Shows a GPU or CPU chip icon and the device name.
-   * @param isGpu - true if an actual GPU accelerator is active
+   * Shows both backend (simulation) and frontend (WebGL rendering) GPU information.
+   * @param isGpu - true if an actual GPU accelerator is active for simulation
    * @param deviceName - human-readable device label from the backend
-   * @param memoryMb - on-device memory in MB (0 = unknown); shown in tooltip to confirm dedicated GPU
+   * @param memoryMb - on-device memory in MB (0 = unknown)
+   * @param frontendGpu - WebGL renderer string from the browser (optional)
    */
-  setComputeMode(isGpu: boolean, deviceName: string, memoryMb = 0): void {
+  setComputeMode(isGpu: boolean, deviceName: string, memoryMb = 0, frontendGpu?: string): void {
     const icon = isGpu ? '🖥 GPU' : '⚙️ CPU';
     this.computeEl.textContent = `${icon}`;
     const memLabel = isGpu && memoryMb > 0 ? ` · ${memoryMb >= 1024 ? (memoryMb / 1024).toFixed(1) + ' GB' : memoryMb + ' MB'}` : '';
-    this.computeEl.title = `Backend compute: ${deviceName}${memLabel}`;
+    const backendLabel = `Backend: ${deviceName}${memLabel}`;
+    const frontendLabel = frontendGpu ? `Frontend: ${frontendGpu}` : '';
+    this.computeEl.title = frontendLabel ? `${backendLabel}\n${frontendLabel}` : backendLabel;
     this.computeEl.style.color = isGpu ? '#7ef' : '#adf';
   }
 
@@ -1169,7 +1180,6 @@ export class AppShell {
 
   /** Show the inspect panel with location details. */
   showInspectPanel(info: InspectInfo): void {
-    this.inspectContent.innerHTML = '';
     const lines: [string, string][] = [
       ['Lat/Lon', `${info.lat.toFixed(2)}°, ${info.lon.toFixed(2)}°`],
       ['Elevation', `${info.elevation.toFixed(0)} m`],
@@ -1186,24 +1196,39 @@ export class AppShell {
       ['Organic C', `${info.organicCarbon.toFixed(2)} kg C/m²`],
       ['Reef', info.reefPresent ? '✅ present' : '—'],
     ];
-    for (const [label, value] of lines) {
-      const row = el('div', { display: 'flex', justifyContent: 'space-between', gap: '8px' });
-      const lbl = document.createElement('span');
-      lbl.textContent = label;
-      lbl.style.opacity = '0.6';
-      lbl.style.flexShrink = '0';
-      const val = document.createElement('span');
-      val.textContent = value;
-      val.style.textAlign = 'right';
-      row.append(lbl, val);
-      this.inspectContent.appendChild(row);
+
+    if (this.inspectValueEls.size === 0) {
+      // First call: build the rows and cache value elements.
+      this.inspectContent.innerHTML = '';
+      for (const [label, value] of lines) {
+        const row = el('div', { display: 'flex', justifyContent: 'space-between', gap: '8px' });
+        const lbl = document.createElement('span');
+        lbl.textContent = label;
+        lbl.style.opacity = '0.6';
+        lbl.style.flexShrink = '0';
+        const val = document.createElement('span');
+        val.textContent = value;
+        val.style.textAlign = 'right';
+        row.append(lbl, val);
+        this.inspectContent.appendChild(row);
+        this.inspectValueEls.set(label, val);
+      }
+    } else {
+      // Subsequent calls: update values in-place so the panel doesn't reflow.
+      for (const [label, value] of lines) {
+        const el = this.inspectValueEls.get(label);
+        if (el) el.textContent = value;
+      }
     }
+
     this.inspectPanel.style.display = 'flex';
   }
 
   /** Hide the inspect panel. */
   hideInspectPanel(): void {
     this.inspectPanel.style.display = 'none';
+    // Reset cached value elements so the next showInspectPanel call rebuilds them fresh.
+    this.inspectValueEls.clear();
   }
 
   // ── Description Modal API (Phase D5) ──────────────────────────────────
@@ -1395,7 +1420,8 @@ export class AppShell {
       opt.textContent = t;
       this._eventLayerSelect.appendChild(opt);
     }
-    this._eventLayerSelect.style.display = types.length > 0 ? 'block' : 'none';
+    // Dropdown is only visible when the event layers toggle is active.
+    this._eventLayerSelect.style.display = (this._eventLayerActive && types.length > 0) ? 'block' : 'none';
   }
 
   /** Set event markers on the geological timeline. */
@@ -1536,7 +1562,13 @@ export class AppShell {
   updateLogPanel(
     stats: { tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number } | null,
     events: Array<{ timeMa: number; type: string; description: string }>,
+    tickCount?: number,
   ): void {
+    // Tick count section
+    const logTitle = this.logPanel.querySelector('[data-log-title]') as HTMLElement | null;
+    if (logTitle) {
+      logTitle.textContent = tickCount !== undefined ? `📊 Simulation Log (${tickCount} tick${tickCount === 1 ? '' : 's'})` : '📊 Simulation Log';
+    }
     // Timing section
     this.logTimingEl.innerHTML = '';
     if (stats && stats.totalMs > 0) {

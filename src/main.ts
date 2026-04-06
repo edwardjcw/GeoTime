@@ -47,6 +47,7 @@ async function doGeneratePlanet(seed: number): Promise<void> {
   try {
     const result = await api.generatePlanet(seed);
     simTimeMa = result.timeMa;
+    totalTickCount = 0;
 
     // Fetch initial display data from backend
     const [heightData, plateData, tempData, precipData] = await Promise.all([
@@ -83,7 +84,7 @@ async function doGeneratePlanet(seed: number): Promise<void> {
 
     // Fetch and display the compute backend indicator (GPU vs CPU)
     api.getComputeInfo().then((info) => {
-      shell.setComputeMode(info.isGpu, info.deviceName, info.memoryMb ?? 0);
+      shell.setComputeMode(info.isGpu, info.deviceName, info.memoryMb ?? 0, renderer.getWebGLRendererInfo());
     }).catch(() => {/* backend may not be ready yet – ignore */});
 
     // Close any open cross-section panel on new planet
@@ -520,38 +521,29 @@ async function fetchLayerRgba(layer: string): Promise<Uint8Array | null> {
     }
   } else if (layer === 'topo') {
     const data = await api.getHeightMap();
-    // Heights are in real metres. Because isostatic equilibrium clusters ocean
-    // cells near −3200 m and land cells near +1863 m, a global rescale smears
-    // everything into just 2–3 colour bands.  Instead, stretch each domain
-    // across its own actual [min, max] range to a target interval that sits
-    // fully within the topoColor palette for that domain:
-    //   ocean: [minOcean, maxOcean] → [−7000, −200]
-    //           deepest → dark navy through gradient → coastal light blue
-    //   land:  [minLand, maxLand]   → [0, 5500]
-    //           lowest land → lowland green → highland → mountains → white peaks
-    let minOcean = 0, maxOcean = 0;
-    let minLand  = 0, maxLand  = 0;
-    let hasOcean = false, hasLand = false;
-    for (const h of data) {
-      if (h < 0) {
-        if (!hasOcean || h < minOcean) minOcean = h;
-        if (!hasOcean || h > maxOcean) maxOcean = h;
-        hasOcean = true;
-      } else {
-        if (!hasLand || h < minLand) minLand = h;
-        if (!hasLand || h > maxLand) maxLand = h;
-        hasLand = true;
-      }
-    }
-    const oceanRange = (maxOcean - minOcean) || 1;
-    const landRange  = (maxLand  - minLand)  || 1;
-    const OCEAN_LO = -7000, OCEAN_HI = -200;
-    const LAND_LO  =     0, LAND_HI  = 5500;
+    // Heights are in real metres. Isostatic equilibrium sets ocean cells near
+    // −3200 m and continental land near +1863 m (±500 m noise).  Dynamic
+    // per-run min/max normalisation compresses all land into 1–2 colour bands
+    // (and can make everything look white when the range is small).
+    // Instead use fixed physical reference points so the colour palette is
+    // always physically meaningful regardless of the current height distribution:
+    //   ocean: actual height mapped against fixed ocean reference [−6000, 0]
+    //   land:  actual height mapped against fixed land reference [0, 4000]
+    //           0 m → lowland green, 1500 m → highland yellow,
+    //           3000 m → mountains, > 4000 m → upper peaks (never all-white).
+    const OCEAN_ELEVATION_MIN = -6000, OCEAN_ELEVATION_MAX = -100;
+    const LAND_ELEVATION_MAX  = 4000;
     for (let i = 0; i < cellCount; i++) {
       const h = data[i];
-      const scaled = h < 0
-        ? (h - minOcean) / oceanRange * (OCEAN_HI - OCEAN_LO) + OCEAN_LO
-        : (h - minLand)  / landRange  * (LAND_HI  - LAND_LO)  + LAND_LO;
+      let scaled: number;
+      if (h < 0) {
+        // Clamp to ocean reference range then map to topoColor ocean palette [−7000, −200].
+        const t = Math.max(0, Math.min(1, (h - OCEAN_ELEVATION_MIN) / (OCEAN_ELEVATION_MAX - OCEAN_ELEVATION_MIN)));
+        scaled = t * (-200 - (-7000)) + (-7000); // maps to [−7000, −200]
+      } else {
+        // Clamp to land reference range then map to topoColor land palette [0, 4000].
+        scaled = Math.min(h, LAND_ELEVATION_MAX);
+      }
       const [r, g, b] = topoColor(scaled);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 200;
     }
@@ -911,6 +903,9 @@ let selectedCellLon   = 0;
 /** Last tick timing stats for the log panel. */
 let lastTickStats: api.TickStats | null = null;
 
+/** Total ticks completed (from backend advance response). */
+let totalTickCount = 0;
+
 /** Re-fetch and display the pinned cell's inspection data. */
 function refreshInspectCell(): void {
   if (selectedCellIndex < 0) return;
@@ -1035,10 +1030,10 @@ function updateAgentStatusesFromStats(stats: api.TickStats | null): void {
 function refreshLogPanel(): void {
   api.getEvents(20)
     .then((events) => {
-      shell.updateLogPanel(lastTickStats, events);
+      shell.updateLogPanel(lastTickStats, events, totalTickCount);
     })
     .catch(() => {
-      shell.updateLogPanel(lastTickStats, []);
+      shell.updateLogPanel(lastTickStats, [], totalTickCount);
     });
 }
 
@@ -1058,7 +1053,7 @@ const simSocket = api.createSimulationSocket({
   onConnected: (event) => {
     // When the hub sends compute info on connection, update the toolbar indicator.
     if (event.computeMode !== undefined && event.computeDevice !== undefined) {
-      shell.setComputeMode(event.computeMode === 'GPU', event.computeDevice, event.computeMemoryMb ?? 0);
+      shell.setComputeMode(event.computeMode === 'GPU', event.computeDevice, event.computeMemoryMb ?? 0, renderer.getWebGLRendererInfo());
     }
   },
   onProgress: (event) => {
@@ -1090,93 +1085,111 @@ const simSocket = api.createSimulationSocket({
 // Connect with a short retry delay — the backend may not be ready immediately.
 setTimeout(() => simSocket.connect(), 500);
 
+// ── Simulation tick loop (runs via setInterval, independent of rendering) ───
+// This ensures the simulation advances even when the browser tab is hidden,
+// since requestAnimationFrame is paused by browsers for hidden tabs.
+
+/** Wall-clock timestamp of the most recently dispatched simulation tick. */
+let lastSimTickTimestampMs = performance.now();
+
+function simTick(): void {
+  if (paused || pendingSimRequest) return;
+
+  const nowMs = performance.now();
+  const dtMs = nowMs - lastSimTickTimestampMs;
+  lastSimTickTimestampMs = nowMs;
+
+  simAccum += dtMs;
+  if (simAccum < SIM_UPDATE_INTERVAL) return;
+
+  const deltaMa = (simAccum / 1000) * simRate;
+  simAccum = 0;
+  if (deltaMa <= 0) return;
+
+  pendingSimRequest = true;
+  simRequestStartMs = performance.now();
+
+  shell.setProgressText('⏳ Advancing…');
+  // Mark all agents as running immediately so the panel shows activity during the request.
+  for (const key of Object.keys(agentStatuses)) {
+    agentStatuses[key] = 'running';
+  }
+  shell.updateAgentStatuses(agentStatuses);
+  simRequestController = new AbortController();
+  api.advanceSimulation(deltaMa, simRequestController.signal)
+    .then(async (result) => {
+      simTimeMa = result.timeMa;
+      shell.setSimTime(simTimeMa);
+      shell.setTimelineCursor(4500 + simTimeMa);
+      shell.setProgressText('');
+
+      // Update timing stats and tick count.
+      if (result.stats) {
+        lastTickStats = result.stats;
+      }
+      if (result.tickCount !== undefined) {
+        totalTickCount = result.tickCount;
+      }
+      // Use stats from response to update the agent panel with last-tick timing.
+      updateAgentStatusesFromStats(lastTickStats);
+
+      // Refresh the log panel if it's open.
+      if (shell.isLogPanelOpen) {
+        refreshLogPanel();
+      }
+
+      // Fetch updated height+temperature+precipitation in a single request.
+      const bundle = await api.getStateBundle(GRID_SIZE * GRID_SIZE);
+      const heightMap = bundle.heightMap;
+      renderer.updateHeightMap(heightMap, GRID_SIZE);
+
+      // Auto-refresh the cell info panel if a cell is pinned.
+      refreshInspectCell();
+
+      // Keep the biome base texture in sync for the default view.
+      if (activeDataLayers.size === 0) {
+        renderer.updateBiomeBaseMap(
+          bundle.temperatureMap,
+          bundle.precipitationMap,
+          heightMap,
+          GRID_SIZE,
+        );
+      }
+
+      // Re-render any active data overlays so they reflect the new state.
+      // This keeps the visual overlay in sync with the updated simulation.
+      if (activeDataLayers.size > 0) {
+        // Refresh the most-recently-activated overlay (the one currently visible).
+        const layers = [...activeDataLayers];
+        const layerToRefresh = layers[layers.length - 1];
+        if (layerToRefresh !== undefined) {
+          const rgba = await fetchLayerRgba(layerToRefresh);
+          if (rgba !== null) {
+            renderer.updateColorMap(rgba, GRID_SIZE);
+          }
+        }
+      }
+    })
+    .catch((err: unknown) => {
+      if (err instanceof Error && err.name === 'AbortError') return; // user-initiated or timeout-based abort
+      console.error('Simulation advance failed:', err);
+      shell.setProgressText('');
+      resetAgentStatuses();
+    })
+    .finally(() => {
+      pendingSimRequest = false;
+      simRequestController = null;
+    });
+}
+
+// Run simulation tick every SIM_UPDATE_INTERVAL ms, regardless of tab visibility.
+setInterval(simTick, SIM_UPDATE_INTERVAL);
+
 function loop(now: number): void {
   requestAnimationFrame(loop);
 
   const dtMs = now - lastTime;
   lastTime = now;
-
-  // Accumulate time for backend simulation calls
-  if (!paused) {
-    simAccum += dtMs;
-    const deltaMa = (simAccum / 1000) * simRate;
-
-    // Send simulation advance to backend at throttled intervals
-    if (simAccum >= SIM_UPDATE_INTERVAL && !pendingSimRequest && deltaMa > 0) {
-      pendingSimRequest = true;
-      simRequestStartMs = performance.now();
-      simAccum = 0;
-
-      shell.setProgressText('⏳ Advancing…');
-      // Mark all agents as running immediately so the panel shows activity during the request.
-      for (const key of Object.keys(agentStatuses)) {
-        agentStatuses[key] = 'running';
-      }
-      shell.updateAgentStatuses(agentStatuses);
-      simRequestController = new AbortController();
-      api.advanceSimulation(deltaMa, simRequestController.signal)
-        .then(async (result) => {
-          simTimeMa = result.timeMa;
-          shell.setSimTime(simTimeMa);
-          shell.setTimelineCursor(4500 + simTimeMa);
-          shell.setProgressText('');
-
-          // Update timing stats and mark all agents done.
-          if (result.stats) {
-            lastTickStats = result.stats;
-          }
-          // Use stats from response to update the agent panel with last-tick timing.
-          updateAgentStatusesFromStats(lastTickStats);
-
-          // Refresh the log panel if it's open.
-          if (shell.isLogPanelOpen) {
-            refreshLogPanel();
-          }
-
-          // Fetch updated height+temperature+precipitation in a single request.
-          const bundle = await api.getStateBundle(GRID_SIZE * GRID_SIZE);
-          const heightMap = bundle.heightMap;
-          renderer.updateHeightMap(heightMap, GRID_SIZE);
-
-          // Auto-refresh the cell info panel if a cell is pinned.
-          refreshInspectCell();
-
-          // Keep the biome base texture in sync for the default view.
-          if (activeDataLayers.size === 0) {
-            renderer.updateBiomeBaseMap(
-              bundle.temperatureMap,
-              bundle.precipitationMap,
-              heightMap,
-              GRID_SIZE,
-            );
-          }
-
-          // Re-render any active data overlays so they reflect the new state.
-          // This keeps the visual overlay in sync with the updated simulation.
-          if (activeDataLayers.size > 0) {
-            // Refresh the most-recently-activated overlay (the one currently visible).
-            const layers = [...activeDataLayers];
-            const layerToRefresh = layers[layers.length - 1];
-            if (layerToRefresh !== undefined) {
-              const rgba = await fetchLayerRgba(layerToRefresh);
-              if (rgba !== null) {
-                renderer.updateColorMap(rgba, GRID_SIZE);
-              }
-            }
-          }
-        })
-        .catch((err: unknown) => {
-          if (err instanceof Error && err.name === 'AbortError') return; // user-initiated or timeout-based abort
-          console.error('Simulation advance failed:', err);
-          shell.setProgressText('');
-          resetAgentStatuses();
-        })
-        .finally(() => {
-          pendingSimRequest = false;
-          simRequestController = null;
-        });
-    }
-  }
 
   // Freeze detection: warn when a sim request is taking too long
   if (pendingSimRequest) {
