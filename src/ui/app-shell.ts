@@ -132,6 +132,18 @@ export class AppShell {
   private windToggleCb: ((active: boolean) => void) | null = null;
   private abortRequestCb: (() => void) | null = null;
 
+  // ── Description modal (Phase D5) ────────────────────────────────────────
+  private _descModal: HTMLElement = document.createElement('div');
+  private _descModalVisible = false;
+  private _descOpenCb: (() => void) | null = null;
+
+  // ── Event layer controls (Phase D6) ─────────────────────────────────────
+  private _eventLayerGroup: HTMLElement = document.createElement('div');
+  private _eventLayerSelect: HTMLSelectElement = document.createElement('select');
+  private _eventLayerToggleBtn: HTMLButtonElement = document.createElement('button');
+  private _eventLayerActive = false;
+  private _eventLayerChangeCb: ((eventType: string | null) => void) | null = null;
+
   private sidebarOpen = true;
   private labelsVisible = true;
   private crossSectionOpen = false;
@@ -199,6 +211,19 @@ export class AppShell {
     const inspectTitle = document.createElement('span');
     inspectTitle.textContent = '📍 Cell Info';
     inspectTitle.style.fontWeight = 'bold';
+    const inspectDescBtn = document.createElement('button');
+    inspectDescBtn.textContent = 'ℹ';
+    inspectDescBtn.title = 'Generate geological description';
+    Object.assign(inspectDescBtn.style, {
+      background: 'none',
+      border: 'none',
+      color: '#8af',
+      cursor: 'pointer',
+      fontSize: '14px',
+      padding: '0 4px',
+      marginLeft: 'auto',
+    });
+    inspectDescBtn.addEventListener('click', () => this._descOpenCb?.());
     const inspectCloseBtn = document.createElement('button');
     inspectCloseBtn.textContent = '✕';
     Object.assign(inspectCloseBtn.style, {
@@ -210,7 +235,7 @@ export class AppShell {
       padding: '0 2px',
     });
     inspectCloseBtn.addEventListener('click', () => this.hideInspectPanel());
-    inspectHeader.append(inspectTitle, inspectCloseBtn);
+    inspectHeader.append(inspectTitle, inspectDescBtn, inspectCloseBtn);
     this.inspectPanel.appendChild(inspectHeader);
 
     this.inspectContent = el('div', {
@@ -220,6 +245,30 @@ export class AppShell {
     });
     this.inspectPanel.appendChild(this.inspectContent);
     this.root.appendChild(this.inspectPanel);
+
+    // ── Description modal (Phase D5) ─────────────────────────────────────
+    Object.assign(this._descModal.style, {
+      position: 'absolute',
+      top: '48px',
+      left: '260px',
+      width: '380px',
+      maxHeight: '70vh',
+      overflowY: 'auto',
+      background: 'rgba(8,10,18,0.96)',
+      border: '1px solid rgba(100,160,255,0.25)',
+      borderRadius: '8px',
+      padding: '12px 16px',
+      display: 'none',
+      flexDirection: 'column',
+      gap: '8px',
+      zIndex: '30',
+      color: '#ddd',
+      fontSize: '12px',
+      fontFamily: 'sans-serif',
+      pointerEvents: 'auto',
+      lineHeight: '1.55',
+    });
+    this.root.appendChild(this._descModal);
 
     // ── Layer legend panel (floating, lower-left, hidden by default) ──────
     this.legendPanel = el('div', {
@@ -709,6 +758,36 @@ export class AppShell {
       this.layerToggles.set(name, btn);
       layerGroup.appendChild(btn);
     }
+
+    // ── Event Layers toggle + type dropdown (Phase D6) ───────────────────
+    styleBtn(this._eventLayerToggleBtn);
+    this._eventLayerToggleBtn.textContent = 'event layers';
+    this._eventLayerToggleBtn.style.textAlign = 'left';
+    this._eventLayerToggleBtn.addEventListener('click', () => {
+      this._eventLayerActive = !this._eventLayerActive;
+      this._eventLayerToggleBtn.style.background = this._eventLayerActive ? '#a62' : 'rgba(255,255,255,0.08)';
+      const type = this._eventLayerActive ? (this._eventLayerSelect.value || null) : null;
+      this._eventLayerChangeCb?.(type);
+    });
+    layerGroup.appendChild(this._eventLayerToggleBtn);
+
+    Object.assign(this._eventLayerSelect.style, {
+      width: '100%',
+      background: 'rgba(255,255,255,0.06)',
+      color: '#ddd',
+      border: '1px solid rgba(255,255,255,0.15)',
+      borderRadius: '4px',
+      padding: '4px 6px',
+      fontSize: '11px',
+      display: 'none',
+    });
+    this._eventLayerSelect.addEventListener('change', () => {
+      if (this._eventLayerActive) {
+        this._eventLayerChangeCb?.(this._eventLayerSelect.value || null);
+      }
+    });
+    layerGroup.appendChild(this._eventLayerSelect);
+
     this.sidebar.appendChild(layerGroup);
 
     this.root.appendChild(this.sidebar);
@@ -1127,7 +1206,197 @@ export class AppShell {
     this.inspectPanel.style.display = 'none';
   }
 
-  // ── Timeline API ───────────────────────────────────────────────────────
+  // ── Description Modal API (Phase D5) ──────────────────────────────────
+
+  /** Register callback for the ℹ description button in the inspect panel. */
+  onDescribeOpen(cb: () => void): void {
+    this._descOpenCb = cb;
+  }
+
+  /** Show the description modal with a loading spinner. */
+  showDescriptionModal(): void {
+    this._descModal.innerHTML = '';
+
+    // Header
+    const header = document.createElement('div');
+    Object.assign(header.style, { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' });
+    const titleEl = document.createElement('span');
+    titleEl.textContent = '🔬 Geological Description';
+    Object.assign(titleEl.style, { fontWeight: 'bold', fontSize: '13px', color: '#8af' });
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    Object.assign(closeBtn.style, { background: 'none', border: 'none', color: '#aaa', cursor: 'pointer', fontSize: '13px' });
+    closeBtn.addEventListener('click', () => this.hideDescriptionModal());
+    header.append(titleEl, closeBtn);
+    this._descModal.appendChild(header);
+
+    // Spinner
+    const spinner = document.createElement('div');
+    spinner.textContent = '⏳ Generating description…';
+    spinner.style.opacity = '0.6';
+    this._descModal.appendChild(spinner);
+
+    this._descModal.style.display = 'flex';
+    this._descModalVisible = true;
+
+    // Close on outside click
+    const onOutside = (e: MouseEvent) => {
+      if (!this._descModal.contains(e.target as Node)) {
+        this.hideDescriptionModal();
+        document.removeEventListener('click', onOutside);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', onOutside), 100);
+  }
+
+  /** Populate the description modal with a full DescriptionResponse. */
+  populateDescriptionModal(resp: {
+    title: string;
+    subtitle: string;
+    paragraphs: string[];
+    stats: Array<{ label: string; value: string }>;
+    stratigraphicSummary: Array<{ age: string; thickness: string; rockType: string; eventNote: string }>;
+    historyTimeline: Array<{ simTick: number; event: string; name: string }>;
+    providerUsed: string;
+  }): void {
+    if (!this._descModalVisible) return;
+    this._descModal.innerHTML = '';
+
+    // Header
+    const header = document.createElement('div');
+    Object.assign(header.style, { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' });
+    const titleEl = document.createElement('span');
+    titleEl.textContent = '🔬 Geological Description';
+    Object.assign(titleEl.style, { fontWeight: 'bold', fontSize: '13px', color: '#8af' });
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    Object.assign(closeBtn.style, { background: 'none', border: 'none', color: '#aaa', cursor: 'pointer', fontSize: '13px' });
+    closeBtn.addEventListener('click', () => this.hideDescriptionModal());
+    header.append(titleEl, closeBtn);
+    this._descModal.appendChild(header);
+
+    // Feature title + subtitle
+    const featureTitle = document.createElement('div');
+    featureTitle.textContent = resp.title;
+    Object.assign(featureTitle.style, { fontSize: '15px', fontWeight: 'bold', color: '#fff', marginBottom: '2px' });
+    this._descModal.appendChild(featureTitle);
+    if (resp.subtitle) {
+      const sub = document.createElement('div');
+      sub.textContent = resp.subtitle;
+      Object.assign(sub.style, { fontSize: '11px', opacity: '0.55', marginBottom: '8px' });
+      this._descModal.appendChild(sub);
+    }
+
+    // Paragraphs
+    for (const para of resp.paragraphs) {
+      const p = document.createElement('p');
+      p.textContent = para;
+      Object.assign(p.style, { margin: '0 0 6px 0', lineHeight: '1.6' });
+      this._descModal.appendChild(p);
+    }
+
+    // Stats table
+    if (resp.stats.length > 0) {
+      const sep = document.createElement('hr');
+      Object.assign(sep.style, { border: 'none', borderTop: '1px solid rgba(255,255,255,0.1)', margin: '8px 0' });
+      this._descModal.appendChild(sep);
+      const table = document.createElement('table');
+      Object.assign(table.style, { width: '100%', borderCollapse: 'collapse', fontSize: '11px' });
+      for (const stat of resp.stats) {
+        const tr = document.createElement('tr');
+        const tdLabel = document.createElement('td');
+        tdLabel.textContent = stat.label;
+        Object.assign(tdLabel.style, { opacity: '0.55', paddingRight: '8px', paddingBottom: '2px' });
+        const tdVal = document.createElement('td');
+        tdVal.textContent = stat.value;
+        tdVal.style.fontFamily = 'monospace';
+        tr.append(tdLabel, tdVal);
+        table.appendChild(tr);
+      }
+      this._descModal.appendChild(table);
+    }
+
+    // Stratigraphic summary
+    if (resp.stratigraphicSummary.length > 0) {
+      const stratTitle = document.createElement('div');
+      stratTitle.textContent = 'Stratigraphic Column';
+      Object.assign(stratTitle.style, { fontWeight: 'bold', fontSize: '11px', marginTop: '8px', opacity: '0.7' });
+      this._descModal.appendChild(stratTitle);
+      const strip = document.createElement('div');
+      Object.assign(strip.style, { display: 'flex', flexDirection: 'column', gap: '2px', margin: '4px 0' });
+      for (const row of resp.stratigraphicSummary) {
+        const rowEl = document.createElement('div');
+        Object.assign(rowEl.style, { display: 'flex', gap: '6px', fontSize: '10px', fontFamily: 'monospace' });
+        rowEl.textContent = `${row.age}  ${row.thickness}  ${row.rockType}${row.eventNote ? '  ⚡' + row.eventNote : ''}`;
+        if (row.eventNote) rowEl.style.color = '#fa8';
+        strip.appendChild(rowEl);
+      }
+      this._descModal.appendChild(strip);
+    }
+
+    // History timeline
+    if (resp.historyTimeline.length > 0) {
+      const histTitle = document.createElement('div');
+      histTitle.textContent = 'Feature History';
+      Object.assign(histTitle.style, { fontWeight: 'bold', fontSize: '11px', marginTop: '8px', opacity: '0.7' });
+      this._descModal.appendChild(histTitle);
+      const ol = document.createElement('ol');
+      Object.assign(ol.style, { margin: '4px 0', paddingLeft: '16px', fontSize: '10px', fontFamily: 'monospace' });
+      for (const entry of resp.historyTimeline) {
+        const li = document.createElement('li');
+        li.textContent = `Tick ${entry.simTick}: ${entry.event} → ${entry.name}`;
+        ol.appendChild(li);
+      }
+      this._descModal.appendChild(ol);
+    }
+
+    // Provider badge
+    const badge = document.createElement('div');
+    badge.textContent = `Generated by: ${resp.providerUsed}`;
+    Object.assign(badge.style, { fontSize: '10px', opacity: '0.35', marginTop: '8px', textAlign: 'right' });
+    this._descModal.appendChild(badge);
+  }
+
+  /** Append a token to the last paragraph in the description modal (for streaming). */
+  appendDescriptionToken(token: string): void {
+    if (!this._descModalVisible) return;
+    let last = this._descModal.querySelector('p:last-of-type') as HTMLElement | null;
+    if (!last) {
+      last = document.createElement('p');
+      Object.assign(last.style, { margin: '0 0 6px 0', lineHeight: '1.6' });
+      this._descModal.appendChild(last);
+    }
+    last.textContent = (last.textContent ?? '') + token;
+  }
+
+  /** Hide (but don't destroy) the description modal. */
+  hideDescriptionModal(): void {
+    this._descModal.style.display = 'none';
+    this._descModalVisible = false;
+  }
+
+  // ── Event Layer API (Phase D6) ─────────────────────────────────────────
+
+  /** Register callback for event layer type changes. `null` = layer deactivated. */
+  onEventLayerChange(cb: (eventType: string | null) => void): void {
+    this._eventLayerChangeCb = cb;
+  }
+
+  /** Populate the event layer type dropdown with available types. */
+  setEventLayerTypes(types: string[]): void {
+    this._eventLayerSelect.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '— select type —';
+    this._eventLayerSelect.appendChild(placeholder);
+    for (const t of types) {
+      const opt = document.createElement('option');
+      opt.value = t;
+      opt.textContent = t;
+      this._eventLayerSelect.appendChild(opt);
+    }
+    this._eventLayerSelect.style.display = types.length > 0 ? 'block' : 'none';
+  }
 
   /** Set event markers on the geological timeline. */
   setTimelineEvents(events: Array<{ timeMa: number; type: string; description: string }>): void {
@@ -1539,6 +1808,8 @@ export class AppShell {
     this.abortRequestCb = null;
     this._llmSettingsChangedCb = null;
     this._llmSetupCb = null;
+    this._descOpenCb = null;
+    this._eventLayerChangeCb = null;
   }
 
   // ── Sidebar toggle ─────────────────────────────────────────────────────
