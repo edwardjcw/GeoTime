@@ -12,6 +12,14 @@ namespace GeoTime.Core.Engines;
 public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, double minTickInterval = 0.1, GpuComputeService? gpu = null)
 {
     private const double ISOSTATIC_RATIO = 2.7 / 3.3;
+    private const double DEG2RAD = Math.PI / 180.0;
+    private const double TWO_PI = 2 * Math.PI;
+
+    /// <summary>Default deep-ocean floor height for rift gap fill (metres).</summary>
+    private const float GAP_FLOOR_HEIGHT = -4000f;
+
+    /// <summary>Thin oceanic crust thickness for newly created rift cells (km).</summary>
+    private const float GAP_CRUST_KM = 7f;
 
     public StratigraphyStack Stratigraphy { get; } = new();
     private readonly BoundaryClassifier _classifier = new();
@@ -50,6 +58,13 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         var cc = _state.CellCount;
         var prevHeight = new float[cc];
         Array.Copy(_state.HeightMap, prevHeight, cc);
+
+        // ── Plate advection: apply once per Tick with the full deltaMa so that
+        //    rotation angles are large enough to produce meaningful grid-cell
+        //    movement.  Sub-tick boundary processes then operate on the updated
+        //    plate configuration.
+        AdvectPlates(_state, deltaMa, timeMa);
+        UpdatePlateCenters(_state);
 
         while (_accumulator >= minTickInterval)
         {
@@ -94,6 +109,254 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         var (co2, _) = VolcanismEngine.TotalDegassing(eruptions);
         _atmosphere.CO2 += co2 * 1e-6;
         return eruptions;
+    }
+
+    // ── Plate advection ─────────────────────────────────────────────────────────
+
+    private static double RowToLat(int row, int gs) => Math.PI / 2.0 - (double)row / gs * Math.PI;
+    private static double ColToLon(int col, int gs) => (double)col / gs * TWO_PI - Math.PI;
+
+    /// <summary>
+    /// Advect all plate cells using Rodrigues' rotation formula.
+    /// Each cell is rotated around its plate's Euler pole by angle = Rate * DEG2RAD * deltaMa.
+    /// Collisions (multiple sources → one target) thicken crust and build mountains.
+    /// Gaps (no source → target) are filled with fresh oceanic crust (mid-ocean ridge material).
+    /// </summary>
+    internal void AdvectPlates(SimulationState state, double deltaMa, double timeMa)
+    {
+        var gs = state.GridSize;
+        var cc = state.CellCount;
+
+        // Precompute per-plate rotation parameters (Euler pole unit vector + angle).
+        var numPlates = _plates.Count;
+        var kx = new double[numPlates];
+        var ky = new double[numPlates];
+        var kz = new double[numPlates];
+        var cosTheta = new double[numPlates];
+        var sinTheta = new double[numPlates];
+
+        for (var p = 0; p < numPlates; p++)
+        {
+            var av = _plates[p].AngularVelocity;
+            var poleLat = av.Lat * DEG2RAD;
+            var poleLon = av.Lon * DEG2RAD;
+            var cosPoleLat = Math.Cos(poleLat);
+            kx[p] = cosPoleLat * Math.Cos(poleLon);
+            ky[p] = cosPoleLat * Math.Sin(poleLon);
+            kz[p] = Math.Sin(poleLat);
+            var theta = av.Rate * DEG2RAD * deltaMa;
+            cosTheta[p] = Math.Cos(theta);
+            sinTheta[p] = Math.Sin(theta);
+        }
+
+        // Allocate destination buffers.
+        var newHeight    = new float[cc];
+        var newCrust     = new float[cc];
+        var newRockType  = new byte[cc];
+        var newRockAge   = new float[cc];
+        var newPlateMap  = new ushort[cc];
+        var hitCount     = new int[cc]; // number of source cells that landed here
+        // Track source → destination mapping for stratigraphy remapping.
+        var stratigraphyMapping = new int[cc]; // sourceIdx → destIdx
+
+        // Sentinel: mark all destinations as empty.
+        const float EMPTY = float.NegativeInfinity;
+        Array.Fill(newHeight, EMPTY);
+
+        // ── Scatter pass: rotate each cell to its destination ────────────────
+        for (var i = 0; i < cc; i++)
+        {
+            var row = i / gs;
+            var col = i % gs;
+            var lat = RowToLat(row, gs);
+            var lon = ColToLon(col, gs);
+
+            int plateIdx = state.PlateMap[i];
+
+            // Cell position on unit sphere.
+            var cosLat = Math.Cos(lat);
+            var sinLat = Math.Sin(lat);
+            var cosLon = Math.Cos(lon);
+            var sinLon = Math.Sin(lon);
+            var vx = cosLat * cosLon;
+            var vy = cosLat * sinLon;
+            var vz = sinLat;
+
+            // Rodrigues' rotation: v' = v cos θ + (k × v) sin θ + k(k · v)(1 − cos θ)
+            var ct = cosTheta[plateIdx];
+            var st = sinTheta[plateIdx];
+            var pkx = kx[plateIdx];
+            var pky = ky[plateIdx];
+            var pkz = kz[plateIdx];
+
+            // k × v
+            var cx = pky * vz - pkz * vy;
+            var cy = pkz * vx - pkx * vz;
+            var cz = pkx * vy - pky * vx;
+
+            // k · v
+            var dot = pkx * vx + pky * vy + pkz * vz;
+            var oneMinusCos = 1.0 - ct;
+
+            var nx = vx * ct + cx * st + pkx * dot * oneMinusCos;
+            var ny = vy * ct + cy * st + pky * dot * oneMinusCos;
+            var nz = vz * ct + cz * st + pkz * dot * oneMinusCos;
+
+            // Convert back to lat/lon.
+            var newLat = Math.Asin(Math.Clamp(nz, -1.0, 1.0));
+            var newLon = Math.Atan2(ny, nx);
+
+            // Convert to grid coordinates.
+            var newRow = (int)Math.Round((Math.PI / 2.0 - newLat) / Math.PI * gs);
+            var newCol = (int)Math.Round((newLon + Math.PI) / TWO_PI * gs);
+            newRow = Math.Clamp(newRow, 0, gs - 1);
+            newCol = ((newCol % gs) + gs) % gs;
+            var destIdx = newRow * gs + newCol;
+
+            stratigraphyMapping[i] = destIdx;
+            hitCount[destIdx]++;
+
+            if (newHeight[destIdx] <= EMPTY)
+            {
+                // First occupant.
+                newHeight[destIdx]   = state.HeightMap[i];
+                newCrust[destIdx]    = state.CrustThicknessMap[i];
+                newRockType[destIdx] = state.RockTypeMap[i];
+                newRockAge[destIdx]  = state.RockAgeMap[i];
+                newPlateMap[destIdx] = state.PlateMap[i];
+            }
+            else
+            {
+                // Collision: multiple source cells converge on one target.
+                var srcPlate = _plates[plateIdx];
+                var dstPlate = _plates[newPlateMap[destIdx]];
+
+                if (!srcPlate.IsOceanic && !dstPlate.IsOceanic)
+                {
+                    // Continental–continental collision → mountain building.
+                    newHeight[destIdx] = Math.Max(newHeight[destIdx], state.HeightMap[i]);
+                    newHeight[destIdx] += (float)(50.0 * deltaMa);
+                    newCrust[destIdx] += state.CrustThicknessMap[i] * 0.3f;
+                }
+                else if (srcPlate.IsOceanic && !dstPlate.IsOceanic)
+                {
+                    // Oceanic subducts under continental — keep continental.
+                    newHeight[destIdx] += (float)(10.0 * deltaMa);
+                }
+                else if (!srcPlate.IsOceanic && dstPlate.IsOceanic)
+                {
+                    // Continental overrides oceanic.
+                    newHeight[destIdx]   = state.HeightMap[i];
+                    newCrust[destIdx]    = state.CrustThicknessMap[i];
+                    newRockType[destIdx] = state.RockTypeMap[i];
+                    newRockAge[destIdx]  = state.RockAgeMap[i];
+                    newPlateMap[destIdx] = state.PlateMap[i];
+                }
+                else
+                {
+                    // Oceanic–oceanic: older (denser) subducts.
+                    if (state.RockAgeMap[i] < newRockAge[destIdx])
+                    {
+                        // Incoming is younger → it overrides.
+                        newHeight[destIdx]   = state.HeightMap[i];
+                        newCrust[destIdx]    = state.CrustThicknessMap[i];
+                        newRockType[destIdx] = state.RockTypeMap[i];
+                        newRockAge[destIdx]  = state.RockAgeMap[i];
+                        newPlateMap[destIdx] = state.PlateMap[i];
+                    }
+                    // else keep existing (younger)
+                }
+            }
+        }
+
+        // ── Gap fill: cells with no source get fresh oceanic crust ───────────
+        for (var i = 0; i < cc; i++)
+        {
+            if (hitCount[i] > 0) continue;
+
+            newHeight[i]   = GAP_FLOOR_HEIGHT;
+            newCrust[i]    = GAP_CRUST_KM;
+            newRockType[i] = (byte)RockType.IGN_BASALT;
+            newRockAge[i]  = (float)timeMa;
+            // Assign gap to nearest occupied plate via simple neighbor search.
+            newPlateMap[i] = FindNearestPlate(i, newPlateMap, hitCount, gs);
+        }
+
+        // ── Commit new buffers to state ──────────────────────────────────────
+        Array.Copy(newHeight,   state.HeightMap,          cc);
+        Array.Copy(newCrust,    state.CrustThicknessMap,  cc);
+        Array.Copy(newRockType, state.RockTypeMap,        cc);
+        Array.Copy(newRockAge,  state.RockAgeMap,         cc);
+        Array.Copy(newPlateMap, state.PlateMap,            cc);
+
+        // ── Remap stratigraphy columns ───────────────────────────────────────
+        Stratigraphy.RemapColumns(stratigraphyMapping, cc, hitCount, timeMa);
+    }
+
+    /// <summary>
+    /// Find the nearest plate for a gap cell by spiralling outward through neighbours.
+    /// </summary>
+    private static ushort FindNearestPlate(int cellIdx, ushort[] plateMap, int[] hitCount, int gs)
+    {
+        var row = cellIdx / gs;
+        var col = cellIdx % gs;
+        for (var r = 1; r <= gs / 2; r++)
+        {
+            for (var dr = -r; dr <= r; dr++)
+            {
+                for (var dc = -r; dc <= r; dc++)
+                {
+                    if (Math.Abs(dr) != r && Math.Abs(dc) != r) continue; // perimeter only
+                    var nr = row + dr;
+                    var nc = ((col + dc) % gs + gs) % gs;
+                    if (nr < 0 || nr >= gs) continue;
+                    var ni = nr * gs + nc;
+                    if (hitCount[ni] > 0) return plateMap[ni];
+                }
+            }
+        }
+        return 0;
+    }
+
+    /// <summary>Recalculate plate centers from the current plate map.</summary>
+    private void UpdatePlateCenters(SimulationState state)
+    {
+        var gs = state.GridSize;
+        var numPlates = _plates.Count;
+        var sumX  = new double[numPlates];
+        var sumY  = new double[numPlates];
+        var sumZ  = new double[numPlates];
+        var count = new double[numPlates];
+
+        for (var row = 0; row < gs; row++)
+        {
+            var lat = RowToLat(row, gs);
+            var cosLat = Math.Cos(lat);
+            var sinLat = Math.Sin(lat);
+            for (var col = 0; col < gs; col++)
+            {
+                var lon = ColToLon(col, gs);
+                int p = state.PlateMap[row * gs + col];
+                if (p >= numPlates) continue;
+                sumX[p] += cosLat * Math.Cos(lon);
+                sumY[p] += cosLat * Math.Sin(lon);
+                sumZ[p] += sinLat;
+                count[p]++;
+            }
+        }
+
+        for (var p = 0; p < numPlates; p++)
+        {
+            if (count[p] == 0) continue;
+            var mx = sumX[p] / count[p];
+            var my = sumY[p] / count[p];
+            var mz = sumZ[p] / count[p];
+            var r = Math.Sqrt(mx * mx + my * my + mz * mz);
+            if (r < 1e-12) continue;
+            _plates[p].CenterLat = Math.Asin(Math.Clamp(mz / r, -1, 1)) / DEG2RAD;
+            _plates[p].CenterLon = Math.Atan2(my, mx) / DEG2RAD;
+            _plates[p].Area = count[p] / state.CellCount;
+        }
     }
 
     private void ProcessConvergent(List<BoundaryCell> boundaries, double deltaMa, double timeMa, SimulationState state)

@@ -133,6 +133,68 @@ public sealed class StratigraphyStack
         }
     }
 
+    /// <summary>
+    /// Remap stratigraphy columns after plate advection.
+    /// <paramref name="mapping"/> maps source cell index → destination cell index.
+    /// Columns that map to the same destination are merged (layers concatenated).
+    /// Gap cells (hitCount == 0) get a fresh oceanic basement.
+    /// </summary>
+    public void RemapColumns(int[] mapping, int cellCount, int[] hitCount, double timeMa)
+    {
+        lock (_lockObject)
+        {
+            var newStacks = new Dictionary<int, List<StratigraphicLayer>>();
+
+            // Move existing columns to their new destinations.
+            for (var src = 0; src < cellCount; src++)
+            {
+                if (!_stacks.TryGetValue(src, out var srcStack) || srcStack.Count == 0)
+                    continue;
+
+                var dest = mapping[src];
+                if (!newStacks.TryGetValue(dest, out var destStack))
+                {
+                    destStack = new List<StratigraphicLayer>(srcStack.Count);
+                    newStacks[dest] = destStack;
+                }
+
+                foreach (var layer in srcStack)
+                    destStack.Add(layer.Clone());
+
+                // Enforce budget.
+                while (destStack.Count > MAX_LAYERS_PER_CELL)
+                {
+                    var bottom = destStack[0];
+                    destStack.RemoveAt(0);
+                    if (destStack.Count > 0) destStack[0].Thickness += bottom.Thickness;
+                }
+            }
+
+            // Fill gap cells with fresh oceanic basement.
+            for (var i = 0; i < cellCount; i++)
+            {
+                if (hitCount[i] > 0) continue;
+                newStacks[i] =
+                [
+                    new StratigraphicLayer
+                    {
+                        RockType = RockType.IGN_GABBRO, AgeDeposited = timeMa,
+                        Thickness = 4000, Deformation = DeformationType.UNDEFORMED,
+                    },
+                    new StratigraphicLayer
+                    {
+                        RockType = RockType.IGN_PILLOW_BASALT, AgeDeposited = timeMa,
+                        Thickness = 3000, Deformation = DeformationType.UNDEFORMED,
+                    },
+                ];
+            }
+
+            _stacks.Clear();
+            foreach (var (key, value) in newStacks)
+                _stacks[key] = value;
+        }
+    }
+
     public int Size
     {
         get

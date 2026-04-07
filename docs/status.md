@@ -188,4 +188,16 @@ npx playwright test  # E2E
 - [x] **Topo layer fix** — Replaced dynamic per-run min/max normalization (which caused all-white when heights clustered) with fixed physical reference ranges: ocean [-6000, -100]→topoColor, land heights used directly (clamped to 4000m max).
 
 ### Known Limitations / Not Yet Fixed
-- **Plate drift / land deformation** — `PlateInfo.AngularVelocity` is initialized but never applied to move the plate map. Implementing true plate advection on the equirectangular grid requires Rodrigues' rotation formula per cell and grid reassignment — a significant change. Heights at boundaries do change from convergent/divergent processes; but plates do not visibly migrate across the globe over geological time yet.
+- ~~**Plate drift / land deformation**~~ — **FIXED** (this session): True plate advection now implemented via Rodrigues' rotation formula. See "Plate Advection" section below.
+
+---
+
+## Plate Advection — True Plate Drift ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Core/Engines/TectonicEngine.cs` — Added `AdvectPlates()` method: applies Rodrigues' rotation formula to every cell based on its plate's Euler pole (`AngularVelocity.Lat/Lon/Rate`); scatter-based advection to new grid positions; continental–continental collisions produce mountain building and crustal thickening; oceanic–continental collisions result in subduction; gap cells (divergent rifts) filled with fresh oceanic basalt crust at mid-ocean ridge depth (−4000 m); `FindNearestPlate()` assigns gap cells to nearest plate. Added `UpdatePlateCenters()` to recalculate plate centroids and areas after advection. Advection runs once per `Tick()` with full `deltaMa` for proper grid-scale movement; sub-tick boundary processes run afterward on the updated plate configuration.
+- [x] `backend/GeoTime.Core/Engines/StratigraphyStack.cs` — Added `RemapColumns()` method: moves stratigraphic columns to new cell indices during advection, merges colliding columns (with layer budget enforcement), fills gap cells with fresh oceanic basement (gabbro + pillow basalt).
+- [x] `backend/GeoTime.Tests/PlateAdvectionTests.cs` — 10 unit tests: plate map changes after advection, height map modified, gap cells filled with oceanic crust, zero rotation rate preserves state, stratigraphy remaps with cells, plate centers update, collision builds mountains, integration with SimulationOrchestrator, RemapColumns moves stratigraphy, RemapColumns fills gaps.
+
+**Test count**: 337 (previous) + 10 new backend = **347 total backend tests passing**
