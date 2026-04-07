@@ -1,10 +1,11 @@
+using GeoTime.Core.Compute;
 using GeoTime.Core.Models;
 using GeoTime.Core.Proc;
 
 namespace GeoTime.Core.Engines;
 
 /// <summary>Glacial extent, ice accumulation/ablation, erosion, moraine deposition.</summary>
-public sealed class GlacialEngine(int gridSize)
+public sealed class GlacialEngine(int gridSize, GpuComputeService? gpu = null)
 {
     private const double GLACIATION_TEMP = -5;
     private const double GLACIAL_EROSION_RATE = 0.02;
@@ -39,16 +40,31 @@ public sealed class GlacialEngine(int gridSize)
         var glaciated = 0; double totalEroded = 0, totalDepo = 0;
         var cc = gridSize * gridSize;
 
+        // ── Phase 1: per-cell ice accumulation/ablation (GPU or CPU) ──────────
+        if (gpu != null)
+        {
+            gpu.UpdateIceThickness(IceThickness, hm, tm,
+                (float)ela, (float)deltaMa, (float)GLACIATION_TEMP,
+                (float)ICE_ACCUMULATION_RATE, (float)ICE_ABLATION_RATE);
+        }
+        else
+        {
+            for (var i = 0; i < cc; i++)
+            {
+                double h = hm[i], temp = tm[i];
+                if (h > ela && temp < GLACIATION_TEMP)
+                    IceThickness[i] += (float)(ICE_ACCUMULATION_RATE * (GLACIATION_TEMP - temp) * deltaMa);
+                else if (IceThickness[i] > 0)
+                {
+                    IceThickness[i] -= (float)(ICE_ABLATION_RATE * Math.Max(0, temp - GLACIATION_TEMP) * deltaMa);
+                    if (IceThickness[i] < 0) IceThickness[i] = 0;
+                }
+            }
+        }
+
+        // ── Phase 2: erosion/moraine (sequential, neighbor-dependent, stays on CPU)
         for (var i = 0; i < cc; i++)
         {
-            double h = hm[i], temp = tm[i];
-            if (h > ela && temp < GLACIATION_TEMP)
-                IceThickness[i] += (float)(ICE_ACCUMULATION_RATE * (GLACIATION_TEMP - temp) * deltaMa);
-            else if (IceThickness[i] > 0)
-            {
-                IceThickness[i] -= (float)(ICE_ABLATION_RATE * Math.Max(0, temp - GLACIATION_TEMP) * deltaMa);
-                if (IceThickness[i] < 0) IceThickness[i] = 0;
-            }
             if (IceThickness[i] <= 0) continue;
             glaciated++;
 

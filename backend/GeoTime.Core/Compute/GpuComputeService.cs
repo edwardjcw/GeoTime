@@ -1,4 +1,5 @@
 using ILGPU;
+using ILGPU.Algorithms;
 using ILGPU.Runtime;
 using ILGPU.Runtime.CPU;
 using ILGPU.Runtime.Cuda;
@@ -32,6 +33,54 @@ public sealed class GpuComputeService : IDisposable
     private readonly Accelerator _accelerator;
     private readonly Action<Index1D, ArrayView<float>, ArrayView<float>, float, float, float> _isostasyKernel;
     private readonly Action<Index1D, ArrayView<float>, int, float> _diffuseKernel;
+    private readonly Action<Index1D,
+        ArrayView<int>,                // destMap output
+        ArrayView<ushort>,             // plateMap
+        ArrayView<double>,             // kx per plate
+        ArrayView<double>,             // ky per plate
+        ArrayView<double>,             // kz per plate
+        ArrayView<double>,             // cosTheta per plate
+        ArrayView<double>,             // sinTheta per plate
+        int> _advectScatterKernel;     // gridSize
+    private readonly Action<Index1D,
+        ArrayView<float>,              // newHeight
+        ArrayView<float>,              // newCrust
+        ArrayView<byte>,               // newRockType
+        ArrayView<float>,              // newRockAge
+        ArrayView<int>,                // hitCount
+        float,                         // gapFloorHeight
+        float,                         // gapCrustKm
+        byte,                          // basaltRockType
+        float> _gapFillKernel;         // timeMa
+    private readonly Action<Index1D,
+        ArrayView<ushort>,             // plateMap
+        ArrayView<double>,             // plateSumX
+        ArrayView<double>,             // plateSumY
+        ArrayView<double>,             // plateSumZ
+        ArrayView<double>,             // plateCount
+        int,                           // gridSize
+        int> _updatePlateCentersKernel; // numPlates
+    private readonly Action<Index1D,
+        ArrayView<float>,              // temperatureMap
+        ArrayView<float>,              // heightMap
+        int,                           // gridSize
+        float,                         // alpha
+        float,                         // dTghg
+        float,                         // dTmilan
+        float> _climateTemperatureKernel; // lapseRate
+    private readonly Action<Index1D,
+        ArrayView<float>,              // windU
+        ArrayView<float>,              // windV
+        int> _computeWindsKernel;      // gridSize
+    private readonly Action<Index1D,
+        ArrayView<float>,              // iceThickness
+        ArrayView<float>,              // heightMap
+        ArrayView<float>,              // temperatureMap
+        float,                         // ela
+        float,                         // deltaMa
+        float,                         // glaciationTemp
+        float,                         // accumRate
+        float> _iceThicknessKernel;    // ablationRate
 
     /// <summary>Human-readable compute device description for the UI.</summary>
     public ComputeInfo Info { get; }
@@ -41,7 +90,7 @@ public sealed class GpuComputeService : IDisposable
 
     public GpuComputeService()
     {
-        _context = Context.CreateDefault();
+        _context = Context.Create(builder => builder.Default().EnableAlgorithms());
 
         Accelerator? accelerator = null;
         Device?      selectedDevice = null;
@@ -138,6 +187,35 @@ public sealed class GpuComputeService : IDisposable
         _diffuseKernel = _accelerator
             .LoadAutoGroupedStreamKernel<Index1D, ArrayView<float>, int, float>(
                 DiffuseKernel);
+        _advectScatterKernel = _accelerator
+            .LoadAutoGroupedStreamKernel<Index1D,
+                ArrayView<int>, ArrayView<ushort>,
+                ArrayView<double>, ArrayView<double>, ArrayView<double>,
+                ArrayView<double>, ArrayView<double>, int>(
+                AdvectScatterKernel);
+        _gapFillKernel = _accelerator
+            .LoadAutoGroupedStreamKernel<Index1D,
+                ArrayView<float>, ArrayView<float>, ArrayView<byte>, ArrayView<float>,
+                ArrayView<int>, float, float, byte, float>(
+                GapFillKernel);
+        _updatePlateCentersKernel = _accelerator
+            .LoadAutoGroupedStreamKernel<Index1D,
+                ArrayView<ushort>, ArrayView<double>, ArrayView<double>,
+                ArrayView<double>, ArrayView<double>, int, int>(
+                UpdatePlateCentersKernel);
+        _climateTemperatureKernel = _accelerator
+            .LoadAutoGroupedStreamKernel<Index1D,
+                ArrayView<float>, ArrayView<float>, int, float, float, float, float>(
+                ClimateTemperatureKernel);
+        _computeWindsKernel = _accelerator
+            .LoadAutoGroupedStreamKernel<Index1D,
+                ArrayView<float>, ArrayView<float>, int>(
+                ComputeWindsKernel);
+        _iceThicknessKernel = _accelerator
+            .LoadAutoGroupedStreamKernel<Index1D,
+                ArrayView<float>, ArrayView<float>, ArrayView<float>,
+                float, float, float, float, float>(
+                IceThicknessKernel);
     }
 
     /// <summary>
@@ -275,6 +353,477 @@ public sealed class GpuComputeService : IDisposable
             System.Diagnostics.Debug.WriteLine($"GPU temperature diffusion failed: {ex.Message}");
             throw new InvalidOperationException(
                 $"GPU temperature diffusion failed (accelerator: {Info.AcceleratorType}). " +
+                "This may indicate a GPU driver issue or incompatible accelerator state.",
+                ex);
+        }
+    }
+
+    // ── Advect scatter kernel ────────────────────────────────────────────────
+
+    /// <summary>
+    /// ILGPU kernel: per-cell Rodrigues' rotation to compute destination index.
+    /// GPU handles the expensive trig (sin/cos/asin/atan2 per cell); CPU then
+    /// performs the irregular scatter with collision resolution using the destMap.
+    /// </summary>
+    static void AdvectScatterKernel(
+        Index1D idx,
+        ArrayView<int> destMap,
+        ArrayView<ushort> plateMap,
+        ArrayView<double> kxArr,
+        ArrayView<double> kyArr,
+        ArrayView<double> kzArr,
+        ArrayView<double> cosThetaArr,
+        ArrayView<double> sinThetaArr,
+        int gs)
+    {
+        const double PI = 3.14159265358979323846;
+        const double TWO_PI = 2.0 * PI;
+
+        int row = idx / gs;
+        int col = idx % gs;
+
+        // Row/col → lat/lon (matches TectonicEngine.RowToLat / ColToLon)
+        double lat = PI / 2.0 - (double)row / gs * PI;
+        double lon = (double)col / gs * TWO_PI - PI;
+
+        int plateIdx = plateMap[idx];
+
+        // Cell position on unit sphere
+        double cosLat = XMath.Cos(lat);
+        double sinLat = XMath.Sin(lat);
+        double cosLon = XMath.Cos(lon);
+        double sinLon = XMath.Sin(lon);
+        double vx = cosLat * cosLon;
+        double vy = cosLat * sinLon;
+        double vz = sinLat;
+
+        // Per-plate rotation parameters
+        double ct = cosThetaArr[plateIdx];
+        double st = sinThetaArr[plateIdx];
+        double pkx = kxArr[plateIdx];
+        double pky = kyArr[plateIdx];
+        double pkz = kzArr[plateIdx];
+
+        // Rodrigues' rotation: v' = v cos θ + (k × v) sin θ + k(k·v)(1 − cos θ)
+        double cx = pky * vz - pkz * vy;
+        double cy = pkz * vx - pkx * vz;
+        double cz = pkx * vy - pky * vx;
+
+        double dot = pkx * vx + pky * vy + pkz * vz;
+        double oneMinusCos = 1.0 - ct;
+
+        double nx = vx * ct + cx * st + pkx * dot * oneMinusCos;
+        double ny = vy * ct + cy * st + pky * dot * oneMinusCos;
+        double nz = vz * ct + cz * st + pkz * dot * oneMinusCos;
+
+        // Convert back to lat/lon
+        double clampedNz = IntrinsicMath.Clamp(nz, -1.0, 1.0);
+        double newLat = XMath.Asin(clampedNz);
+        double newLon = XMath.Atan2(ny, nx);
+
+        // Convert to grid coordinates
+        int newRow = (int)XMath.Round(((PI / 2.0 - newLat) / PI) * gs);
+        int newCol = (int)XMath.Round(((newLon + PI) / TWO_PI) * gs);
+        newRow = IntrinsicMath.Clamp(newRow, 0, gs - 1);
+        newCol = ((newCol % gs) + gs) % gs;
+
+        destMap[idx] = newRow * gs + newCol;
+    }
+
+    /// <summary>
+    /// Compute destination indices for all cells using Rodrigues' rotation on the GPU.
+    /// Returns an int[] where destMap[srcIdx] = destination cell index.
+    /// </summary>
+    public int[] ComputeAdvectDestinations(
+        ushort[] plateMap,
+        double[] kx, double[] ky, double[] kz,
+        double[] cosTheta, double[] sinTheta,
+        int gridSize)
+    {
+        var cc = plateMap.Length;
+        var numPlates = kx.Length;
+        var destMap = new int[cc];
+
+        using var destBuf  = _accelerator.Allocate1D<int>(cc);
+        using var plateBuf = _accelerator.Allocate1D<ushort>(cc);
+        using var kxBuf    = _accelerator.Allocate1D<double>(numPlates);
+        using var kyBuf    = _accelerator.Allocate1D<double>(numPlates);
+        using var kzBuf    = _accelerator.Allocate1D<double>(numPlates);
+        using var ctBuf    = _accelerator.Allocate1D<double>(numPlates);
+        using var stBuf    = _accelerator.Allocate1D<double>(numPlates);
+
+        try
+        {
+            plateBuf.CopyFromCPU(plateMap);
+            kxBuf.CopyFromCPU(kx);
+            kyBuf.CopyFromCPU(ky);
+            kzBuf.CopyFromCPU(kz);
+            ctBuf.CopyFromCPU(cosTheta);
+            stBuf.CopyFromCPU(sinTheta);
+
+            _advectScatterKernel(cc,
+                destBuf.View, plateBuf.View,
+                kxBuf.View, kyBuf.View, kzBuf.View,
+                ctBuf.View, stBuf.View, gridSize);
+            _accelerator.Synchronize();
+
+            destBuf.CopyToCPU(destMap);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"GPU advect scatter failed: {ex.Message}");
+            throw new InvalidOperationException(
+                $"GPU advect scatter computation failed (accelerator: {Info.AcceleratorType}). " +
+                "This may indicate a GPU driver issue or incompatible accelerator state.",
+                ex);
+        }
+
+        return destMap;
+    }
+
+    // ── Gap fill kernel ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// ILGPU kernel: fill empty cells (hitCount == 0) with fresh oceanic crust.
+    /// </summary>
+    static void GapFillKernel(
+        Index1D idx,
+        ArrayView<float> newHeight,
+        ArrayView<float> newCrust,
+        ArrayView<byte> newRockType,
+        ArrayView<float> newRockAge,
+        ArrayView<int> hitCount,
+        float gapFloorHeight,
+        float gapCrustKm,
+        byte basaltRockType,
+        float timeMa)
+    {
+        if (hitCount[idx] > 0) return;
+        newHeight[idx]   = gapFloorHeight;
+        newCrust[idx]    = gapCrustKm;
+        newRockType[idx] = basaltRockType;
+        newRockAge[idx]  = timeMa;
+    }
+
+    /// <summary>
+    /// Fill gap cells (hitCount == 0) with fresh oceanic crust on the GPU.
+    /// Arrays are modified in-place.
+    /// </summary>
+    public void FillGapCells(
+        float[] newHeight, float[] newCrust, byte[] newRockType, float[] newRockAge,
+        int[] hitCount, float gapFloorHeight, float gapCrustKm, byte basaltRockType, float timeMa)
+    {
+        var cc = newHeight.Length;
+        using var hBuf   = _accelerator.Allocate1D<float>(cc);
+        using var cBuf   = _accelerator.Allocate1D<float>(cc);
+        using var rtBuf  = _accelerator.Allocate1D<byte>(cc);
+        using var raBuf  = _accelerator.Allocate1D<float>(cc);
+        using var hcBuf  = _accelerator.Allocate1D<int>(cc);
+
+        try
+        {
+            hBuf.CopyFromCPU(newHeight);
+            cBuf.CopyFromCPU(newCrust);
+            rtBuf.CopyFromCPU(newRockType);
+            raBuf.CopyFromCPU(newRockAge);
+            hcBuf.CopyFromCPU(hitCount);
+
+            _gapFillKernel(cc, hBuf.View, cBuf.View, rtBuf.View, raBuf.View,
+                hcBuf.View, gapFloorHeight, gapCrustKm, basaltRockType, timeMa);
+            _accelerator.Synchronize();
+
+            hBuf.CopyToCPU(newHeight);
+            cBuf.CopyToCPU(newCrust);
+            rtBuf.CopyToCPU(newRockType);
+            raBuf.CopyToCPU(newRockAge);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"GPU gap fill failed: {ex.Message}");
+            throw new InvalidOperationException(
+                $"GPU gap fill computation failed (accelerator: {Info.AcceleratorType}). " +
+                "This may indicate a GPU driver issue or incompatible accelerator state.",
+                ex);
+        }
+    }
+
+    // ── Update plate centers kernel ──────────────────────────────────────────
+
+    /// <summary>
+    /// ILGPU kernel: per-cell accumulation of Cartesian coordinates for plate
+    /// center-of-mass computation using atomic adds on shared buffers.
+    /// </summary>
+    static void UpdatePlateCentersKernel(
+        Index1D idx,
+        ArrayView<ushort> plateMap,
+        ArrayView<double> plateSumX,
+        ArrayView<double> plateSumY,
+        ArrayView<double> plateSumZ,
+        ArrayView<double> plateCount,
+        int gs,
+        int numPlates)
+    {
+        const double PI = 3.14159265358979323846;
+        const double TWO_PI = 2.0 * PI;
+
+        int row = idx / gs;
+        int col = idx % gs;
+
+        double lat = PI / 2.0 - (double)row / gs * PI;
+        double lon = (double)col / gs * TWO_PI - PI;
+
+        int p = plateMap[idx];
+        if (p >= numPlates) return;
+
+        double cosLat = XMath.Cos(lat);
+        Atomic.Add(ref plateSumX[p], cosLat * XMath.Cos(lon));
+        Atomic.Add(ref plateSumY[p], cosLat * XMath.Sin(lon));
+        Atomic.Add(ref plateSumZ[p], XMath.Sin(lat));
+        Atomic.Add(ref plateCount[p], 1.0);
+    }
+
+    /// <summary>
+    /// Compute plate center-of-mass sums on the GPU. Returns (sumX, sumY, sumZ, count)
+    /// arrays of length numPlates that the caller uses to update plate centers.
+    /// </summary>
+    public (double[] sumX, double[] sumY, double[] sumZ, double[] count) ComputePlateCenterSums(
+        ushort[] plateMap, int gridSize, int numPlates)
+    {
+        var cc = plateMap.Length;
+        var sumX  = new double[numPlates];
+        var sumY  = new double[numPlates];
+        var sumZ  = new double[numPlates];
+        var count = new double[numPlates];
+
+        using var pmBuf = _accelerator.Allocate1D<ushort>(cc);
+        using var sxBuf = _accelerator.Allocate1D<double>(numPlates);
+        using var syBuf = _accelerator.Allocate1D<double>(numPlates);
+        using var szBuf = _accelerator.Allocate1D<double>(numPlates);
+        using var cBuf  = _accelerator.Allocate1D<double>(numPlates);
+
+        try
+        {
+            pmBuf.CopyFromCPU(plateMap);
+            // Zero-initialize accumulation buffers
+            sxBuf.CopyFromCPU(sumX);
+            syBuf.CopyFromCPU(sumY);
+            szBuf.CopyFromCPU(sumZ);
+            cBuf.CopyFromCPU(count);
+
+            _updatePlateCentersKernel(cc, pmBuf.View,
+                sxBuf.View, syBuf.View, szBuf.View, cBuf.View,
+                gridSize, numPlates);
+            _accelerator.Synchronize();
+
+            sxBuf.CopyToCPU(sumX);
+            syBuf.CopyToCPU(sumY);
+            szBuf.CopyToCPU(sumZ);
+            cBuf.CopyToCPU(count);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"GPU plate center computation failed: {ex.Message}");
+            throw new InvalidOperationException(
+                $"GPU plate center computation failed (accelerator: {Info.AcceleratorType}). " +
+                "This may indicate a GPU driver issue or incompatible accelerator state.",
+                ex);
+        }
+
+        return (sumX, sumY, sumZ, count);
+    }
+
+    // ── Climate temperature kernel ───────────────────────────────────────────
+
+    /// <summary>
+    /// ILGPU kernel: per-cell climate temperature update.
+    /// T_base = 30 * cos(latRad); hKm = max(0, h/1000);
+    /// T_final = T_base - hKm*lapseRate + dTghg + dTmilan;
+    /// temp[i] = temp[i]*(1-alpha) + T_final*alpha
+    /// </summary>
+    static void ClimateTemperatureKernel(
+        Index1D idx,
+        ArrayView<float> temp,
+        ArrayView<float> height,
+        int gs,
+        float alpha,
+        float dTghg,
+        float dTmilan,
+        float lapseRate)
+    {
+        const float PI = 3.14159265358979323846f;
+
+        int row = idx / gs;
+        float latDeg = 90f - (float)row / (gs - 1) * 180f;
+        float latRad = latDeg * PI / 180f;
+
+        float tBase = 30f * XMath.Cos(latRad);
+        float hKm = XMath.Max(0f, height[idx] / 1000f);
+        float tFinal = tBase - hKm * lapseRate + dTghg + dTmilan;
+
+        temp[idx] = temp[idx] * (1f - alpha) + tFinal * alpha;
+    }
+
+    /// <summary>
+    /// Run the climate temperature update kernel over the entire map.
+    /// </summary>
+    public void UpdateTemperature(float[] temp, float[] height, int gridSize,
+        float alpha, float dTghg, float dTmilan)
+    {
+        const float LapseRate = 6.5f;
+        var cc = temp.Length;
+        using var tBuf = _accelerator.Allocate1D<float>(cc);
+        using var hBuf = _accelerator.Allocate1D<float>(cc);
+
+        try
+        {
+            tBuf.CopyFromCPU(temp);
+            hBuf.CopyFromCPU(height);
+
+            _climateTemperatureKernel(cc, tBuf.View, hBuf.View,
+                gridSize, alpha, dTghg, dTmilan, LapseRate);
+            _accelerator.Synchronize();
+
+            tBuf.CopyToCPU(temp);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"GPU climate temperature failed: {ex.Message}");
+            throw new InvalidOperationException(
+                $"GPU climate temperature computation failed (accelerator: {Info.AcceleratorType}). " +
+                "This may indicate a GPU driver issue or incompatible accelerator state.",
+                ex);
+        }
+    }
+
+    // ── Compute winds kernel ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// ILGPU kernel: per-cell 3-cell circulation wind assignment based on latitude band.
+    /// </summary>
+    static void ComputeWindsKernel(
+        Index1D idx,
+        ArrayView<float> windU,
+        ArrayView<float> windV,
+        int gs)
+    {
+        const float PI = 3.14159265358979323846f;
+
+        int row = idx / gs;
+        float latDeg = 90f - (float)row / (gs - 1) * 180f;
+        float absLat = XMath.Abs(latDeg);
+        float sign = latDeg >= 0f ? 1f : -1f;
+
+        float u, v;
+        if (absLat <= 30f)
+        {
+            u = -XMath.Cos(absLat * PI / 30f);
+            v = sign * -0.3f * XMath.Sin(absLat * PI / 30f);
+        }
+        else if (absLat <= 60f)
+        {
+            u = XMath.Cos((absLat - 45f) * PI / 30f);
+            v = sign * 0.1f * XMath.Cos((absLat - 45f) * PI / 30f);
+        }
+        else
+        {
+            u = -XMath.Cos((absLat - 75f) * PI / 15f);
+            v = sign * -0.2f * XMath.Sin((absLat - 75f) * PI / 15f);
+        }
+
+        windU[idx] = u;
+        windV[idx] = v;
+    }
+
+    /// <summary>
+    /// Run the wind computation kernel over the entire map.
+    /// </summary>
+    public void ComputeWinds(float[] windU, float[] windV, int gridSize)
+    {
+        var cc = windU.Length;
+        using var uBuf = _accelerator.Allocate1D<float>(cc);
+        using var vBuf = _accelerator.Allocate1D<float>(cc);
+
+        try
+        {
+            _computeWindsKernel(cc, uBuf.View, vBuf.View, gridSize);
+            _accelerator.Synchronize();
+
+            uBuf.CopyToCPU(windU);
+            vBuf.CopyToCPU(windV);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"GPU compute winds failed: {ex.Message}");
+            throw new InvalidOperationException(
+                $"GPU compute winds failed (accelerator: {Info.AcceleratorType}). " +
+                "This may indicate a GPU driver issue or incompatible accelerator state.",
+                ex);
+        }
+    }
+
+    // ── Ice thickness kernel ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// ILGPU kernel: per-cell ice accumulation/ablation.
+    /// Independent per cell — erosion/moraine remain on CPU.
+    /// </summary>
+    static void IceThicknessKernel(
+        Index1D idx,
+        ArrayView<float> iceThickness,
+        ArrayView<float> heightMap,
+        ArrayView<float> temperatureMap,
+        float ela,
+        float deltaMa,
+        float glaciationTemp,
+        float accumRate,
+        float ablationRate)
+    {
+        float h = heightMap[idx];
+        float temp = temperatureMap[idx];
+        float ice = iceThickness[idx];
+
+        if (h > ela && temp < glaciationTemp)
+        {
+            ice += accumRate * (glaciationTemp - temp) * deltaMa;
+        }
+        else if (ice > 0f)
+        {
+            ice -= ablationRate * XMath.Max(0f, temp - glaciationTemp) * deltaMa;
+            if (ice < 0f) ice = 0f;
+        }
+
+        iceThickness[idx] = ice;
+    }
+
+    /// <summary>
+    /// Run the ice thickness update kernel over the entire map.
+    /// </summary>
+    public void UpdateIceThickness(float[] iceThickness, float[] heightMap,
+        float[] temperatureMap, float ela, float deltaMa,
+        float glaciationTemp, float accumRate, float ablationRate)
+    {
+        var cc = iceThickness.Length;
+        using var iceBuf  = _accelerator.Allocate1D<float>(cc);
+        using var hBuf    = _accelerator.Allocate1D<float>(cc);
+        using var tBuf    = _accelerator.Allocate1D<float>(cc);
+
+        try
+        {
+            iceBuf.CopyFromCPU(iceThickness);
+            hBuf.CopyFromCPU(heightMap);
+            tBuf.CopyFromCPU(temperatureMap);
+
+            _iceThicknessKernel(cc, iceBuf.View, hBuf.View, tBuf.View,
+                ela, deltaMa, glaciationTemp, accumRate, ablationRate);
+            _accelerator.Synchronize();
+
+            iceBuf.CopyToCPU(iceThickness);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"GPU ice thickness failed: {ex.Message}");
+            throw new InvalidOperationException(
+                $"GPU ice thickness computation failed (accelerator: {Info.AcceleratorType}). " +
                 "This may indicate a GPU driver issue or incompatible accelerator state.",
                 ex);
         }

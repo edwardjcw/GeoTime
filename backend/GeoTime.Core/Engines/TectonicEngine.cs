@@ -163,62 +163,73 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         const float EMPTY = float.NegativeInfinity;
         Array.Fill(newHeight, EMPTY);
 
-        // ── Scatter pass: rotate each cell to its destination ────────────────
+        // ── Phase 1: Compute destination indices ─────────────────────────────
+        // GPU: Rodrigues' rotation kernel computes destMap[srcIdx] = destIdx.
+        // CPU fallback: inline rotation loop.
+        int[] destMap;
+        if (gpu != null)
+        {
+            destMap = gpu.ComputeAdvectDestinations(state.PlateMap, kx, ky, kz, cosTheta, sinTheta, gs);
+        }
+        else
+        {
+            destMap = new int[cc];
+            for (var i = 0; i < cc; i++)
+            {
+                var row = i / gs;
+                var col = i % gs;
+                var lat = RowToLat(row, gs);
+                var lon = ColToLon(col, gs);
+
+                int plateIdx = state.PlateMap[i];
+
+                var cosLat = Math.Cos(lat);
+                var sinLat = Math.Sin(lat);
+                var cosLon = Math.Cos(lon);
+                var sinLon = Math.Sin(lon);
+                var vx = cosLat * cosLon;
+                var vy = cosLat * sinLon;
+                var vz = sinLat;
+
+                var ct = cosTheta[plateIdx];
+                var st = sinTheta[plateIdx];
+                var pkx = kx[plateIdx];
+                var pky = ky[plateIdx];
+                var pkz = kz[plateIdx];
+
+                var cx = pky * vz - pkz * vy;
+                var cy = pkz * vx - pkx * vz;
+                var cz = pkx * vy - pky * vx;
+
+                var dot = pkx * vx + pky * vy + pkz * vz;
+                var oneMinusCos = 1.0 - ct;
+
+                var nx = vx * ct + cx * st + pkx * dot * oneMinusCos;
+                var ny = vy * ct + cy * st + pky * dot * oneMinusCos;
+                var nz = vz * ct + cz * st + pkz * dot * oneMinusCos;
+
+                var newLat = Math.Asin(Math.Clamp(nz, -1.0, 1.0));
+                var newLon = Math.Atan2(ny, nx);
+
+                var newRow = (int)Math.Round((Math.PI / 2.0 - newLat) / Math.PI * gs);
+                var newCol = (int)Math.Round((newLon + Math.PI) / TWO_PI * gs);
+                newRow = Math.Clamp(newRow, 0, gs - 1);
+                newCol = ((newCol % gs) + gs) % gs;
+                destMap[i] = newRow * gs + newCol;
+            }
+        }
+
+        // ── Phase 2: Scatter + collision resolution (CPU) ────────────────────
+        // Collision logic depends on plate type branching and sequential ordering,
+        // so it runs on the CPU using the precomputed destMap.
         for (var i = 0; i < cc; i++)
         {
-            var row = i / gs;
-            var col = i % gs;
-            var lat = RowToLat(row, gs);
-            var lon = ColToLon(col, gs);
-
-            int plateIdx = state.PlateMap[i];
-
-            // Cell position on unit sphere.
-            var cosLat = Math.Cos(lat);
-            var sinLat = Math.Sin(lat);
-            var cosLon = Math.Cos(lon);
-            var sinLon = Math.Sin(lon);
-            var vx = cosLat * cosLon;
-            var vy = cosLat * sinLon;
-            var vz = sinLat;
-
-            // Rodrigues' rotation: v' = v cos θ + (k × v) sin θ + k(k · v)(1 − cos θ)
-            var ct = cosTheta[plateIdx];
-            var st = sinTheta[plateIdx];
-            var pkx = kx[plateIdx];
-            var pky = ky[plateIdx];
-            var pkz = kz[plateIdx];
-
-            // k × v
-            var cx = pky * vz - pkz * vy;
-            var cy = pkz * vx - pkx * vz;
-            var cz = pkx * vy - pky * vx;
-
-            // k · v
-            var dot = pkx * vx + pky * vy + pkz * vz;
-            var oneMinusCos = 1.0 - ct;
-
-            var nx = vx * ct + cx * st + pkx * dot * oneMinusCos;
-            var ny = vy * ct + cy * st + pky * dot * oneMinusCos;
-            var nz = vz * ct + cz * st + pkz * dot * oneMinusCos;
-
-            // Convert back to lat/lon.
-            var newLat = Math.Asin(Math.Clamp(nz, -1.0, 1.0));
-            var newLon = Math.Atan2(ny, nx);
-
-            // Convert to grid coordinates.
-            var newRow = (int)Math.Round((Math.PI / 2.0 - newLat) / Math.PI * gs);
-            var newCol = (int)Math.Round((newLon + Math.PI) / TWO_PI * gs);
-            newRow = Math.Clamp(newRow, 0, gs - 1);
-            newCol = ((newCol % gs) + gs) % gs;
-            var destIdx = newRow * gs + newCol;
-
+            var destIdx = destMap[i];
             stratigraphyMapping[i] = destIdx;
             hitCount[destIdx]++;
 
             if (newHeight[destIdx] <= EMPTY)
             {
-                // First occupant.
                 newHeight[destIdx]   = state.HeightMap[i];
                 newCrust[destIdx]    = state.CrustThicknessMap[i];
                 newRockType[destIdx] = state.RockTypeMap[i];
@@ -227,25 +238,22 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
             }
             else
             {
-                // Collision: multiple source cells converge on one target.
+                int plateIdx = state.PlateMap[i];
                 var srcPlate = _plates[plateIdx];
                 var dstPlate = _plates[newPlateMap[destIdx]];
 
                 if (!srcPlate.IsOceanic && !dstPlate.IsOceanic)
                 {
-                    // Continental–continental collision → mountain building.
                     newHeight[destIdx] = Math.Max(newHeight[destIdx], state.HeightMap[i]);
                     newHeight[destIdx] += (float)(50.0 * deltaMa);
                     newCrust[destIdx] += state.CrustThicknessMap[i] * 0.3f;
                 }
                 else if (srcPlate.IsOceanic && !dstPlate.IsOceanic)
                 {
-                    // Oceanic subducts under continental — keep continental.
                     newHeight[destIdx] += (float)(10.0 * deltaMa);
                 }
                 else if (!srcPlate.IsOceanic && dstPlate.IsOceanic)
                 {
-                    // Continental overrides oceanic.
                     newHeight[destIdx]   = state.HeightMap[i];
                     newCrust[destIdx]    = state.CrustThicknessMap[i];
                     newRockType[destIdx] = state.RockTypeMap[i];
@@ -254,31 +262,42 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
                 }
                 else
                 {
-                    // Oceanic–oceanic: older (denser) subducts.
                     if (state.RockAgeMap[i] < newRockAge[destIdx])
                     {
-                        // Incoming is younger → it overrides.
                         newHeight[destIdx]   = state.HeightMap[i];
                         newCrust[destIdx]    = state.CrustThicknessMap[i];
                         newRockType[destIdx] = state.RockTypeMap[i];
                         newRockAge[destIdx]  = state.RockAgeMap[i];
                         newPlateMap[destIdx] = state.PlateMap[i];
                     }
-                    // else keep existing (younger)
                 }
             }
         }
 
-        // ── Gap fill: cells with no source get fresh oceanic crust ───────────
+        // ── Phase 3: Gap fill ────────────────────────────────────────────────
+        // GPU fills the simple per-cell properties; CPU handles plate assignment
+        // via neighbor search which is irregular and not suited for GPU.
+        if (gpu != null)
+        {
+            gpu.FillGapCells(newHeight, newCrust, newRockType, newRockAge,
+                hitCount, GAP_FLOOR_HEIGHT, GAP_CRUST_KM, (byte)RockType.IGN_BASALT, (float)timeMa);
+        }
+        else
+        {
+            for (var i = 0; i < cc; i++)
+            {
+                if (hitCount[i] > 0) continue;
+                newHeight[i]   = GAP_FLOOR_HEIGHT;
+                newCrust[i]    = GAP_CRUST_KM;
+                newRockType[i] = (byte)RockType.IGN_BASALT;
+                newRockAge[i]  = (float)timeMa;
+            }
+        }
+
+        // Plate assignment for gaps always on CPU (irregular neighbor search).
         for (var i = 0; i < cc; i++)
         {
             if (hitCount[i] > 0) continue;
-
-            newHeight[i]   = GAP_FLOOR_HEIGHT;
-            newCrust[i]    = GAP_CRUST_KM;
-            newRockType[i] = (byte)RockType.IGN_BASALT;
-            newRockAge[i]  = (float)timeMa;
-            // Assign gap to nearest occupied plate via simple neighbor search.
             newPlateMap[i] = FindNearestPlate(i, newPlateMap, hitCount, gs);
         }
 
@@ -323,25 +342,37 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
     {
         var gs = state.GridSize;
         var numPlates = _plates.Count;
-        var sumX  = new double[numPlates];
-        var sumY  = new double[numPlates];
-        var sumZ  = new double[numPlates];
-        var count = new double[numPlates];
 
-        for (var row = 0; row < gs; row++)
+        double[] sumX, sumY, sumZ, count;
+
+        if (gpu != null)
         {
-            var lat = RowToLat(row, gs);
-            var cosLat = Math.Cos(lat);
-            var sinLat = Math.Sin(lat);
-            for (var col = 0; col < gs; col++)
+            // ── GPU path: atomic per-cell accumulation ────────────────────
+            (sumX, sumY, sumZ, count) = gpu.ComputePlateCenterSums(state.PlateMap, gs, numPlates);
+        }
+        else
+        {
+            // ── CPU fallback ──────────────────────────────────────────────
+            sumX  = new double[numPlates];
+            sumY  = new double[numPlates];
+            sumZ  = new double[numPlates];
+            count = new double[numPlates];
+
+            for (var row = 0; row < gs; row++)
             {
-                var lon = ColToLon(col, gs);
-                int p = state.PlateMap[row * gs + col];
-                if (p >= numPlates) continue;
-                sumX[p] += cosLat * Math.Cos(lon);
-                sumY[p] += cosLat * Math.Sin(lon);
-                sumZ[p] += sinLat;
-                count[p]++;
+                var lat = RowToLat(row, gs);
+                var cosLat = Math.Cos(lat);
+                var sinLat = Math.Sin(lat);
+                for (var col = 0; col < gs; col++)
+                {
+                    var lon = ColToLon(col, gs);
+                    int p = state.PlateMap[row * gs + col];
+                    if (p >= numPlates) continue;
+                    sumX[p] += cosLat * Math.Cos(lon);
+                    sumY[p] += cosLat * Math.Sin(lon);
+                    sumZ[p] += sinLat;
+                    count[p]++;
+                }
             }
         }
 

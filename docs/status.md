@@ -204,3 +204,63 @@ npx playwright test  # E2E
 - [x] `backend/GeoTime.Tests/PlateAdvectionTests.cs` — 10 unit tests: plate map changes after advection, height map modified, gap cells filled with oceanic crust, zero rotation rate preserves state, stratigraphy remaps with cells, plate centers update, collision builds mountains, integration with SimulationOrchestrator, RemapColumns moves stratigraphy, RemapColumns fills gaps.
 
 **Test count**: 337 (previous) + 10 new backend = **347 total backend tests passing**
+
+---
+
+## GPU Performance — ILGPU Kernel Offloading ✅
+
+**Completed** (this session)
+
+### Tectonic Engine GPU Kernels (3 new kernels)
+- [x] `backend/GeoTime.Core/Compute/GpuComputeService.cs` — `AdvectScatterKernel`: GPU-side Rodrigues' rotation (sin/cos/asin/atan2 × 262K cells) computes destination cell index for plate advection. Hybrid approach: GPU handles expensive trig, CPU handles irregular scatter + collision resolution via precomputed `destMap[]`.
+- [x] `backend/GeoTime.Core/Compute/GpuComputeService.cs` — `GapFillKernel`: Per-cell GPU kernel fills empty cells (hitCount == 0) with fresh oceanic crust properties (-4000m height, 7km crust, basalt, current age).
+- [x] `backend/GeoTime.Core/Compute/GpuComputeService.cs` — `UpdatePlateCentersKernel`: Per-cell atomic accumulation of Cartesian coordinates (using `Atomic.Add` on double buffers) for plate center-of-mass computation.
+- [x] `backend/GeoTime.Core/Engines/TectonicEngine.cs` — Wired GPU path with CPU fallback for `AdvectPlates()` (Phase 1: GPU destMap, Phase 2: CPU scatter, Phase 3: GPU gap fill) and `UpdatePlateCenters()`.
+
+### Climate Engine GPU Kernels (2 new kernels)
+- [x] `backend/GeoTime.Core/Compute/GpuComputeService.cs` — `ClimateTemperatureKernel`: Per-cell temperature update on GPU (latitude-based T_base + lapse rate adjustment + GHG/Milankovitch forcing + alpha blending).
+- [x] `backend/GeoTime.Core/Compute/GpuComputeService.cs` — `ComputeWindsKernel`: Per-cell 3-band Hadley/Ferrel/polar wind U/V computation on GPU.
+- [x] `backend/GeoTime.Core/Engines/ClimateEngine.cs` — Wired GPU temperature + wind kernels with CPU fallback; aggregates (tempSum, iceCells) remain on CPU.
+
+### Glacial Engine GPU Kernel (1 new kernel)
+- [x] `backend/GeoTime.Core/Compute/GpuComputeService.cs` — `IceThicknessKernel`: Per-cell ice accumulation/ablation on GPU (accumulation above ELA when temp < glaciation threshold; ablation below).
+- [x] `backend/GeoTime.Core/Engines/GlacialEngine.cs` — Wired GPU ice kernel for Phase 1; erosion/moraine (neighbor-dependent) stays on CPU.
+- [x] `backend/GeoTime.Core/Engines/SurfaceEngine.cs` — Accepts optional `GpuComputeService?`, passes to `GlacialEngine`.
+- [x] `backend/GeoTime.Core/SimulationOrchestrator.cs` — Passes `_gpu` to `SurfaceEngine` constructor.
+
+### ILGPU Dependency
+- [x] `backend/GeoTime.Core/GeoTime.Core.csproj` — Added `ILGPU.Algorithms 1.5.3` for `XMath` trig functions.
+
+**Total new GPU kernels**: 8 (IsostasyKernel + DiffuseKernel already existed = 10 total)
+
+---
+
+## Advanced Log View — Performance Graphs ✅
+
+**Completed** (this session)
+
+- [x] `src/ui/app-shell.ts` — Expandable "▶ Advanced View" section in the log panel:
+  - Tick history ring buffer (last 50 ticks of per-agent timing stats)
+  - Stacked area chart: per-agent timing (Tectonic/Surface/Atmosphere/Vegetation/Biomatter) with color-coded legend
+  - Line chart: total ms per tick with 50ms/100ms threshold zones and color-coded current value
+  - Real-time processing status row showing each agent's current state (idle ○ / running ⟳ / done ✓)
+  - `pushTickHistory()` and `setAdvancedProcessingStatus()` public API
+- [x] `src/main.ts` — Wired `pushTickHistory()` after each advance response; `setAdvancedProcessingStatus()` called on every agent status update
+
+---
+
+## Layer Verification Tests ✅
+
+**Completed** (this session)
+
+- [x] `tests/layer-verification.test.ts` — 28 Vitest tests verifying all layer selections:
+  - Temperature color mapping: extreme cold (blue), freezing (white), hot (red), gradient in cold range
+  - Precipitation color mapping: arid (tan), wet (blue-green), mid-range gradient
+  - Cloud cover color mapping: dry (dark grey), wet (white)
+  - Biomass color mapping: barren (dark), lush (vivid green)
+  - Topography color mapping: deep ocean (blue), shallow ocean, lowland (green), highland (yellow), mountains (brown), peaks (white)
+  - Soil order color mapping: None (grey), all 12 USDA orders distinct, unknown order (grey)
+  - Random point verification: temperature at 5 lat/lon points, precipitation at 4 points, topography at 10 points, biomass at 5 points, plate IDs at 5 points, soil orders at 3 points, cloud cover at 3 points
+  - Cross-layer consistency: single cell checked across all layers for valid values
+
+**Test count**: 379 (previous frontend) + 28 new layer verification = **407 total frontend Vitest tests passing**

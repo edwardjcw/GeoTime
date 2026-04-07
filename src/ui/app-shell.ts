@@ -61,6 +61,15 @@ export class AppShell {
   private logEventsEl: HTMLElement = document.createElement('div');
   private logBtn: HTMLButtonElement = document.createElement('button');
 
+  // ── Advanced log view ──────────────────────────────────────────────────
+  private _advancedViewOpen = false;
+  private _advancedViewBtn: HTMLButtonElement = document.createElement('button');
+  private _advancedViewContainer: HTMLElement = document.createElement('div');
+  private _advancedTimingCanvas: HTMLCanvasElement = document.createElement('canvas');
+  private _advancedLoadCanvas: HTMLCanvasElement = document.createElement('canvas');
+  private _advancedProcessingEl: HTMLElement = document.createElement('div');
+  private _tickHistory: Array<{ tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number; tick: number }> = [];
+
   // ── Inspect panel elements ──────────────────────────────────────────────
   private inspectPanel: HTMLElement;
   private inspectContent: HTMLElement;
@@ -557,6 +566,79 @@ export class AppShell {
     this.logEventsEl = el('div', { display: 'flex', flexDirection: 'column', gap: '2px' });
     this.logEventsEl.textContent = '—';
     this.logPanel.appendChild(this.logEventsEl);
+
+    // ── Advanced View toggle button ──────────────────────────────────────
+    this._advancedViewBtn = document.createElement('button');
+    this._advancedViewBtn.textContent = '▶ Advanced View';
+    Object.assign(this._advancedViewBtn.style, {
+      background: 'rgba(255,255,255,0.06)',
+      border: '1px solid rgba(255,255,255,0.15)',
+      color: '#aaf',
+      cursor: 'pointer',
+      fontSize: '10px',
+      padding: '3px 8px',
+      borderRadius: '3px',
+      marginTop: '8px',
+      width: '100%',
+    });
+    this._advancedViewBtn.addEventListener('click', () => this._toggleAdvancedView());
+    this.logPanel.appendChild(this._advancedViewBtn);
+
+    // ── Advanced View container ───────────────────────────────────────────
+    this._advancedViewContainer = el('div', {
+      display: 'none',
+      flexDirection: 'column',
+      gap: '8px',
+      marginTop: '6px',
+      borderTop: '1px solid rgba(255,255,255,0.1)',
+      paddingTop: '8px',
+    });
+
+    // Processing status section
+    const procTitle = document.createElement('div');
+    procTitle.textContent = 'Current Processing';
+    Object.assign(procTitle.style, { opacity: '0.5', fontSize: '10px' });
+    this._advancedViewContainer.appendChild(procTitle);
+
+    this._advancedProcessingEl = el('div', { fontSize: '11px' });
+    this._advancedProcessingEl.textContent = '— idle —';
+    this._advancedViewContainer.appendChild(this._advancedProcessingEl);
+
+    // Agent Timing History graph
+    const timingTitle = document.createElement('div');
+    timingTitle.textContent = 'Agent Timing History (ms)';
+    Object.assign(timingTitle.style, { opacity: '0.5', fontSize: '10px', marginTop: '4px' });
+    this._advancedViewContainer.appendChild(timingTitle);
+
+    this._advancedTimingCanvas = document.createElement('canvas');
+    this._advancedTimingCanvas.width = 260;
+    this._advancedTimingCanvas.height = 120;
+    Object.assign(this._advancedTimingCanvas.style, {
+      background: 'rgba(0,0,0,0.3)',
+      borderRadius: '3px',
+      width: '100%',
+      height: '120px',
+    });
+    this._advancedViewContainer.appendChild(this._advancedTimingCanvas);
+
+    // Computational Load graph
+    const loadTitle = document.createElement('div');
+    loadTitle.textContent = 'Computational Load (ms per tick)';
+    Object.assign(loadTitle.style, { opacity: '0.5', fontSize: '10px', marginTop: '4px' });
+    this._advancedViewContainer.appendChild(loadTitle);
+
+    this._advancedLoadCanvas = document.createElement('canvas');
+    this._advancedLoadCanvas.width = 260;
+    this._advancedLoadCanvas.height = 80;
+    Object.assign(this._advancedLoadCanvas.style, {
+      background: 'rgba(0,0,0,0.3)',
+      borderRadius: '3px',
+      width: '100%',
+      height: '80px',
+    });
+    this._advancedViewContainer.appendChild(this._advancedLoadCanvas);
+
+    this.logPanel.appendChild(this._advancedViewContainer);
 
     this.root.appendChild(this.logPanel);
 
@@ -1640,6 +1722,185 @@ export class AppShell {
 
   /** Whether the log panel is currently open. */
   get isLogPanelOpen(): boolean { return this.logPanelOpen; }
+
+  // ── Advanced Log View ──────────────────────────────────────────────────
+
+  /** Toggle the advanced view container. */
+  private _toggleAdvancedView(): void {
+    this._advancedViewOpen = !this._advancedViewOpen;
+    this._advancedViewContainer.style.display = this._advancedViewOpen ? 'flex' : 'none';
+    this._advancedViewBtn.textContent = this._advancedViewOpen ? '▼ Advanced View' : '▶ Advanced View';
+    if (this._advancedViewOpen) {
+      // Enlarge log panel for graphs
+      this.logPanel.style.minWidth = '360px';
+      this.logPanel.style.maxHeight = '700px';
+      this._renderAdvancedGraphs();
+    } else {
+      this.logPanel.style.minWidth = '280px';
+      this.logPanel.style.maxHeight = '420px';
+    }
+  }
+
+  /** Push a tick stats snapshot into the history ring buffer (max 50). */
+  pushTickHistory(stats: { tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number }, tickCount: number): void {
+    this._tickHistory.push({ ...stats, tick: tickCount });
+    if (this._tickHistory.length > 50) this._tickHistory.shift();
+    if (this._advancedViewOpen) this._renderAdvancedGraphs();
+  }
+
+  /** Update the processing status indicator. */
+  setAdvancedProcessingStatus(statuses: Record<string, 'idle' | 'running' | 'done'>): void {
+    if (!this._advancedViewOpen) return;
+    const lines: string[] = [];
+    const icons: Record<string, string> = { idle: '○', running: '⟳', done: '✓' };
+    const colors: Record<string, string> = { idle: '#666', running: '#4af', done: '#4c8' };
+    for (const [agent, status] of Object.entries(statuses)) {
+      lines.push(`<span style="color:${colors[status]}">${icons[status]}</span> ${agent}: <span style="color:${colors[status]}">${status}</span>`);
+    }
+    this._advancedProcessingEl.innerHTML = lines.join(' &nbsp;|&nbsp; ');
+  }
+
+  /** Render the timing history and computational load charts on Canvas. */
+  private _renderAdvancedGraphs(): void {
+    this._renderTimingGraph();
+    this._renderLoadGraph();
+  }
+
+  /** Stacked area chart: per-agent timing over tick history. */
+  private _renderTimingGraph(): void {
+    const canvas = this._advancedTimingCanvas;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const data = this._tickHistory;
+    if (data.length < 2) {
+      ctx.fillStyle = '#666';
+      ctx.font = '10px monospace';
+      ctx.fillText('Waiting for tick data…', 10, h / 2);
+      return;
+    }
+
+    // Find max total for Y-axis scaling
+    const maxTotal = Math.max(1, ...data.map(d => d.totalMs));
+    const barW = Math.max(2, (w - 30) / data.length);
+
+    const agents: Array<{ key: keyof typeof data[0]; color: string; label: string }> = [
+      { key: 'biomatterMs', color: '#8b5cf6', label: 'Biomatter' },
+      { key: 'vegetationMs', color: '#22c55e', label: 'Vegetation' },
+      { key: 'atmosphereMs', color: '#60a5fa', label: 'Atmosphere' },
+      { key: 'surfaceMs', color: '#f59e0b', label: 'Surface' },
+      { key: 'tectonicMs', color: '#ef4444', label: 'Tectonic' },
+    ];
+
+    // Draw stacked bars
+    for (let i = 0; i < data.length; i++) {
+      const d = data[i];
+      const x = 25 + i * barW;
+      let y = h - 2;
+      for (const agent of agents) {
+        const val = d[agent.key] as number;
+        const barH = (val / maxTotal) * (h - 15);
+        ctx.fillStyle = agent.color;
+        ctx.fillRect(x, y - barH, barW - 1, barH);
+        y -= barH;
+      }
+    }
+
+    // Y-axis labels
+    ctx.fillStyle = '#888';
+    ctx.font = '9px monospace';
+    ctx.fillText(`${maxTotal}ms`, 0, 10);
+    ctx.fillText('0', 0, h - 2);
+
+    // Legend (compact)
+    let lx = 25;
+    for (const agent of agents.slice().reverse()) {
+      ctx.fillStyle = agent.color;
+      ctx.fillRect(lx, 1, 6, 6);
+      ctx.fillStyle = '#aaa';
+      ctx.fillText(agent.label.substring(0, 4), lx + 8, 7);
+      lx += 40;
+    }
+  }
+
+  /** Line chart: total ms per tick (computational load). */
+  private _renderLoadGraph(): void {
+    const canvas = this._advancedLoadCanvas;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const data = this._tickHistory;
+    if (data.length < 2) {
+      ctx.fillStyle = '#666';
+      ctx.font = '10px monospace';
+      ctx.fillText('Waiting for tick data…', 10, h / 2);
+      return;
+    }
+
+    const maxMs = Math.max(1, ...data.map(d => d.totalMs));
+    const stepX = (w - 30) / (data.length - 1);
+
+    // Threshold zones
+    const thresholds = [
+      { ms: 100, color: 'rgba(239,68,68,0.08)', label: '>100ms (slow)' },
+      { ms: 50, color: 'rgba(245,158,11,0.08)', label: '>50ms' },
+    ];
+    for (const t of thresholds) {
+      if (maxMs > t.ms) {
+        const y = h - 4 - ((t.ms / maxMs) * (h - 14));
+        ctx.fillStyle = t.color;
+        ctx.fillRect(25, y, w - 30, h - 4 - y);
+        ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(25, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#666';
+        ctx.font = '8px monospace';
+        ctx.fillText(`${t.ms}`, 0, y + 3);
+      }
+    }
+
+    // Line
+    ctx.strokeStyle = '#4af';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+      const x = 25 + i * stepX;
+      const y = h - 4 - ((data[i].totalMs / maxMs) * (h - 14));
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Fill under line
+    ctx.lineTo(25 + (data.length - 1) * stepX, h - 4);
+    ctx.lineTo(25, h - 4);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(96,165,250,0.15)';
+    ctx.fill();
+
+    // Labels
+    ctx.fillStyle = '#888';
+    ctx.font = '9px monospace';
+    ctx.fillText(`${maxMs}ms`, 0, 10);
+    ctx.fillText('0', 0, h - 2);
+
+    // Current value
+    const last = data[data.length - 1];
+    const color = last.totalMs > 100 ? '#f84' : last.totalMs > 50 ? '#fb0' : '#4c8';
+    ctx.fillStyle = color;
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText(`${last.totalMs}ms`, w - 50, 10);
+  }
 
   // ── LLM Settings Panel API (Phase D3) ──────────────────────────────────
 
