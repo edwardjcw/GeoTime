@@ -474,6 +474,7 @@ app.MapGet("/api/state/features/labels", (SimulationOrchestrator sim) =>
                 centerLon = f.Current.CenterLon,
                 zoomLevel,
                 status    = f.Current.Status.ToString(),
+                formerNames = f.FormerNames,
             };
         })
         .ToList();

@@ -70,6 +70,12 @@ public class DetectedFeature
     /// "mean_precip_mm", "river_length_km", "discharge_m3s", etc.
     /// </summary>
     public Dictionary<string, float> Metrics { get; init; } = [];
+    /// <summary>
+    /// Accumulated list of former names this feature (or its ancestors) was known by.
+    /// Populated during split, merge, submergence, exposure, and name-evolution events.
+    /// Most recent former name is last.
+    /// </summary>
+    public List<string> FormerNames { get; init; } = [];
 }
 
 /// <summary>Registry of all detected features on the planet.</summary>

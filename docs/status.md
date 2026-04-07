@@ -264,3 +264,19 @@ npx playwright test  # E2E
   - Cross-layer consistency: single cell checked across all layers for valid values
 
 **Test count**: 379 (previous frontend) + 28 new layer verification = **407 total frontend Vitest tests passing**
+
+---
+
+## Historical Label Tracking — Dynamic Surface Name Lineage ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Core/Models/FeatureModels.cs` — Added `List<string> FormerNames` property to `DetectedFeature`. Accumulates all former names from the feature's own history and inherited ancestor names during splits, merges, submergence, exposure, and age-evolution events.
+- [x] `backend/GeoTime.Core/Services/FeatureEvolutionTracker.cs` — Updated split handling (Pass 2 and Pass 3) to call `InheritFormerNames()` on child features, propagating the parent's name lineage. Updated merge handling (Pass 3) to collect all absorbed parents' names into the merged feature. Updated `MergeHistory()` to record old name in `FormerNames` before name evolution (submergence, exposure, age milestone). Updated `CloseFeature()` to copy `FormerNames`. Added `InheritFormerNames()` helper method.
+- [x] `backend/GeoTime.Api/Program.cs` — Updated `GET /api/state/features/labels` endpoint to include `formerNames` in the compact label response.
+- [x] `src/api/backend-client.ts` — Added `formerNames: string[]` to `FeatureLabel` interface.
+- [x] `src/render/label-renderer.ts` — Updated `_syncPool()` to display former names as a subtitle (most recent former name shown as "(formerly X)") and set a tooltip with the full lineage chain ("Former names: A → B → C").
+- [x] `backend/GeoTime.Tests/FeatureEvolutionTests.cs` — 4 new tests: split children inherit parent FormerNames, submergence records old name in FormerNames, merge collects absorbed parent names, FormerNames preserved across ticks.
+- [x] `tests/label-renderer.test.ts` — 4 new tests: former name subtitle display, most recent former name shown, full lineage tooltip, no former names when list empty.
+
+**Test count**: 347 (previous backend) + 4 new = **351 total backend tests**; 407 (previous frontend) + 4 new = **411 total frontend Vitest tests**

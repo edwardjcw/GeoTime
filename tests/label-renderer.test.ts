@@ -20,6 +20,7 @@ function makeLabel(overrides: Partial<FeatureLabel> = {}): FeatureLabel {
     centerLon: 0,
     zoomLevel: 4.0,
     status: 'Active',
+    formerNames: [],
     ...overrides,
   };
 }
@@ -154,5 +155,49 @@ describe('LabelRenderer', () => {
     expect(divs.length).toBe(3);
     // First div text is updated to the new single label
     expect(divs[0].textContent).toBe('Xray');
+  });
+
+  // ── Former names display ──────────────────────────────────────────────────
+
+  it('should display former name as subtitle when formerNames is non-empty', () => {
+    const label = makeLabel({
+      name: 'North Pangea',
+      formerNames: ['Pangea'],
+    });
+    renderer.setLabels([label]);
+    const div = container.querySelector('div') as HTMLElement;
+    const formerSpan = div.querySelector('.label-former-name');
+    expect(formerSpan).not.toBeNull();
+    expect(formerSpan?.textContent).toBe('(formerly Pangea)');
+  });
+
+  it('should show most recent former name as subtitle', () => {
+    const label = makeLabel({
+      name: 'Greater Gondwana',
+      formerNames: ['Pangea', 'Gondwana'],
+    });
+    renderer.setLabels([label]);
+    const div = container.querySelector('div') as HTMLElement;
+    const formerSpan = div.querySelector('.label-former-name');
+    expect(formerSpan?.textContent).toBe('(formerly Gondwana)');
+  });
+
+  it('should set title attribute with full former-name lineage', () => {
+    const label = makeLabel({
+      name: 'North Gondwana',
+      formerNames: ['Pangea', 'Gondwana'],
+    });
+    renderer.setLabels([label]);
+    const div = container.querySelector('div') as HTMLElement;
+    expect(div.title).toBe('Former names: Pangea → Gondwana');
+  });
+
+  it('should not show former names when formerNames is empty', () => {
+    const label = makeLabel({ name: 'Solara', formerNames: [] });
+    renderer.setLabels([label]);
+    const div = container.querySelector('div') as HTMLElement;
+    expect(div.querySelector('.label-former-name')).toBeNull();
+    expect(div.textContent).toBe('Solara');
+    expect(div.title).toBe('');
   });
 });

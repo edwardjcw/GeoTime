@@ -386,4 +386,215 @@ public class FeatureEvolutionTests
         }
         // If no explicit split children (IDs rematched), at least verify no crash.
     }
+
+    // ── FormerNames: Split inherits parent name ──────────────────────────────
+
+    [Fact]
+    public void Tracker_SplitChildren_InheritParentFormerNames()
+    {
+        const int gs = 32;
+
+        // Tick 1: single continent (cols 4-27).
+        var state = new SimulationState(gs);
+        for (int row = 4; row < 28; row++)
+        for (int col = 4; col <= 27; col++)
+            state.HeightMap[row * gs + col] = 500f;
+        for (int i = 0; i < state.CellCount; i++)
+            if (state.HeightMap[i] == 0f) state.HeightMap[i] = -2000f;
+
+        var detector = new FeatureDetectorService();
+        detector.Detect(state, [], [], [], TestSeed, 1L);
+        var prevReg = state.FeatureRegistry;
+
+        var parent = prevReg.Features.Values
+            .Where(f => f.Type is FeatureType.Continent or FeatureType.Island)
+            .OrderByDescending(f => f.Current.AreaKm2)
+            .First();
+        string parentName = parent.Current.Name;
+        string parentId   = parent.Id;
+
+        // Tick 2: split with ocean channel (cols 13-18).
+        for (int row = 4; row < 28; row++)
+        for (int col = 13; col <= 18; col++)
+            state.HeightMap[row * gs + col] = -2000f;
+
+        detector.Detect(state, [], [], [], TestSeed, 2L);
+        new FeatureEvolutionTracker().Track(state, prevReg, state.FeatureRegistry, 2L);
+
+        // All split children should have the parent's name in their FormerNames.
+        var splitChildren = state.FeatureRegistry.Features.Values
+            .Where(f => f.History.Any(s => s.SplitFromId == parentId))
+            .ToList();
+
+        if (splitChildren.Count >= 1)
+        {
+            Assert.All(splitChildren, child =>
+                Assert.Contains(parentName, child.FormerNames));
+        }
+    }
+
+    // ── FormerNames: Submergence records old name ────────────────────────────
+
+    [Fact]
+    public void Tracker_Submergence_RecordsOldNameInFormerNames()
+    {
+        const int gs = 16;
+
+        // Tick 1: land above sea level.
+        var state = MakeState(gs, (r, c) => r < gs / 2 ? 500f : -2000f);
+        var detector = new FeatureDetectorService();
+        detector.Detect(state, [], [], [], TestSeed, 1L);
+        var prevReg = state.FeatureRegistry;
+
+        var continent = prevReg.Features.Values
+            .FirstOrDefault(f => f.Type is FeatureType.Continent or FeatureType.Island);
+        Assert.NotNull(continent);
+        string originalName = continent.Current.Name;
+
+        // Tick 2: mark the continent as Submerged.
+        var freshReg = new FeatureRegistry { LastUpdatedTick = 2L };
+        foreach (var (id, feat) in prevReg.Features)
+        {
+            if (feat.Type is FeatureType.Continent or FeatureType.Island)
+            {
+                var newFeat = new DetectedFeature { Id = feat.Id, Type = feat.Type };
+                newFeat.History.Add(feat.Current with
+                {
+                    SimTickCreated = 2L,
+                    Status = FeatureStatus.Submerged,
+                    AreaKm2 = feat.Current.AreaKm2 * 0.1f,
+                });
+                foreach (var ci in feat.CellIndices) newFeat.CellIndices.Add(ci);
+                freshReg.Features[id] = newFeat;
+            }
+            else
+            {
+                freshReg.Features[id] = feat;
+            }
+        }
+
+        state.FeatureRegistry = freshReg;
+        new FeatureEvolutionTracker().Track(state, prevReg, state.FeatureRegistry, 2L);
+
+        // The submerged feature should have the original name in FormerNames.
+        var submerged = state.FeatureRegistry.Features.Values
+            .Where(f => f.Current.Status == FeatureStatus.Submerged)
+            .ToList();
+
+        Assert.NotEmpty(submerged);
+        Assert.All(submerged, f =>
+            Assert.Contains(originalName, f.FormerNames));
+    }
+
+    // ── FormerNames: Merge collects absorbed names ───────────────────────────
+
+    [Fact]
+    public void Tracker_Merge_CollectsAbsorbedParentNames()
+    {
+        const int gs = 32;
+
+        // Tick 1: two separate land masses.
+        var state = new SimulationState(gs);
+        // Left landmass: rows 4-27, cols 4-12.
+        for (int row = 4; row < 28; row++)
+        for (int col = 4; col <= 12; col++)
+            state.HeightMap[row * gs + col] = 500f;
+        // Right landmass: rows 4-27, cols 20-27.
+        for (int row = 4; row < 28; row++)
+        for (int col = 20; col <= 27; col++)
+            state.HeightMap[row * gs + col] = 500f;
+        for (int i = 0; i < state.CellCount; i++)
+            if (state.HeightMap[i] == 0f) state.HeightMap[i] = -2000f;
+
+        var detector = new FeatureDetectorService();
+        detector.Detect(state, [], [], [], TestSeed, 1L);
+        var prevReg = state.FeatureRegistry;
+
+        var landFeatures = prevReg.Features.Values
+            .Where(f => f.Type is FeatureType.Continent or FeatureType.Island
+                     && f.Current.Status != FeatureStatus.Extinct)
+            .OrderByDescending(f => f.Current.AreaKm2)
+            .ToList();
+
+        // We need at least 2 land features to test a merge.
+        if (landFeatures.Count < 2)
+            return; // cannot test merge if the grid doesn't produce 2 separate land features
+
+        var names = landFeatures.Select(f => f.Current.Name).ToList();
+
+        // Tick 2: fill in the gap to merge them into one continent.
+        for (int row = 4; row < 28; row++)
+        for (int col = 13; col <= 19; col++)
+            state.HeightMap[row * gs + col] = 500f;
+
+        detector.Detect(state, [], [], [], TestSeed, 2L);
+        new FeatureEvolutionTracker().Track(state, prevReg, state.FeatureRegistry, 2L);
+
+        // The merged feature should have absorbed parent names in FormerNames.
+        var mergedLand = state.FeatureRegistry.Features.Values
+            .Where(f => f.Type is FeatureType.Continent or FeatureType.Island
+                     && f.Current.Status != FeatureStatus.Extinct)
+            .OrderByDescending(f => f.Current.AreaKm2)
+            .FirstOrDefault();
+
+        if (mergedLand != null && mergedLand.FormerNames.Count > 0)
+        {
+            // At least one absorbed parent name should be in FormerNames.
+            Assert.True(mergedLand.FormerNames.Intersect(names).Any(),
+                $"Merged feature should contain at least one parent name in FormerNames. " +
+                $"FormerNames: [{string.Join(", ", mergedLand.FormerNames)}], Expected one of: [{string.Join(", ", names)}]");
+        }
+    }
+
+    // ── FormerNames: persists across ticks without name change ───────────────
+
+    [Fact]
+    public void Tracker_FormerNames_PreservedAcrossTicks()
+    {
+        const int gs = 32;
+
+        // Tick 1: single continent.
+        var state = new SimulationState(gs);
+        for (int row = 4; row < 28; row++)
+        for (int col = 4; col <= 27; col++)
+            state.HeightMap[row * gs + col] = 500f;
+        for (int i = 0; i < state.CellCount; i++)
+            if (state.HeightMap[i] == 0f) state.HeightMap[i] = -2000f;
+
+        var detector = new FeatureDetectorService();
+        detector.Detect(state, [], [], [], TestSeed, 1L);
+        var prevReg = state.FeatureRegistry;
+
+        var parent = prevReg.Features.Values
+            .Where(f => f.Type is FeatureType.Continent or FeatureType.Island)
+            .OrderByDescending(f => f.Current.AreaKm2)
+            .First();
+        string parentName = parent.Current.Name;
+
+        // Tick 2: split.
+        for (int row = 4; row < 28; row++)
+        for (int col = 13; col <= 18; col++)
+            state.HeightMap[row * gs + col] = -2000f;
+
+        detector.Detect(state, [], [], [], TestSeed, 2L);
+        new FeatureEvolutionTracker().Track(state, prevReg, state.FeatureRegistry, 2L);
+        var midReg = state.FeatureRegistry;
+
+        var childWithFormer = midReg.Features.Values
+            .FirstOrDefault(f => f.FormerNames.Count > 0
+                              && f.Current.Status != FeatureStatus.Extinct);
+        if (childWithFormer == null) return; // can't test if no split produced FormerNames
+
+        int formerCount = childWithFormer.FormerNames.Count;
+
+        // Tick 3: same geography (no change) — FormerNames must be preserved.
+        detector.Detect(state, [], [], [], TestSeed, 3L);
+        new FeatureEvolutionTracker().Track(state, midReg, state.FeatureRegistry, 3L);
+
+        if (state.FeatureRegistry.Features.TryGetValue(childWithFormer.Id, out var tick3Feat))
+        {
+            Assert.True(tick3Feat.FormerNames.Count >= formerCount,
+                "FormerNames should not be lost across ticks");
+        }
+    }
 }

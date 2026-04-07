@@ -119,6 +119,7 @@ public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
                 centerLat = f.Current.CenterLat,
                 centerLon = f.Current.CenterLon,
                 status    = f.Current.Status.ToString(),
+                formerNames = f.FormerNames,
             })
             .ToList();
 
