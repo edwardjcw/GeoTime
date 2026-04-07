@@ -31,79 +31,82 @@ public sealed class ClimateEngine(int gridSize, GpuComputeService? gpu = null)
         var dT_milan = 2 * Math.Sin(timeMa * 2 * Math.PI / 100);
         var alpha = Math.Min(1, deltaMa * 0.5);
 
-        // Parallel temperature update with thread-local aggregates.
-        var lockObj = new object();
-        double tempSum = 0, eqTempSum = 0;
-        int eqCount = 0, iceCells = 0;
-
-        Parallel.For(0, gridSize,
-            () => (tempSum: 0.0, eqTempSum: 0.0, eqCount: 0, iceCells: 0),
-            (row, _, local) =>
+        // ── GPU path: offload temperature update to the accelerator ──────────
+        if (gpu != null)
+        {
+            gpu.UpdateTemperature(state.TemperatureMap, state.HeightMap, gridSize,
+                (float)alpha, (float)dT_ghg, (float)dT_milan);
+        }
+        else
+        {
+            // CPU fallback: Parallel temperature update
+            Parallel.For(0, gridSize, row =>
             {
                 var latDeg = 90.0 - (double)row / (gridSize - 1) * 180;
                 var latRad = latDeg * Math.PI / 180;
-
                 for (var col = 0; col < gridSize; col++)
                 {
                     var i = row * gridSize + col;
                     double h = state.HeightMap[i];
-                    var isIce = state.TemperatureMap[i] < -5;
-                    if (isIce) local.iceCells++;
-
                     var T_base = 30 * Math.Cos(latRad);
                     var hKm = Math.Max(0, h / 1000);
                     var T_final = T_base - hKm * LAPSE_RATE + dT_ghg + dT_milan;
-
                     state.TemperatureMap[i] = (float)(state.TemperatureMap[i] * (1 - alpha) + T_final * alpha);
-                    local.tempSum += state.TemperatureMap[i];
-
-                    if (!(Math.Abs(latDeg) < 10)) continue;
-                    local.eqTempSum += state.TemperatureMap[i]; local.eqCount++;
-                }
-                return local;
-            },
-            local =>
-            {
-                lock (lockObj)
-                {
-                    tempSum += local.tempSum;
-                    eqTempSum += local.eqTempSum;
-                    eqCount += local.eqCount;
-                    iceCells += local.iceCells;
                 }
             });
+        }
+
+        // Aggregates stay on CPU (reporting only)
+        double tempSum = 0, eqTempSum = 0;
+        int eqCount = 0, iceCells = 0;
+        for (var i = 0; i < cc; i++)
+        {
+            tempSum += state.TemperatureMap[i];
+            if (state.TemperatureMap[i] < -5) iceCells++;
+            var row = i / gridSize;
+            var latDeg = 90.0 - (double)row / (gridSize - 1) * 180;
+            if (Math.Abs(latDeg) < 10) { eqTempSum += state.TemperatureMap[i]; eqCount++; }
+        }
 
         // ── Strategy B.3: GPU temperature diffusion ──────────────────────────
         // Smooth heat across neighbours once per tick using a 5-point Laplacian.
         // GPU path: ILGPU kernel; CPU path: Parallel.For equivalent.
         DiffuseTemperature(state.TemperatureMap);
 
-        // Parallel 3-cell circulation winds (each cell is independent).
-        Parallel.For(0, gridSize, row =>
+        // ── GPU path: offload wind computation to the accelerator ────────────
+        if (gpu != null)
         {
-            var latDeg = 90.0 - (double)row / (gridSize - 1) * 180;
-            var absLat = Math.Abs(latDeg);
-            double sign = latDeg >= 0 ? 1 : -1;
-            for (var col = 0; col < gridSize; col++)
+            gpu.ComputeWinds(state.WindUMap, state.WindVMap, gridSize);
+        }
+        else
+        {
+            // CPU fallback: Parallel 3-cell circulation winds (each cell is independent).
+            Parallel.For(0, gridSize, row =>
             {
-                var i = row * gridSize + col;
-                double u, v;
-                switch (absLat)
+                var latDeg = 90.0 - (double)row / (gridSize - 1) * 180;
+                var absLat = Math.Abs(latDeg);
+                double sign = latDeg >= 0 ? 1 : -1;
+                for (var col = 0; col < gridSize; col++)
                 {
-                    case <= 30:
-                        u = -Math.Cos(absLat * Math.PI / 30); v = sign * -0.3 * Math.Sin(absLat * Math.PI / 30);
-                        break;
-                    case <= 60:
-                        u = Math.Cos((absLat - 45) * Math.PI / 30); v = sign * 0.1 * Math.Cos((absLat - 45) * Math.PI / 30);
-                        break;
-                    default:
-                        u = -Math.Cos((absLat - 75) * Math.PI / 15); v = sign * -0.2 * Math.Sin((absLat - 75) * Math.PI / 15);
-                        break;
+                    var i = row * gridSize + col;
+                    double u, v;
+                    switch (absLat)
+                    {
+                        case <= 30:
+                            u = -Math.Cos(absLat * Math.PI / 30); v = sign * -0.3 * Math.Sin(absLat * Math.PI / 30);
+                            break;
+                        case <= 60:
+                            u = Math.Cos((absLat - 45) * Math.PI / 30); v = sign * 0.1 * Math.Cos((absLat - 45) * Math.PI / 30);
+                            break;
+                        default:
+                            u = -Math.Cos((absLat - 75) * Math.PI / 15); v = sign * -0.2 * Math.Sin((absLat - 75) * Math.PI / 15);
+                            break;
+                    }
+                    state.WindUMap[i] = (float)u;
+                    state.WindVMap[i] = (float)v;
                 }
-                state.WindUMap[i] = (float)u;
-                state.WindVMap[i] = (float)v;
-            }
-        });
+            });
+        }
 
         var meanT = tempSum / cc;
         var eqT = eqCount > 0 ? eqTempSum / eqCount : meanT;

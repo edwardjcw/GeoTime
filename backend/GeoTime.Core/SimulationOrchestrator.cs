@@ -95,7 +95,7 @@ public sealed class SimulationOrchestrator : IDisposable
         _tectonic = new TectonicEngine(Bus, EventLog, seed, 0.1, _gpu);
         _tectonic.Initialize(result.Plates, result.Hotspots, result.Atmosphere, State);
 
-        _surface = new SurfaceEngine(Bus, EventLog, seed, _gridSize, 0.5);
+        _surface = new SurfaceEngine(Bus, EventLog, seed, _gridSize, 0.5, _gpu);
         _surface.Initialize(State, _tectonic.Stratigraphy);
 
         _atmosphere = new AtmosphereEngine(Bus, EventLog, seed, _gridSize, 1.0, _gpu);

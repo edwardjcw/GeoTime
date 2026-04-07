@@ -1,3 +1,4 @@
+using GeoTime.Core.Compute;
 using GeoTime.Core.Models;
 using GeoTime.Core.Kernel;
 using GeoTime.Core.Proc;
@@ -5,10 +6,10 @@ using GeoTime.Core.Proc;
 namespace GeoTime.Core.Engines;
 
 /// <summary>Orchestrator for surface processes: erosion, glacial, weathering, pedogenesis.</summary>
-public sealed class SurfaceEngine(EventBus bus, EventLog log, uint seed, int gridSize, double minTick = 0.5)
+public sealed class SurfaceEngine(EventBus bus, EventLog log, uint seed, int gridSize, double minTick = 0.5, GpuComputeService? gpu = null)
 {
     private readonly ErosionEngine _erosion = new(gridSize);
-    private readonly GlacialEngine _glacial = new(gridSize);
+    private readonly GlacialEngine _glacial = new(gridSize, gpu);
     private readonly WeatheringEngine _weathering = new(gridSize);
     private readonly PedogenesisEngine _pedogenesis = new(gridSize);
     private readonly Xoshiro256ss _rng = new(seed);
