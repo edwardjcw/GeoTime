@@ -139,8 +139,29 @@ export class LabelRenderer {
     for (let i = 0; i < this.labels.length; i++) {
       const label = this.labels[i];
       const div = this.divPool[i];
-      div.textContent = label.name;
       div.className = `label-${label.type.toLowerCase().replace(/_/g, '-')}`;
+
+      // Show current name, with former names as a subtitle when available.
+      if (label.formerNames && label.formerNames.length > 0) {
+        const former = label.formerNames[label.formerNames.length - 1];
+        div.innerHTML = '';
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = label.name;
+        div.appendChild(nameSpan);
+        const formerSpan = document.createElement('span');
+        formerSpan.className = 'label-former-name';
+        Object.assign(formerSpan.style, {
+          display: 'block',
+          fontSize: '9px',
+          opacity: '0.65',
+        });
+        formerSpan.textContent = `(formerly ${former})`;
+        div.appendChild(formerSpan);
+        div.title = `Former names: ${label.formerNames.join(' → ')}`;
+      } else {
+        div.textContent = label.name;
+        div.title = '';
+      }
     }
   }
 }

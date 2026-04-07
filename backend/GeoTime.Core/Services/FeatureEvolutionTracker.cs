@@ -122,6 +122,10 @@ public sealed class FeatureEvolutionTracker
                     };
                     childFeat.History.Clear();
                     childFeat.History.Add(newSnap);
+
+                    // Inherit parent's former-name lineage + parent's own name.
+                    InheritFormerNames(childFeat, prevFeat);
+
                     matchedCurr.Add(childId);
                 }
             }
@@ -187,6 +191,9 @@ public sealed class FeatureEvolutionTracker
                         closed.Metrics["event_merge_tick"] = currentTick;
                         currentRegistry.Features[absId] = closed;
                         matchedPrev.Add(absId);
+
+                        // Collect absorbed parents' names into the merged feature's lineage.
+                        InheritFormerNames(currFeat, absFeat);
                     }
                 }
 
@@ -213,6 +220,9 @@ public sealed class FeatureEvolutionTracker
                         Name           = splitName,
                         SplitFromId    = parentId,
                     });
+
+                    // Inherit parent's former-name lineage + parent's own name.
+                    InheritFormerNames(currFeat, parentFeat);
                 }
             }
 
@@ -251,6 +261,13 @@ public sealed class FeatureEvolutionTracker
         currFeat.History.Clear();
         foreach (var s in oldHistory) currFeat.History.Add(s);
 
+        // Carry forward the accumulated former-name lineage.
+        foreach (var fn in prevFeat.FormerNames)
+        {
+            if (!currFeat.FormerNames.Contains(fn))
+                currFeat.FormerNames.Add(fn);
+        }
+
         // Determine what kind of change occurred, if any.
         var (changed, newStatus, nameReason) = ClassifyChange(prevSnap, currSnap, currentTick);
 
@@ -263,12 +280,21 @@ public sealed class FeatureEvolutionTracker
         // Evolve the name if needed.
         string name = prevSnap.Name;
         if (nameReason.HasValue)
+        {
+            // Record the old name before evolution.
+            if (!currFeat.FormerNames.Contains(prevSnap.Name))
+                currFeat.FormerNames.Add(prevSnap.Name);
             name = FeatureNameGenerator.Evolve(prevSnap.Name, nameReason.Value, 0u, prevFeat.Type, 0);
+        }
 
         // Age milestone honorific.
         long age = currentTick - prevFeat.History[0].SimTickCreated;
         if (age > 0 && age % AgeMilestoneTicks == 0)
+        {
+            if (!currFeat.FormerNames.Contains(name))
+                currFeat.FormerNames.Add(name);
             name = FeatureNameGenerator.Evolve(name, NameChangeReason.RenameByAge, 0u, prevFeat.Type, (int)(age / AgeMilestoneTicks));
+        }
 
         currFeat.History.Add(currSnap with
         {
@@ -328,6 +354,7 @@ public sealed class FeatureEvolutionTracker
         foreach (var p   in feat.AssociatedPlateIds) closed.AssociatedPlateIds.Add(p);
         foreach (var ci  in feat.CellIndices)        closed.CellIndices.Add(ci);
         foreach (var (k, v) in feat.Metrics)         closed.Metrics[k] = v;
+        foreach (var fn  in feat.FormerNames)        closed.FormerNames.Add(fn);
 
         // Replace the final snapshot with the closing one.
         if (closed.History.Count > 0 && closed.History[^1].SimTickExtinct == long.MaxValue)
@@ -356,6 +383,22 @@ public sealed class FeatureEvolutionTracker
         var closed = CloseFeature(prevFeat, closingSnap);
         closed.Metrics["event_extinct_tick"] = currentTick;
         currentRegistry.Features[id] = closed;
+    }
+
+    /// <summary>
+    /// Copies the <paramref name="ancestor"/>'s former names and current name into
+    /// <paramref name="descendant"/>'s FormerNames list, deduplicating entries.
+    /// </summary>
+    private static void InheritFormerNames(DetectedFeature descendant, DetectedFeature ancestor)
+    {
+        foreach (var fn in ancestor.FormerNames)
+        {
+            if (!descendant.FormerNames.Contains(fn))
+                descendant.FormerNames.Add(fn);
+        }
+        var ancestorName = ancestor.Current.Name;
+        if (!string.IsNullOrEmpty(ancestorName) && !descendant.FormerNames.Contains(ancestorName))
+            descendant.FormerNames.Add(ancestorName);
     }
 
     // ── Cell-overlap analysis ─────────────────────────────────────────────────

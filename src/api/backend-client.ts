@@ -108,6 +108,8 @@ export interface FeatureLabel {
   /** Maximum camera distance (globe radius = 1) at which this label is visible. */
   zoomLevel: number;
   status: string;
+  /** Historical names this feature (or its ancestors) was formerly known by. */
+  formerNames: string[];
 }
 
 async function post<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
