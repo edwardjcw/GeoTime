@@ -1006,6 +1006,7 @@ function updateAgentStatuses(phase: string): void {
     console.debug(`[agents] unknown phase: ${phase}`);
   }
   shell.updateAgentStatuses(agentStatuses);
+  shell.setAdvancedProcessingStatus(agentStatuses);
 }
 
 function resetAgentStatuses(): void {
@@ -1013,6 +1014,7 @@ function resetAgentStatuses(): void {
     agentStatuses[key] = 'idle';
   }
   shell.updateAgentStatuses(agentStatuses);
+  shell.setAdvancedProcessingStatus(agentStatuses);
 }
 
 /** Update agent statuses based on last-tick timing stats so the panel shows which engines actually ran. */
@@ -1132,6 +1134,11 @@ function simTick(): void {
       }
       // Use stats from response to update the agent panel with last-tick timing.
       updateAgentStatusesFromStats(lastTickStats);
+
+      // Push tick stats into the advanced log view history for charting.
+      if (lastTickStats) {
+        shell.pushTickHistory(lastTickStats, totalTickCount);
+      }
 
       // Refresh the log panel if it's open.
       if (shell.isLogPanelOpen) {
