@@ -6,10 +6,13 @@ This file is the **first thing to read** when picking up work on GeoTime. It pro
 
 ### Key Principles
 1. **Backend-first**: All simulation logic lives in C# (`backend/GeoTime.Core`). The TypeScript frontend is display-only. New features that affect planet evolution must be implemented as engines or services in `GeoTime.Core`.
-2. **Test as you go**: Every backend change needs xUnit tests (`backend/GeoTime.Tests/`); every frontend change needs Vitest unit tests (`tests/`) and Playwright E2E tests (`e2e/`).
+2. **Test as you go**: Every backend change needs xUnit tests (`backend/GeoTime.Tests/`); every frontend change needs Vitest unit tests (`tests/`) and Playwright E2E tests (`e2e/`). Pull requests should include screenshots.
 3. **Simulation realism**: If a feature affects how the land develops over time (e.g., rivers shaping terrain, ice caps modulating climate), it must be wired into `SimulationOrchestrator.AdvanceSimulationCore` — not left as a passive label.
 4. **Minimal changes**: Change only what is needed. Avoid refactoring unrelated code.
 5. **Build and test before committing**: Run `dotnet test` (backend) and `npx vitest run` (frontend) after changes. Use `report_progress` to push commits.
+6. **Keep Unreal up to date**: An alternative to the frontend is `unreal`. Make sure all features in the frontend are equally represented in `unreal`.
+7. **Update documents**: This document should be updated as a change log for future reference. Readme documents should also be kept up to date.
+8. **GPU**: Every compute change should be implemented for the GPU if it would improve performance.
 
 ### Development Commands
 ```bash
@@ -25,7 +28,7 @@ npx playwright test  # E2E
 
 ### Plan documents
 - `docs/plan-labels.md` — Phase L1–L6: geographic feature detection, naming, labels
-- `docs/plan-descriptions.md` — Other future plans
+- `docs/plan-descriptions.md` — Phase D1-D3: LLM work
 - `GeoTime_Implementation_Plan.md` — Original high-level plan
 
 ---
