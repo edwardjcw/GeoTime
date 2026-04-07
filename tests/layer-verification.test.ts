@@ -134,8 +134,8 @@ describe('Layer Verification — Temperature Color Mapping', () => {
 
   it('should return white-ish for freezing point (0°C)', () => {
     const [r, g, b] = temperatureColor(0);
-    // At 0°C: f=(0+40)/40=1 → [255,255,255]
-    expect(r).toBe(200 + Math.round(0)); // f=0 in second branch
+    // At 0°C: takes the warm branch (t >= 0), f = 0/45 = 0 → [200, 200, 200]
+    expect(r).toBe(200);
     expect(g).toBe(200);
     expect(b).toBe(200);
   });
