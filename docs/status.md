@@ -29,6 +29,7 @@ npx playwright test  # E2E
 ### Plan documents
 - `docs/plan-labels.md` — Phase L1–L6: geographic feature detection, naming, labels
 - `docs/plan-descriptions.md` — Phase D1-D3: LLM work
+- `docs/plan-split.md` — Phase S1–S8: tectonic engine split & performance optimization
 - `GeoTime_Implementation_Plan.md` — Original high-level plan
 
 ---
