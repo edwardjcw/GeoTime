@@ -323,3 +323,18 @@ npx playwright test  # E2E
 - [x] `backend/GeoTime.Tests/SplitPhaseTests.cs` — 5 new tests: `S4_ConcurrentPushLayer_DifferentCells`, `S4_ConcurrentPushLayer_SameStripe`, `S4_ConcurrentErodeAndPush`, `S4_ConcurrentApplyDeformation`, `S4_RemapColumns_AtomicSwap`, `S4_RemapColumns_GapFill`
 
 **Test count**: 355 (previous) + 10 new = **365 total backend tests**
+
+## Phase S5 — GPU Collision Resolution Kernel ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Core/Compute/GpuComputeService.cs` — Added `CollisionScatterKernel` (pass 1: per-source-cell atomic scatter with packed-priority `Atomic.Max` for continental-over-oceanic winner selection) and `CollisionApplyKernel` (pass 2: per-destination-cell copy of winner data with collision uplift effects). `ResolveCollisionsGpu()` dispatches both kernels. Priority encoding: bit 62 = continental flag, bits 31-61 = height as biased integer, bits 0-30 = source index tiebreaker.
+- [x] `backend/GeoTime.Core/Engines/TectonicEngine.cs` — `AdvectPlates()` Phase 2 now uses GPU collision resolution when `gpu != null`, with CPU fallback on failure. Stratigraphy remapping remains CPU-only.
+- [x] `backend/GeoTime.Tests/SplitPhaseTests.cs` — 4 new S5 tests: `S5_GpuCollisionResolution_BasicScatter`, `S5_GpuCollisionResolution_ContinentalWinsOverOceanic`, `S5_GpuCollisionResolution_GapCellsHaveZeroHitCount`, `S5_TectonicEngine_GpuCollision_IntegrationTest`
+
+## Phase S6 — Feature Detection Throttling ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Core/SimulationOrchestrator.cs` — Added `FeatureDetectionInterval` constant (5 ticks) and `_ticksSinceLastDetection` counter. Feature detection (including evolution tracking) only runs every 5 ticks. Counter initialized to `FeatureDetectionInterval - 1` after `GeneratePlanet()` so the first tick always triggers detection. Both sync (`AdvanceSimulationCore`) and async (`AdvanceSimulationCoreAsync`) paths share the same throttling logic.
+- [x] `backend/GeoTime.Tests/SplitPhaseTests.cs` — 3 new S6 tests: `S6_FeatureDetection_RunsOnFirstTick`, `S6_FeatureDetection_SkipsIntermediateTicks`, `S6_FeatureDetection_AsyncPath_ThrottlesCorrectly`

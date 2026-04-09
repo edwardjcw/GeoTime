@@ -352,4 +352,198 @@ public class SplitPhaseTests
             Assert.Equal(RockType.IGN_PILLOW_BASALT, layers[1].RockType);
         }
     }
+
+    // ── S5 — GPU Collision Resolution Kernel Tests ───────────────────────────
+
+    [Fact]
+    public void S5_GpuCollisionResolution_BasicScatter()
+    {
+        // Simple case: each source maps to a unique destination — no collisions.
+        // GPU result should match the source data exactly.
+        const int cc = 16;
+        var destMap = new int[cc];
+        var srcHeight = new float[cc];
+        var srcCrust = new float[cc];
+        var srcRockType = new byte[cc];
+        var srcRockAge = new float[cc];
+        var srcPlateMap = new ushort[cc];
+
+        for (var i = 0; i < cc; i++)
+        {
+            destMap[i] = i; // identity mapping — no collisions
+            srcHeight[i] = 100f + i;
+            srcCrust[i] = 30f;
+            srcRockType[i] = (byte)RockType.IGN_GRANITE;
+            srcRockAge[i] = 1000f;
+            srcPlateMap[i] = 0;
+        }
+
+        var plates = new List<PlateInfo>
+        {
+            new() { Id = 0, IsOceanic = false, AngularVelocity = new() { Lat = 0, Lon = 0, Rate = 1 } },
+        };
+
+        using var gpu = new GpuComputeService();
+        var result = gpu.ResolveCollisionsGpu(destMap, srcHeight, srcCrust, srcRockType,
+            srcRockAge, srcPlateMap, plates, 0.5f);
+
+        for (var i = 0; i < cc; i++)
+        {
+            Assert.Equal(1, result.hitCount[i]);
+            Assert.Equal(srcHeight[i], result.newHeight[i], 0.01);
+            Assert.Equal(srcCrust[i], result.newCrust[i], 0.01);
+            Assert.Equal(srcRockType[i], result.newRockType[i]);
+        }
+    }
+
+    [Fact]
+    public void S5_GpuCollisionResolution_ContinentalWinsOverOceanic()
+    {
+        // Two sources collide at destination 0: one continental, one oceanic.
+        // The continental source should win.
+        var destMap = new int[] { 0, 0, 2, 3 }; // cells 0 and 1 both map to dest 0
+        var srcHeight = new float[] { -4000f, 500f, 100f, 200f }; // cell 0 oceanic (low), cell 1 continental (high)
+        var srcCrust = new float[] { 7f, 35f, 30f, 30f };
+        var srcRockType = new byte[] { (byte)RockType.IGN_BASALT, (byte)RockType.IGN_GRANITE, (byte)RockType.IGN_GRANITE, (byte)RockType.IGN_GRANITE };
+        var srcRockAge = new float[] { 1000f, 500f, 1000f, 1000f };
+        var srcPlateMap = new ushort[] { 0, 1, 1, 1 };
+
+        var plates = new List<PlateInfo>
+        {
+            new() { Id = 0, IsOceanic = true, AngularVelocity = new() { Lat = 0, Lon = 0, Rate = 1 } },
+            new() { Id = 1, IsOceanic = false, AngularVelocity = new() { Lat = 0, Lon = 0, Rate = 1 } },
+        };
+
+        using var gpu = new GpuComputeService();
+        var result = gpu.ResolveCollisionsGpu(destMap, srcHeight, srcCrust, srcRockType,
+            srcRockAge, srcPlateMap, plates, 0.5f);
+
+        // Destination 0 should have the continental cell's data (cell 1)
+        Assert.Equal(2, result.hitCount[0]);
+        Assert.Equal(srcPlateMap[1], result.newPlateMap[0]); // continental plate wins
+        // Continental collision should add uplift
+        Assert.True(result.newHeight[0] > srcHeight[1], "Continental winner should have uplift applied");
+    }
+
+    [Fact]
+    public void S5_GpuCollisionResolution_GapCellsHaveZeroHitCount()
+    {
+        // Some destinations have no source — hitCount should be 0.
+        const int cc = 8;
+        var destMap = new int[cc];
+        var srcHeight = new float[cc];
+        var srcCrust = new float[cc];
+        var srcRockType = new byte[cc];
+        var srcRockAge = new float[cc];
+        var srcPlateMap = new ushort[cc];
+
+        // All cells map to destination 0 — destinations 1..7 are gaps
+        for (var i = 0; i < cc; i++)
+        {
+            destMap[i] = 0;
+            srcHeight[i] = 100f;
+            srcCrust[i] = 30f;
+            srcRockType[i] = (byte)RockType.IGN_GRANITE;
+            srcRockAge[i] = 1000f;
+            srcPlateMap[i] = 0;
+        }
+
+        var plates = new List<PlateInfo>
+        {
+            new() { Id = 0, IsOceanic = false, AngularVelocity = new() { Lat = 0, Lon = 0, Rate = 1 } },
+        };
+
+        using var gpu = new GpuComputeService();
+        var result = gpu.ResolveCollisionsGpu(destMap, srcHeight, srcCrust, srcRockType,
+            srcRockAge, srcPlateMap, plates, 0.5f);
+
+        Assert.Equal(cc, result.hitCount[0]); // All cells landed at dest 0
+        for (var i = 1; i < cc; i++)
+            Assert.Equal(0, result.hitCount[i]); // Gap cells
+    }
+
+    [Fact]
+    public void S5_TectonicEngine_GpuCollision_IntegrationTest()
+    {
+        // Full integration: verify TectonicEngine runs with GPU collision path.
+        var sim = new SimulationOrchestrator(16);
+        sim.GeneratePlanet(42);
+        sim.AdvanceSimulation(0.5);
+        // Should complete without error
+        Assert.True(sim.TickCount == 1);
+        // Heights should be finite (no NaN/Inf from GPU)
+        Assert.True(sim.State.HeightMap.All(h => float.IsFinite(h)),
+            "All height values should be finite after GPU collision resolution");
+        sim.Dispose();
+    }
+
+    // ── S6 — Feature Detection Throttling Tests ─────────────────────────────
+
+    [Fact]
+    public void S6_FeatureDetection_RunsOnFirstTick()
+    {
+        // Feature detection should run on the first tick after planet generation.
+        var sim = new SimulationOrchestrator(16);
+        sim.GeneratePlanet(42);
+
+        // Features are populated after GeneratePlanet
+        var initialCount = sim.State.FeatureRegistry.Features.Count;
+        Assert.True(initialCount > 0, "Features should be detected after generation");
+
+        // After one tick, features should still be present (detection runs on first tick)
+        sim.AdvanceSimulation(0.5);
+        Assert.True(sim.State.FeatureRegistry.Features.Count > 0,
+            "Features should be present after first tick");
+        sim.Dispose();
+    }
+
+    [Fact]
+    public void S6_FeatureDetection_SkipsIntermediateTicks()
+    {
+        // Feature detection should not run on every tick.
+        // With FeatureDetectionInterval=5, detection runs on ticks 1, 6, 11, ...
+        var sim = new SimulationOrchestrator(16);
+        sim.GeneratePlanet(42);
+
+        // Advance 1 tick: detection runs (first tick)
+        sim.AdvanceSimulation(0.5);
+        var tickAfterFirst = sim.State.FeatureRegistry.LastUpdatedTick;
+
+        // Advance 4 more ticks (ticks 2-5): detection should NOT run
+        for (var i = 0; i < 4; i++)
+            sim.AdvanceSimulation(0.5);
+        var tickAfterFive = sim.State.FeatureRegistry.LastUpdatedTick;
+        Assert.Equal(tickAfterFirst, tickAfterFive);
+
+        // 6th tick: detection runs again (interval = 5 ticks since last detection)
+        sim.AdvanceSimulation(0.5);
+        var tickAfterSix = sim.State.FeatureRegistry.LastUpdatedTick;
+        Assert.True(tickAfterSix > tickAfterFive,
+            "Detection should run again after FeatureDetectionInterval ticks");
+
+        sim.Dispose();
+    }
+
+    [Fact]
+    public async Task S6_FeatureDetection_AsyncPath_ThrottlesCorrectly()
+    {
+        // Verify throttling works via the async path too.
+        var sim = new SimulationOrchestrator(16);
+        sim.GeneratePlanet(42);
+
+        // Tick 1: detection runs
+        await sim.AdvanceSimulationAsync(0.5);
+        var tickAfterFirst = sim.State.FeatureRegistry.LastUpdatedTick;
+
+        // Ticks 2-5: detection skipped
+        for (var i = 0; i < 4; i++)
+            await sim.AdvanceSimulationAsync(0.5);
+        Assert.Equal(tickAfterFirst, sim.State.FeatureRegistry.LastUpdatedTick);
+
+        // Tick 6: detection runs
+        await sim.AdvanceSimulationAsync(0.5);
+        Assert.True(sim.State.FeatureRegistry.LastUpdatedTick > tickAfterFirst);
+
+        sim.Dispose();
+    }
 }
