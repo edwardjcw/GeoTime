@@ -265,7 +265,7 @@ public sealed class SimulationOrchestrator : IDisposable
         if (onProgress != null) await onProgress("tectonic");
         sw.Restart();
 
-        var tecSw = new Stopwatch();
+        var tecSw = Stopwatch.StartNew();
         await _tectonic!.TickAsync(Clock.T, deltaMa, async subPhase =>
         {
             // Record sub-phase timing
