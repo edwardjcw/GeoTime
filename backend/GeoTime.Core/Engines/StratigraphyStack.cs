@@ -12,7 +12,7 @@ public sealed class StratigraphyStack
 {
     public const int MAX_LAYERS_PER_CELL = 64;
     private const int STRIPE_COUNT = 256;
-    private readonly ConcurrentDictionary<int, List<StratigraphicLayer>> _stacks = new();
+    private ConcurrentDictionary<int, List<StratigraphicLayer>> _stacks = new();
     private readonly Lock[] _stripeLocks = Enumerable.Range(0, STRIPE_COUNT)
         .Select(_ => new Lock()).ToArray();
 
@@ -148,35 +148,33 @@ public sealed class StratigraphyStack
     /// </summary>
     public void RemapColumns(int[] mapping, int cellCount, int[] hitCount, double timeMa)
     {
-        // Build the new dictionary without holding any locks (reads from _stacks
-        // are safe because no other operation mutates during advection).
-        var newStacks = new Dictionary<int, List<StratigraphicLayer>>();
+        var newStacks = new ConcurrentDictionary<int, List<StratigraphicLayer>>();
 
         for (var src = 0; src < cellCount; src++)
         {
-            List<StratigraphicLayer>? srcStack;
+            List<StratigraphicLayer> snapshot;
             lock (GetStripeLock(src))
             {
-                if (!_stacks.TryGetValue(src, out srcStack) || srcStack.Count == 0)
+                if (!_stacks.TryGetValue(src, out var srcStack) || srcStack.Count == 0)
                     continue;
+                // Snapshot under lock to prevent concurrent modification.
+                snapshot = srcStack.Select(l => l.Clone()).ToList();
             }
 
             var dest = mapping[src];
-            if (!newStacks.TryGetValue(dest, out var destStack))
-            {
-                destStack = new List<StratigraphicLayer>(srcStack.Count);
-                newStacks[dest] = destStack;
-            }
+            var destStack = newStacks.GetOrAdd(dest, _ => new List<StratigraphicLayer>(snapshot.Count));
 
-            foreach (var layer in srcStack)
-                destStack.Add(layer.Clone());
-
-            // Enforce budget.
-            while (destStack.Count > MAX_LAYERS_PER_CELL)
+            lock (GetStripeLock(dest))
             {
-                var bottom = destStack[0];
-                destStack.RemoveAt(0);
-                if (destStack.Count > 0) destStack[0].Thickness += bottom.Thickness;
+                destStack.AddRange(snapshot);
+
+                // Enforce budget.
+                while (destStack.Count > MAX_LAYERS_PER_CELL)
+                {
+                    var bottom = destStack[0];
+                    destStack.RemoveAt(0);
+                    if (destStack.Count > 0) destStack[0].Thickness += bottom.Thickness;
+                }
             }
         }
 
@@ -199,10 +197,8 @@ public sealed class StratigraphyStack
             ];
         }
 
-        // Swap atomically: clear old entries and add new ones.
-        _stacks.Clear();
-        foreach (var (key, value) in newStacks)
-            _stacks[key] = value;
+        // Atomic swap: replace the entire dictionary reference.
+        Interlocked.Exchange(ref _stacks, newStacks);
     }
 
     public int Size => _stacks.Count;
