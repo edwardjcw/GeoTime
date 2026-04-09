@@ -120,6 +120,22 @@ public sealed class GpuComputeService : IDisposable
         ArrayView<byte>,               // isOceanic (per plate)
         float> _collisionApplyKernel;  // deltaMa
 
+    // ── S7: Convergent/Divergent dynamics kernels ────────────────────────────
+    private readonly Action<Index1D,
+        ArrayView<int>,                // boundaryCellIndices
+        ArrayView<int>,                // boundaryTypes  (1=CONVERGENT, 2=DIVERGENT)
+        ArrayView<double>,             // relativeSpeeds
+        ArrayView<byte>,               // isOceanicPlate1 (per boundary)
+        ArrayView<byte>,               // isOceanicPlate2 (per boundary)
+        ArrayView<float>,              // heightMap (read)
+        ArrayView<float>,              // crustMap  (read)
+        float,                         // deltaMa
+        float,                         // timeMa
+        ArrayView<float>,              // heightDelta (output)
+        ArrayView<float>,              // crustDelta  (output)
+        ArrayView<byte>,               // setBasalt   (output: 1 if divergent cell should become basalt)
+        ArrayView<float>> _boundaryDynamicsKernel; // newAge (output: age for divergent basalt cells)
+
     /// <summary>Human-readable compute device description for the UI.</summary>
     public ComputeInfo Info { get; }
 
@@ -274,6 +290,17 @@ public sealed class GpuComputeService : IDisposable
                 ArrayView<float>, ArrayView<float>, ArrayView<byte>, ArrayView<float>, ArrayView<ushort>,
                 ArrayView<byte>, float>(
                 CollisionApplyKernel);
+
+        // S7: Boundary dynamics (convergent/divergent) kernel
+        _boundaryDynamicsKernel = _accelerator
+            .LoadAutoGroupedStreamKernel<Index1D,
+                ArrayView<int>, ArrayView<int>, ArrayView<double>,
+                ArrayView<byte>, ArrayView<byte>,
+                ArrayView<float>, ArrayView<float>,
+                float, float,
+                ArrayView<float>, ArrayView<float>,
+                ArrayView<byte>, ArrayView<float>>(
+                BoundaryDynamicsKernel);
     }
 
     /// <summary>
@@ -1304,6 +1331,189 @@ public sealed class GpuComputeService : IDisposable
         }
 
         return boundaries;
+    }
+
+    // ── S7: GPU Boundary Dynamics (Convergent/Divergent) ─────────────────────
+
+    /// <summary>
+    /// ILGPU kernel — Compute height and crust deltas for boundary cells.
+    /// Convergent boundaries: continent-continent collision → uplift + crust thickening;
+    ///   oceanic-continental or oceanic-oceanic subduction → depression + crust thinning.
+    /// Divergent boundaries: crust thinning based on relative speed.
+    /// </summary>
+    static void BoundaryDynamicsKernel(
+        Index1D idx,
+        ArrayView<int> cellIndices,
+        ArrayView<int> boundaryTypes,     // 1=CONVERGENT, 2=DIVERGENT
+        ArrayView<double> relativeSpeeds,
+        ArrayView<byte> isOceanicP1,      // per boundary entry: 1=oceanic, 0=continental
+        ArrayView<byte> isOceanicP2,      // per boundary entry
+        ArrayView<float> heightMap,       // read-only (current state)
+        ArrayView<float> crustMap,        // read-only (current state)
+        float deltaMa,
+        float timeMa,
+        ArrayView<float> heightDelta,     // output: additive delta for height
+        ArrayView<float> crustDelta,      // output: additive delta for crust
+        ArrayView<byte> setBasalt,        // output: 1 if cell should become basalt
+        ArrayView<float> newAge)          // output: new rock age for basalt cells
+    {
+        int ci = cellIndices[idx];
+        int bType = boundaryTypes[idx];
+        double relSpeed = relativeSpeeds[idx];
+
+        if (bType == 1) // CONVERGENT
+        {
+            bool p1Oceanic = isOceanicP1[idx] == 1;
+            bool p2Oceanic = isOceanicP2[idx] == 1;
+
+            if (!p1Oceanic && !p2Oceanic)
+            {
+                // Continent-continent collision: uplift + crust thickening
+                heightDelta[idx] = (float)(100.0 * deltaMa * relSpeed);
+                crustDelta[idx]  = (float)(2.0 * deltaMa * relSpeed);
+            }
+            else
+            {
+                // Subduction (at least one plate is oceanic)
+                heightDelta[idx] = (float)(-50.0 * deltaMa);
+                float currentCrust = crustMap[ci];
+                float thinned = currentCrust - (float)(0.5 * deltaMa);
+                float clampedCrust = thinned < 3.0f ? 3.0f : thinned;
+                crustDelta[idx] = clampedCrust - currentCrust;
+            }
+            setBasalt[idx] = 0;
+            newAge[idx] = 0;
+        }
+        else if (bType == 2) // DIVERGENT
+        {
+            float currentCrust = crustMap[ci];
+            float thinning = (float)(0.3 * deltaMa * relSpeed);
+            float thinned = currentCrust - thinning;
+            float clampedCrust = thinned < 3.0f ? 3.0f : thinned;
+            crustDelta[idx] = clampedCrust - currentCrust;
+            heightDelta[idx] = 0;
+
+            // If crust is thin enough, set to basalt
+            if (clampedCrust < 10.0f)
+            {
+                setBasalt[idx] = 1;
+                newAge[idx] = timeMa;
+            }
+            else
+            {
+                setBasalt[idx] = 0;
+                newAge[idx] = 0;
+            }
+        }
+        else
+        {
+            heightDelta[idx] = 0;
+            crustDelta[idx] = 0;
+            setBasalt[idx] = 0;
+            newAge[idx] = 0;
+        }
+    }
+
+    /// <summary>
+    /// Process convergent and divergent boundary dynamics on the GPU.
+    /// Returns delta buffers that the CPU applies to the simulation state.
+    /// Stratigraphy deformation for continent-continent collisions must be
+    /// handled separately on the CPU after applying the deltas.
+    /// </summary>
+    /// <param name="boundaries">Classified boundary cells.</param>
+    /// <param name="plates">Plate definitions (for IsOceanic flag).</param>
+    /// <param name="heightMap">Current height map (read-only on GPU).</param>
+    /// <param name="crustMap">Current crust thickness map (read-only on GPU).</param>
+    /// <param name="deltaMa">Time step in million years.</param>
+    /// <param name="timeMa">Current simulation time in Ma.</param>
+    /// <returns>Per-boundary-entry delta buffers and flags.</returns>
+    public (float[] heightDelta, float[] crustDelta, byte[] setBasalt, float[] newAge,
+            int[] cellIndices, bool[] isCollision) ProcessBoundaryDynamicsGpu(
+        List<Models.BoundaryCell> boundaries,
+        List<Models.PlateInfo> plates,
+        float[] heightMap, float[] crustMap,
+        float deltaMa, float timeMa)
+    {
+        // Filter to convergent + divergent only
+        var filtered = boundaries
+            .Where(b => b.Type == Models.BoundaryType.CONVERGENT || b.Type == Models.BoundaryType.DIVERGENT)
+            .ToList();
+
+        var count = filtered.Count;
+        if (count == 0)
+            return ([], [], [], [], [], []);
+
+        var cellIndices = new int[count];
+        var boundaryTypes = new int[count];
+        var relativeSpeeds = new double[count];
+        var isOceanicP1 = new byte[count];
+        var isOceanicP2 = new byte[count];
+        var isCollision = new bool[count]; // track which entries are cont-cont collisions
+
+        for (var i = 0; i < count; i++)
+        {
+            var b = filtered[i];
+            cellIndices[i] = b.CellIndex;
+            boundaryTypes[i] = (int)b.Type;
+            relativeSpeeds[i] = b.RelativeSpeed;
+            isOceanicP1[i] = (b.Plate1 < plates.Count && plates[b.Plate1].IsOceanic) ? (byte)1 : (byte)0;
+            isOceanicP2[i] = (b.Plate2 < plates.Count && plates[b.Plate2].IsOceanic) ? (byte)1 : (byte)0;
+            isCollision[i] = b.Type == Models.BoundaryType.CONVERGENT
+                && !plates[b.Plate1].IsOceanic && !plates[b.Plate2].IsOceanic;
+        }
+
+        var heightDelta = new float[count];
+        var crustDelta = new float[count];
+        var setBasalt = new byte[count];
+        var newAge = new float[count];
+        var cc = heightMap.Length;
+
+        using var ciBuf   = _accelerator.Allocate1D<int>(count);
+        using var btBuf   = _accelerator.Allocate1D<int>(count);
+        using var rsBuf   = _accelerator.Allocate1D<double>(count);
+        using var op1Buf  = _accelerator.Allocate1D<byte>(count);
+        using var op2Buf  = _accelerator.Allocate1D<byte>(count);
+        using var hBuf    = _accelerator.Allocate1D<float>(cc);
+        using var cBuf    = _accelerator.Allocate1D<float>(cc);
+        using var hdBuf   = _accelerator.Allocate1D<float>(count);
+        using var cdBuf   = _accelerator.Allocate1D<float>(count);
+        using var sbBuf   = _accelerator.Allocate1D<byte>(count);
+        using var naBuf   = _accelerator.Allocate1D<float>(count);
+
+        try
+        {
+            ciBuf.CopyFromCPU(cellIndices);
+            btBuf.CopyFromCPU(boundaryTypes);
+            rsBuf.CopyFromCPU(relativeSpeeds);
+            op1Buf.CopyFromCPU(isOceanicP1);
+            op2Buf.CopyFromCPU(isOceanicP2);
+            hBuf.CopyFromCPU(heightMap);
+            cBuf.CopyFromCPU(crustMap);
+
+            _boundaryDynamicsKernel(count,
+                ciBuf.View, btBuf.View, rsBuf.View,
+                op1Buf.View, op2Buf.View,
+                hBuf.View, cBuf.View,
+                deltaMa, timeMa,
+                hdBuf.View, cdBuf.View,
+                sbBuf.View, naBuf.View);
+            _accelerator.Synchronize();
+
+            hdBuf.CopyToCPU(heightDelta);
+            cdBuf.CopyToCPU(crustDelta);
+            sbBuf.CopyToCPU(setBasalt);
+            naBuf.CopyToCPU(newAge);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"GPU boundary dynamics failed: {ex.Message}");
+            throw new InvalidOperationException(
+                $"GPU boundary dynamics failed (accelerator: {Info.AcceleratorType}). " +
+                "This may indicate a GPU driver issue or incompatible accelerator state.",
+                ex);
+        }
+
+        return (heightDelta, crustDelta, setBasalt, newAge, cellIndices, isCollision);
     }
 
     public void Dispose()

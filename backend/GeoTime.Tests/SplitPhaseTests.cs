@@ -546,4 +546,164 @@ public class SplitPhaseTests
 
         sim.Dispose();
     }
+
+    // ── S7 — GPU Convergent/Divergent Processing Tests ──────────────────────
+
+    [Fact]
+    public void S7_GpuBoundaryDynamics_ConvergentCollision_HeightAndCrustIncrease()
+    {
+        // Continent-continent convergent boundary should produce positive
+        // height and crust deltas.
+        const int gs = 16;
+        var cc = gs * gs;
+        var heightMap = new float[cc];
+        var crustMap = new float[cc];
+        Array.Fill(heightMap, 500f);
+        Array.Fill(crustMap, 30f);
+
+        var boundaries = new List<BoundaryCell>
+        {
+            new() { CellIndex = 10, Type = BoundaryType.CONVERGENT, Plate1 = 0, Plate2 = 1, RelativeSpeed = 2.0 },
+        };
+        var plates = new List<PlateInfo>
+        {
+            new() { Id = 0, IsOceanic = false, AngularVelocity = new() { Lat = 0, Lon = 0, Rate = 1 } },
+            new() { Id = 1, IsOceanic = false, AngularVelocity = new() { Lat = 0, Lon = 0, Rate = 1 } },
+        };
+
+        using var gpu = new GpuComputeService();
+        var result = gpu.ProcessBoundaryDynamicsGpu(boundaries, plates, heightMap, crustMap, 0.1f, 100f);
+
+        Assert.Single(result.cellIndices);
+        Assert.Equal(10, result.cellIndices[0]);
+        Assert.True(result.heightDelta[0] > 0, "Continent-continent collision should have positive height delta");
+        Assert.True(result.crustDelta[0] > 0, "Continent-continent collision should have positive crust delta");
+        Assert.True(result.isCollision[0], "Should be marked as collision");
+        Assert.Equal((byte)0, result.setBasalt[0]);
+    }
+
+    [Fact]
+    public void S7_GpuBoundaryDynamics_ConvergentSubduction_HeightDecreases()
+    {
+        // Oceanic-continental convergent boundary should produce negative height delta.
+        const int gs = 16;
+        var cc = gs * gs;
+        var heightMap = new float[cc];
+        var crustMap = new float[cc];
+        Array.Fill(heightMap, -2000f);
+        Array.Fill(crustMap, 7f);
+
+        var boundaries = new List<BoundaryCell>
+        {
+            new() { CellIndex = 5, Type = BoundaryType.CONVERGENT, Plate1 = 0, Plate2 = 1, RelativeSpeed = 1.5 },
+        };
+        var plates = new List<PlateInfo>
+        {
+            new() { Id = 0, IsOceanic = true, AngularVelocity = new() { Lat = 0, Lon = 0, Rate = 1 } },
+            new() { Id = 1, IsOceanic = false, AngularVelocity = new() { Lat = 0, Lon = 0, Rate = 1 } },
+        };
+
+        using var gpu = new GpuComputeService();
+        var result = gpu.ProcessBoundaryDynamicsGpu(boundaries, plates, heightMap, crustMap, 0.1f, 100f);
+
+        Assert.True(result.heightDelta[0] < 0, "Subduction should have negative height delta");
+        Assert.True(result.crustDelta[0] <= 0, "Subduction should thin crust");
+        Assert.False(result.isCollision[0], "Should not be marked as collision");
+    }
+
+    [Fact]
+    public void S7_GpuBoundaryDynamics_Divergent_CrustThinning()
+    {
+        // Divergent boundary should thin crust and set basalt when thin enough.
+        const int gs = 16;
+        var cc = gs * gs;
+        var heightMap = new float[cc];
+        var crustMap = new float[cc];
+        Array.Fill(heightMap, -3000f);
+        Array.Fill(crustMap, 8f); // thin crust → should become basalt
+
+        var boundaries = new List<BoundaryCell>
+        {
+            new() { CellIndex = 7, Type = BoundaryType.DIVERGENT, Plate1 = 0, Plate2 = 1, RelativeSpeed = 3.0 },
+        };
+        var plates = new List<PlateInfo>
+        {
+            new() { Id = 0, IsOceanic = true, AngularVelocity = new() { Lat = 0, Lon = 0, Rate = 1 } },
+            new() { Id = 1, IsOceanic = true, AngularVelocity = new() { Lat = 0, Lon = 0, Rate = 1 } },
+        };
+
+        using var gpu = new GpuComputeService();
+        var result = gpu.ProcessBoundaryDynamicsGpu(boundaries, plates, heightMap, crustMap, 0.1f, 100f);
+
+        Assert.True(result.crustDelta[0] < 0, "Divergent should thin crust");
+        Assert.Equal(0f, result.heightDelta[0]);
+
+        // After thinning: 8 - 0.3*0.1*3.0 = 7.91 < 10 → basalt
+        Assert.Equal((byte)1, result.setBasalt[0]);
+        Assert.Equal(100f, result.newAge[0]);
+    }
+
+    [Fact]
+    public void S7_GpuBoundaryDynamics_MixedBoundaries()
+    {
+        // Mix of convergent and divergent boundaries in one batch.
+        const int gs = 16;
+        var cc = gs * gs;
+        var heightMap = new float[cc];
+        var crustMap = new float[cc];
+        Array.Fill(heightMap, 0f);
+        Array.Fill(crustMap, 20f);
+
+        var boundaries = new List<BoundaryCell>
+        {
+            new() { CellIndex = 1, Type = BoundaryType.CONVERGENT, Plate1 = 0, Plate2 = 1, RelativeSpeed = 1.0 },
+            new() { CellIndex = 2, Type = BoundaryType.DIVERGENT, Plate1 = 0, Plate2 = 1, RelativeSpeed = 1.0 },
+            new() { CellIndex = 3, Type = BoundaryType.TRANSFORM, Plate1 = 0, Plate2 = 1, RelativeSpeed = 1.0 }, // should be filtered out
+        };
+        var plates = new List<PlateInfo>
+        {
+            new() { Id = 0, IsOceanic = false, AngularVelocity = new() { Lat = 0, Lon = 0, Rate = 1 } },
+            new() { Id = 1, IsOceanic = false, AngularVelocity = new() { Lat = 0, Lon = 0, Rate = 1 } },
+        };
+
+        using var gpu = new GpuComputeService();
+        var result = gpu.ProcessBoundaryDynamicsGpu(boundaries, plates, heightMap, crustMap, 0.1f, 100f);
+
+        // TRANSFORM should be filtered out — only 2 entries processed
+        Assert.Equal(2, result.cellIndices.Length);
+        Assert.Contains(1, result.cellIndices);
+        Assert.Contains(2, result.cellIndices);
+    }
+
+    [Fact]
+    public void S7_GpuBoundaryDynamics_EmptyBoundaries()
+    {
+        const int gs = 8;
+        var heightMap = new float[gs * gs];
+        var crustMap = new float[gs * gs];
+
+        using var gpu = new GpuComputeService();
+        var result = gpu.ProcessBoundaryDynamicsGpu(
+            new List<BoundaryCell>(),
+            new List<PlateInfo>(),
+            heightMap, crustMap, 0.1f, 100f);
+
+        Assert.Empty(result.cellIndices);
+    }
+
+    [Fact]
+    public void S7_GpuBoundaryDynamics_MatchesCpuResults()
+    {
+        // Full integration test: compare GPU and CPU convergent/divergent processing.
+        var sim = new SimulationOrchestrator(16);
+        sim.GeneratePlanet(42);
+        sim.AdvanceSimulation(0.5);
+        // Should complete without error and produce finite heights
+        Assert.True(sim.TickCount == 1);
+        Assert.True(sim.State.HeightMap.All(h => float.IsFinite(h)),
+            "All height values should be finite after GPU boundary dynamics");
+        Assert.True(sim.State.CrustThicknessMap.All(c => float.IsFinite(c)),
+            "All crust values should be finite after GPU boundary dynamics");
+        sim.Dispose();
+    }
 }

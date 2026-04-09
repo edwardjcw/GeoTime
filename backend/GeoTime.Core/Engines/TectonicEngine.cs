@@ -142,8 +142,7 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         var gs = state.GridSize;
 
         var boundaries = _cachedBoundaries ?? ClassifyBoundaries(state.PlateMap, _plates, gs);
-        ProcessConvergent(boundaries, deltaMa, timeMa, state);
-        ProcessDivergent(boundaries, deltaMa, timeMa, state);
+        ProcessBoundaryDynamics(boundaries, deltaMa, timeMa, state);
         ApplyIsostasy(state, deltaMa);
 
         var eruptions = VolcanismEngine.Tick(timeMa, deltaMa, boundaries, _hotspots, _plates, state, Stratigraphy, _rng);
@@ -162,6 +161,85 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         var (co2, _) = VolcanismEngine.TotalDegassing(eruptions);
         _atmosphere.CO2 += co2 * 1e-6;
         return eruptions;
+    }
+
+    // ── S7: GPU-accelerated boundary dynamics with CPU fallback ──────────────
+
+    /// <summary>
+    /// Process convergent and divergent boundary cells using GPU when available,
+    /// falling back to the original CPU path.  GPU computes height/crust deltas
+    /// in parallel; CPU applies stratigraphy deformation for collision cells and
+    /// emits plate-collision events.
+    /// </summary>
+    private void ProcessBoundaryDynamics(List<BoundaryCell> boundaries, double deltaMa, double timeMa, SimulationState state)
+    {
+        if (gpu != null)
+        {
+            try
+            {
+                ProcessBoundaryDynamicsGpu(boundaries, deltaMa, timeMa, state);
+                return;
+            }
+            catch
+            {
+                // GPU processing failed — fall back to CPU
+            }
+        }
+
+        // CPU fallback: original sequential processing
+        ProcessConvergent(boundaries, deltaMa, timeMa, state);
+        ProcessDivergent(boundaries, deltaMa, timeMa, state);
+    }
+
+    /// <summary>
+    /// GPU path: offload height/crust delta computation to the GPU, then apply
+    /// results on the CPU.  Stratigraphy deformation and event logging run on
+    /// the CPU since they involve dictionary operations and side effects.
+    /// </summary>
+    private void ProcessBoundaryDynamicsGpu(List<BoundaryCell> boundaries, double deltaMa, double timeMa, SimulationState state)
+    {
+        var result = gpu!.ProcessBoundaryDynamicsGpu(
+            boundaries, _plates,
+            state.HeightMap, state.CrustThicknessMap,
+            (float)deltaMa, (float)timeMa);
+
+        if (result.cellIndices.Length == 0) return;
+
+        // Apply GPU-computed deltas to state arrays
+        for (var i = 0; i < result.cellIndices.Length; i++)
+        {
+            var ci = result.cellIndices[i];
+            state.HeightMap[ci] += result.heightDelta[i];
+            state.CrustThicknessMap[ci] += result.crustDelta[i];
+
+            // Divergent: set rock type to basalt if flagged
+            if (result.setBasalt[i] == 1)
+            {
+                state.RockTypeMap[ci] = (byte)RockType.IGN_BASALT;
+                state.RockAgeMap[ci] = result.newAge[i];
+            }
+
+            // Continent-continent collision: apply stratigraphy deformation on CPU
+            if (result.isCollision[i])
+            {
+                Stratigraphy.ApplyDeformation(ci, 2 * deltaMa, 0, DeformationType.FOLDED);
+            }
+        }
+
+        // Emit collision events for high-speed continent-continent boundaries
+        foreach (var b in boundaries.Where(b => b.Type == BoundaryType.CONVERGENT && b.RelativeSpeed > 2.0))
+        {
+            if (b.Plate1 < _plates.Count && b.Plate2 < _plates.Count
+                && !_plates[b.Plate1].IsOceanic && !_plates[b.Plate2].IsOceanic)
+            {
+                bus.Emit("PLATE_COLLISION", new { plate1 = b.Plate1, plate2 = b.Plate2 });
+                eventLog.Record(new GeoLogEntry
+                {
+                    TimeMa = timeMa, Type = "PLATE_COLLISION",
+                    Description = $"Collision between plates {b.Plate1} and {b.Plate2}",
+                });
+            }
+        }
     }
 
     // ── Boundary classification (S3: GPU with CPU fallback) ────────────────────
