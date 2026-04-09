@@ -612,7 +612,7 @@ public sealed class GpuComputeService : IDisposable
     /// <summary>
     /// ILGPU kernel — Pass 1: For each source cell, atomically increment the
     /// hit count at its destination and compete for the winner slot using a
-    /// packed priority value.  Priority encodes: continental &gt; oceanic, then
+    /// packed priority value.  Priority encodes: continental over oceanic, then
     /// higher height wins, with the source index as a tiebreaker.
     /// </summary>
     static void CollisionScatterKernel(
@@ -631,19 +631,15 @@ public sealed class GpuComputeService : IDisposable
         int plateIdx = srcPlateMap[idx];
         int isContinental = isOceanic[plateIdx] == 0 ? 1 : 0;
 
-        // Pack priority: bit 62 = continental flag, bits 31..61 = height as biased int,
-        // bits 0..30 = source index (tiebreaker).
-        // floatBitsToInt maps height to an ordered integer (works correctly for
-        // non-NaN positive/negative floats when biased by adding int.MaxValue for negatives).
+        // Pack priority: bit 62 = continental flag, bits 31–61 = height as ordered int
+        // (31 bits), bits 0–30 = source index tiebreaker (31 bits).
+        // IEEE 754 float-to-ordered-int: flip all bits for negatives so they sort
+        // below positives.  Positive floats already sort correctly as raw ints.
         int heightBits = (int)Interop.FloatAsInt(srcHeight[idx]);
-        // Bias so that negative floats sort correctly: flip all bits for negatives,
-        // or flip sign bit for positives.
         if (heightBits < 0)
-            heightBits = ~heightBits;           // fully negative → small positive
-        else
-            heightBits = heightBits ^ (1 << 30); // positive → large positive (flip bit 30 to avoid sign issues in long packing)
+            heightBits = ~heightBits; // negative float → small non-negative int
 
-        // Ensure heightBits is non-negative for clean packing
+        // Mask to 31 bits for clean packing into the long priority value
         heightBits &= 0x7FFFFFFF;
 
         long priority = ((long)isContinental << 62) | ((long)heightBits << 31) | (long)(idx & 0x7FFFFFFF);

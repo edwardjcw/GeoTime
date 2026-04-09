@@ -104,7 +104,7 @@ public sealed class SimulationOrchestrator : IDisposable
         EventLog.Clear();
         Snapshots.Clear();
         TickCount = 0;
-        _ticksSinceLastDetection = FeatureDetectionInterval - 1; // S6: first tick will trigger detection
+        _ticksSinceLastDetection = FeatureDetectionInterval - 1; // S6: first increment reaches threshold → detection runs on tick 1
 
         _tectonic = new TectonicEngine(Bus, EventLog, seed, 0.1, _gpu);
         _tectonic.Initialize(result.Plates, result.Hotspots, result.Atmosphere, State);
