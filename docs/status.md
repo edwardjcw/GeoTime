@@ -338,3 +338,22 @@ npx playwright test  # E2E
 
 - [x] `backend/GeoTime.Core/SimulationOrchestrator.cs` — Added `FeatureDetectionInterval` constant (5 ticks) and `_ticksSinceLastDetection` counter. Feature detection (including evolution tracking) only runs every 5 ticks. Counter initialized to `FeatureDetectionInterval - 1` after `GeneratePlanet()` so the first tick always triggers detection. Both sync (`AdvanceSimulationCore`) and async (`AdvanceSimulationCoreAsync`) paths share the same throttling logic.
 - [x] `backend/GeoTime.Tests/SplitPhaseTests.cs` — 3 new S6 tests: `S6_FeatureDetection_RunsOnFirstTick`, `S6_FeatureDetection_SkipsIntermediateTicks`, `S6_FeatureDetection_AsyncPath_ThrottlesCorrectly`
+
+## Phase S7 — GPU Convergent/Divergent Processing ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Core/Compute/GpuComputeService.cs` — Added `BoundaryDynamicsKernel` ILGPU kernel: computes height and crust deltas for convergent (continent-continent collision = uplift + crust thickening; subduction = depression + crust thinning) and divergent (crust thinning, basalt flag) boundary cells in a single kernel pass. Added `ProcessBoundaryDynamicsGpu()` public method that uploads boundary cell data, runs the kernel, and returns per-entry delta buffers (heightDelta, crustDelta, setBasalt, newAge, cellIndices, isCollision).
+- [x] `backend/GeoTime.Core/Engines/TectonicEngine.cs` — Added `ProcessBoundaryDynamics()` dispatcher (GPU with CPU fallback) and `ProcessBoundaryDynamicsGpu()` that applies GPU-computed deltas to state arrays, handles stratigraphy deformation for collision cells on CPU, and emits plate collision events. `ProcessTick()` now calls `ProcessBoundaryDynamics()` instead of separate `ProcessConvergent()`/`ProcessDivergent()` calls.
+- [x] `backend/GeoTime.Tests/SplitPhaseTests.cs` — 7 new S7 tests: convergent collision (height+crust increase), convergent subduction (height decrease), divergent (crust thinning + basalt), mixed boundaries, empty boundaries, GPU-CPU result matching integration test
+
+## Phase S8 — Frontend Incremental Rendering ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Api/SimulationHub.cs` — Added `PushIncrementalHeightAsync()` that sends height-only data (1 MB) via `IncrementalStateData` SignalR message with `phase` field. `AdvanceSimulation()` progress callback pushes incremental height after `tectonic:collision` and `surface` phases.
+- [x] `backend/GeoTime.Api/Program.cs` — REST `/api/simulation/advance` endpoint also pushes `IncrementalStateData` via hub context after collision and surface phases.
+- [x] `src/api/backend-client.ts` — Added `onIncrementalStateData` handler to `SimulationEventHandler` type. Added `IncrementalStateData` case to WebSocket message routing, handling Uint8Array, ArrayBuffer, and base64 string encodings of the height map.
+- [x] `src/main.ts` — Added `onIncrementalStateData` handler to the SignalR socket: decodes the height map as Float32Array and calls `renderer.updateHeightMap()` mid-tick, guarded by `pendingSimRequest` to avoid stale updates.
+- [x] `backend/GeoTime.Tests/SignalRIntegrationTests.cs` — 1 new S8 test: verifies `IncrementalStateData` is received during hub `AdvanceSimulation` with `tectonic:collision` phase.
+- [x] `tests/incremental-state.test.ts` — 4 new Vitest tests: type verification, event decoding, Float32Array roundtrip, stale update guard.

@@ -205,6 +205,11 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
 
         if (result.cellIndices.Length == 0) return;
 
+        // Filter to convergent+divergent once for collision event tracking
+        var filtered = boundaries
+            .Where(b => b.Type == BoundaryType.CONVERGENT || b.Type == BoundaryType.DIVERGENT)
+            .ToList();
+
         // Apply GPU-computed deltas to state arrays
         for (var i = 0; i < result.cellIndices.Length; i++)
         {
@@ -220,24 +225,21 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
             }
 
             // Continent-continent collision: apply stratigraphy deformation on CPU
+            // and emit collision events for high-speed boundaries
             if (result.isCollision[i])
             {
                 Stratigraphy.ApplyDeformation(ci, 2 * deltaMa, 0, DeformationType.FOLDED);
-            }
-        }
 
-        // Emit collision events for high-speed continent-continent boundaries
-        foreach (var b in boundaries.Where(b => b.Type == BoundaryType.CONVERGENT && b.RelativeSpeed > 2.0))
-        {
-            if (b.Plate1 < _plates.Count && b.Plate2 < _plates.Count
-                && !_plates[b.Plate1].IsOceanic && !_plates[b.Plate2].IsOceanic)
-            {
-                bus.Emit("PLATE_COLLISION", new { plate1 = b.Plate1, plate2 = b.Plate2 });
-                eventLog.Record(new GeoLogEntry
+                var b = filtered[i];
+                if (b.RelativeSpeed > 2.0)
                 {
-                    TimeMa = timeMa, Type = "PLATE_COLLISION",
-                    Description = $"Collision between plates {b.Plate1} and {b.Plate2}",
-                });
+                    bus.Emit("PLATE_COLLISION", new { plate1 = b.Plate1, plate2 = b.Plate2 });
+                    eventLog.Record(new GeoLogEntry
+                    {
+                        TimeMa = timeMa, Type = "PLATE_COLLISION",
+                        Description = $"Collision between plates {b.Plate1} and {b.Plate2}",
+                    });
+                }
             }
         }
     }

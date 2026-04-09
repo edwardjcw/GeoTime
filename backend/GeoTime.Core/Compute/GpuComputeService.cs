@@ -1459,6 +1459,7 @@ public sealed class GpuComputeService : IDisposable
             isOceanicP1[i] = (b.Plate1 < plates.Count && plates[b.Plate1].IsOceanic) ? (byte)1 : (byte)0;
             isOceanicP2[i] = (b.Plate2 < plates.Count && plates[b.Plate2].IsOceanic) ? (byte)1 : (byte)0;
             isCollision[i] = b.Type == Models.BoundaryType.CONVERGENT
+                && b.Plate1 < plates.Count && b.Plate2 < plates.Count
                 && !plates[b.Plate1].IsOceanic && !plates[b.Plate2].IsOceanic;
         }
 

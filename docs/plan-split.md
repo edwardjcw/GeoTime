@@ -485,22 +485,22 @@ Since `AdvectPlates()` runs once per tick and sub-ticks do not move plates, the 
 - [x] Ensure feature registry is still populated on the first tick after planet generation
 - [x] Add unit test verifying features still update at the correct cadence
 
-### Phase S7 — GPU Convergent/Divergent Processing
+### Phase S7 — GPU Convergent/Divergent Processing ✅
 **Effort:** Medium | **Impact:** 2–3× on dynamics sub-phase | **Files:** `GpuComputeService.cs`, `TectonicEngine.cs`
 
-- [ ] Add kernel for convergent boundary height/crust updates
-- [ ] Add kernel for divergent boundary crust thinning
-- [ ] GPU computes delta buffers; CPU applies stratigraphy deformation
-- [ ] Retain CPU fallback
-- [ ] Add unit tests
+- [x] Add kernel for convergent boundary height/crust updates
+- [x] Add kernel for divergent boundary crust thinning
+- [x] GPU computes delta buffers; CPU applies stratigraphy deformation
+- [x] Retain CPU fallback
+- [x] Add unit tests
 
-### Phase S8 — Frontend Incremental Rendering
+### Phase S8 — Frontend Incremental Rendering ✅
 **Effort:** Low | **Impact:** Better visual feedback during ticks | **Files:** `SimulationHub.cs`, `main.ts`, `backend-client.ts`
 
-- [ ] After tectonic:collision, push height-only state update via SignalR
-- [ ] Frontend handles incremental height-map updates mid-tick
-- [ ] Add `phase` field to `StateBundleData` so frontend knows what changed
-- [ ] Test that the globe visually updates during long ticks
+- [x] After tectonic:collision, push height-only state update via SignalR
+- [x] Frontend handles incremental height-map updates mid-tick
+- [x] Add `phase` field to `StateBundleData` so frontend knows what changed
+- [x] Test that the globe visually updates during long ticks
 
 ---
 
