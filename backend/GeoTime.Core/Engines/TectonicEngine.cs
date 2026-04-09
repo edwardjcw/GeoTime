@@ -69,8 +69,8 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         AdvectPlates(_state, deltaMa, timeMa);
         UpdatePlateCenters(_state);
 
-        // S1: Cache boundaries once after advection
-        _cachedBoundaries = BoundaryClassifier.Classify(_state.PlateMap, _plates, _state.GridSize);
+        // S1: Cache boundaries once after advection (S3: GPU when available)
+        _cachedBoundaries = ClassifyBoundaries(_state.PlateMap, _plates, _state.GridSize);
 
         while (_accumulator >= minTickInterval)
         {
@@ -106,8 +106,8 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
 
         UpdatePlateCenters(_state);
 
-        // Cache boundaries once after advection (S1 optimization)
-        _cachedBoundaries = BoundaryClassifier.Classify(_state.PlateMap, _plates, _state.GridSize);
+        // Cache boundaries once after advection (S1 + S3: GPU when available)
+        _cachedBoundaries = ClassifyBoundaries(_state.PlateMap, _plates, _state.GridSize);
         if (onSubPhase != null) await onSubPhase("tectonic:collision");
 
         while (_accumulator >= minTickInterval)
@@ -141,7 +141,7 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         var state = _state!;
         var gs = state.GridSize;
 
-        var boundaries = _cachedBoundaries ?? BoundaryClassifier.Classify(state.PlateMap, _plates, gs);
+        var boundaries = _cachedBoundaries ?? ClassifyBoundaries(state.PlateMap, _plates, gs);
         ProcessConvergent(boundaries, deltaMa, timeMa, state);
         ProcessDivergent(boundaries, deltaMa, timeMa, state);
         ApplyIsostasy(state, deltaMa);
@@ -162,6 +162,28 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         var (co2, _) = VolcanismEngine.TotalDegassing(eruptions);
         _atmosphere.CO2 += co2 * 1e-6;
         return eruptions;
+    }
+
+    // ── Boundary classification (S3: GPU with CPU fallback) ────────────────────
+
+    /// <summary>
+    /// Classify plate boundaries using GPU acceleration when available,
+    /// falling back to CPU-based <see cref="BoundaryClassifier.Classify"/>.
+    /// </summary>
+    private List<BoundaryCell> ClassifyBoundaries(ushort[] plateMap, List<PlateInfo> plates, int gridSize)
+    {
+        if (gpu != null)
+        {
+            try
+            {
+                return gpu.ClassifyBoundariesGpu(plateMap, plates, gridSize);
+            }
+            catch
+            {
+                // GPU classification failed — fall back to CPU
+            }
+        }
+        return BoundaryClassifier.Classify(plateMap, plates, gridSize);
     }
 
     // ── Plate advection ─────────────────────────────────────────────────────────

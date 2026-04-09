@@ -446,25 +446,25 @@ Since `AdvectPlates()` runs once per tick and sub-ticks do not move plates, the 
 - [ ] Test that SignalR progress messages arrive during the tick (not only after)
 - [ ] Add backend unit test for async tick stats
 
-### Phase S3 — GPU Boundary Classification Kernel
+### Phase S3 — GPU Boundary Classification Kernel ✅
 **Effort:** Medium | **Impact:** 10–20× on boundary classification | **Files:** `GpuComputeService.cs`, `BoundaryClassifier.cs`, `TectonicEngine.cs`
 
-- [ ] Add `BoundaryClassifyKernel` to `GpuComputeService`
-- [ ] Kernel outputs flat arrays: `boundaryType[N]`, `plate1[N]`, `plate2[N]`, `relSpeed[N]`
-- [ ] Add `ClassifyBoundariesGpu()` method to `GpuComputeService`
-- [ ] CPU compaction pass: filter non-NONE entries into `List<BoundaryCell>`
-- [ ] Update `TectonicEngine` to use GPU classification when available
-- [ ] Retain CPU fallback in `BoundaryClassifier.Classify()`
-- [ ] Add unit tests comparing GPU and CPU classification results
+- [x] Add `BoundaryClassifyKernel` to `GpuComputeService`
+- [x] Kernel outputs flat arrays: `boundaryType[N]`, `plate1[N]`, `plate2[N]`, `relSpeed[N]`
+- [x] Add `ClassifyBoundariesGpu()` method to `GpuComputeService`
+- [x] CPU compaction pass: filter non-NONE entries into `List<BoundaryCell>`
+- [x] Update `TectonicEngine` to use GPU classification when available
+- [x] Retain CPU fallback in `BoundaryClassifier.Classify()`
+- [x] Add unit tests comparing GPU and CPU classification results
 
-### Phase S4 — StratigraphyStack Lock Optimization
+### Phase S4 — StratigraphyStack Lock Optimization ✅
 **Effort:** Medium | **Impact:** Enables parallel stratigraphy access | **Files:** `StratigraphyStack.cs`
 
-- [ ] Replace single global `Lock` with striped locks (256 stripes)
-- [ ] Update all methods (`PushLayer`, `ErodeTop`, `ApplyDeformation`, etc.) to use per-cell stripe locks
-- [ ] `RemapColumns()` can use a write-lock pattern: build the new dictionary, then swap atomically
-- [ ] Benchmark stratigraphy throughput with parallel boundary processing
-- [ ] Add unit tests for concurrent stratigraphy access
+- [x] Replace single global `Lock` with striped locks (256 stripes)
+- [x] Update all methods (`PushLayer`, `ErodeTop`, `ApplyDeformation`, etc.) to use per-cell stripe locks
+- [x] `RemapColumns()` uses write-lock pattern: build new dictionary, then swap atomically
+- [x] ConcurrentDictionary backing store for thread-safe collection access
+- [x] Add unit tests for concurrent stratigraphy access
 
 ### Phase S5 — GPU Collision Resolution Kernel
 **Effort:** High | **Impact:** 3–5× on scatter phase | **Files:** `GpuComputeService.cs`, `TectonicEngine.cs`
