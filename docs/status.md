@@ -305,3 +305,21 @@ npx playwright test  # E2E
 - [x] `backend/GeoTime.Tests/SplitPhaseTests.cs` — 2 async tests: `S2_AsyncAdvance_ProducesSubPhaseProgress`, `S2_AsyncAdvance_PopulatesSubPhaseTiming`
 
 **Test count**: 351 (previous backend) + 4 new = **355 total backend tests**
+
+## Phase S3 — GPU Boundary Classification Kernel ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Core/Compute/GpuComputeService.cs` — Added `BoundaryClassifyKernel` ILGPU kernel: per-cell boundary classification checking 4 neighbors, computing relative plate velocity via Euler pole, and classifying as CONVERGENT/DIVERGENT/TRANSFORM. Added `ClassifyBoundariesGpu()` public method that runs the kernel and compacts non-NONE results into `List<BoundaryCell>`.
+- [x] `backend/GeoTime.Core/Engines/TectonicEngine.cs` — Added `ClassifyBoundaries()` helper that uses GPU classification when available, falling back to CPU-based `BoundaryClassifier.Classify()`. Both `Tick()` and `TickAsync()` now use the GPU path.
+- [x] `backend/GeoTime.Core/Engines/BoundaryClassifier.cs` — Retained as CPU fallback (no changes needed).
+- [x] `backend/GeoTime.Tests/SplitPhaseTests.cs` — 4 new tests: `S3_GpuBoundaryClassification_MatchesCpuResult` (validates GPU matches CPU output), `S3_GpuBoundaryClassification_NoPlates_NoBoundaries`, `S3_GpuBoundaryClassification_MultiplePlates`, `S3_TectonicEngine_UsesGpuClassification`
+
+## Phase S4 — StratigraphyStack Lock Optimization ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Core/Engines/StratigraphyStack.cs` — Replaced single global `Lock` with 256 striped locks (`Lock[] _stripeLocks`) keyed by `cellIndex & 0xFF`. All per-cell methods (`GetLayers`, `GetTopLayer`, `GetTotalThickness`, `PushLayer`, `InitializeBasement`, `ApplyDeformation`, `ErodeTop`) use stripe locks. Backing store changed from `Dictionary` to `ConcurrentDictionary` for thread-safe collection access. `RemapColumns()` uses write-lock pattern: builds new dictionary from stripe-locked reads, then swaps atomically. `Size` and `Clear` use `ConcurrentDictionary` directly.
+- [x] `backend/GeoTime.Tests/SplitPhaseTests.cs` — 5 new tests: `S4_ConcurrentPushLayer_DifferentCells`, `S4_ConcurrentPushLayer_SameStripe`, `S4_ConcurrentErodeAndPush`, `S4_ConcurrentApplyDeformation`, `S4_RemapColumns_AtomicSwap`, `S4_RemapColumns_GapFill`
+
+**Test count**: 355 (previous) + 10 new = **365 total backend tests**

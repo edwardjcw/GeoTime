@@ -82,6 +82,18 @@ public sealed class GpuComputeService : IDisposable
         float,                         // accumRate
         float> _iceThicknessKernel;    // ablationRate
 
+    private readonly Action<Index1D,
+        ArrayView<ushort>,             // plateMap
+        ArrayView<double>,             // poleLat (per plate, radians)
+        ArrayView<double>,             // poleLon (per plate, radians)
+        ArrayView<double>,             // omega   (per plate, rate)
+        int,                           // gridSize
+        int,                           // numPlates
+        ArrayView<int>,                // boundaryType output
+        ArrayView<int>,                // plate1 output
+        ArrayView<int>,                // plate2 output
+        ArrayView<double>> _boundaryClassifyKernel; // relSpeed output
+
     /// <summary>Human-readable compute device description for the UI.</summary>
     public ComputeInfo Info { get; }
 
@@ -216,6 +228,12 @@ public sealed class GpuComputeService : IDisposable
                 ArrayView<float>, ArrayView<float>, ArrayView<float>,
                 float, float, float, float, float>(
                 IceThicknessKernel);
+        _boundaryClassifyKernel = _accelerator
+            .LoadAutoGroupedStreamKernel<Index1D,
+                ArrayView<ushort>, ArrayView<double>, ArrayView<double>, ArrayView<double>,
+                int, int,
+                ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<double>>(
+                BoundaryClassifyKernel);
     }
 
     /// <summary>
@@ -827,6 +845,208 @@ public sealed class GpuComputeService : IDisposable
                 "This may indicate a GPU driver issue or incompatible accelerator state.",
                 ex);
         }
+    }
+
+    // ── Boundary classification kernel ──────────────────────────────────────
+
+    /// <summary>
+    /// ILGPU kernel: per-cell boundary classification.
+    /// For each cell, checks 4 neighbors for different plate IDs and classifies
+    /// the boundary as CONVERGENT (1), DIVERGENT (2), or TRANSFORM (3).
+    /// Cells not on a boundary get NONE (0).
+    /// </summary>
+    static void BoundaryClassifyKernel(
+        Index1D idx,
+        ArrayView<ushort> plateMap,
+        ArrayView<double> poleLatArr,   // per plate, radians
+        ArrayView<double> poleLonArr,   // per plate, radians
+        ArrayView<double> omegaArr,     // per plate, rate (deg/Ma)
+        int gs,
+        int numPlates,
+        ArrayView<int> boundaryType,
+        ArrayView<int> plate1Out,
+        ArrayView<int> plate2Out,
+        ArrayView<double> relSpeedOut)
+    {
+        const double PI = 3.14159265358979323846;
+        const double TWO_PI = 2.0 * PI;
+
+        int row = idx / gs;
+        int col = idx % gs;
+        int myPlate = plateMap[idx];
+
+        // Check 4 neighbors: up, down, left (wrap), right (wrap)
+        int neighborPlate = -1;
+        int nRow = -1, nCol = -1;
+        bool found = false;
+
+        // Up
+        if (row > 0)
+        {
+            int nIdx = (row - 1) * gs + col;
+            int np = plateMap[nIdx];
+            if (np != myPlate) { neighborPlate = np; nRow = row - 1; nCol = col; found = true; }
+        }
+        // Down
+        if (!found && row < gs - 1)
+        {
+            int nIdx = (row + 1) * gs + col;
+            int np = plateMap[nIdx];
+            if (np != myPlate) { neighborPlate = np; nRow = row + 1; nCol = col; found = true; }
+        }
+        // Left (wrap)
+        if (!found)
+        {
+            int wCol = (col - 1 + gs) % gs;
+            int nIdx = row * gs + wCol;
+            int np = plateMap[nIdx];
+            if (np != myPlate) { neighborPlate = np; nRow = row; nCol = wCol; found = true; }
+        }
+        // Right (wrap)
+        if (!found)
+        {
+            int wCol = (col + 1) % gs;
+            int nIdx = row * gs + wCol;
+            int np = plateMap[nIdx];
+            if (np != myPlate) { neighborPlate = np; nRow = row; nCol = wCol; found = true; }
+        }
+
+        if (!found || myPlate >= numPlates || neighborPlate >= numPlates)
+        {
+            boundaryType[idx] = 0; // NONE
+            plate1Out[idx] = myPlate;
+            plate2Out[idx] = myPlate;
+            relSpeedOut[idx] = 0.0;
+            return;
+        }
+
+        // Compute lat/lon for this cell
+        double lat = PI / 2.0 - (double)row / gs * PI;
+        double lon = (double)col / gs * TWO_PI - PI;
+
+        // Plate velocity at this cell for plate1
+        double poleLat1 = poleLatArr[myPlate];
+        double poleLon1 = poleLonArr[myPlate];
+        double omega1 = omegaArr[myPlate];
+        double dLon1 = lon - poleLon1;
+        double v1Lat = omega1 * XMath.Cos(poleLat1) * XMath.Sin(dLon1);
+        double v1Lon = omega1 * (XMath.Sin(poleLat1) * XMath.Cos(lat)
+                                 - XMath.Cos(poleLat1) * XMath.Sin(lat) * XMath.Cos(dLon1));
+
+        // Plate velocity at this cell for plate2
+        double poleLat2 = poleLatArr[neighborPlate];
+        double poleLon2 = poleLonArr[neighborPlate];
+        double omega2 = omegaArr[neighborPlate];
+        double dLon2 = lon - poleLon2;
+        double v2Lat = omega2 * XMath.Cos(poleLat2) * XMath.Sin(dLon2);
+        double v2Lon = omega2 * (XMath.Sin(poleLat2) * XMath.Cos(lat)
+                                 - XMath.Cos(poleLat2) * XMath.Sin(lat) * XMath.Cos(dLon2));
+
+        double dvLat = v1Lat - v2Lat;
+        double dvLon = v1Lon - v2Lon;
+        double relSpeed = XMath.Sqrt(dvLat * dvLat + dvLon * dvLon);
+
+        // Boundary normal: direction from cell to neighbor
+        double nLatPos = PI / 2.0 - (double)nRow / gs * PI;
+        double nLonPos = (double)nCol / gs * TWO_PI - PI;
+        double normalLat = nLatPos - lat;
+        double normalLon = nLonPos - lon;
+        double normalLen = XMath.Sqrt(normalLat * normalLat + normalLon * normalLon);
+
+        int bType = 3; // TRANSFORM
+        if (normalLen > 1e-10)
+        {
+            double dot = (dvLat * normalLat + dvLon * normalLon) / normalLen;
+            double threshold = relSpeed * 0.3;
+            if (dot < -threshold) bType = 1; // CONVERGENT
+            else if (dot > threshold) bType = 2; // DIVERGENT
+        }
+
+        boundaryType[idx] = bType;
+        plate1Out[idx] = myPlate;
+        plate2Out[idx] = neighborPlate;
+        relSpeedOut[idx] = relSpeed;
+    }
+
+    /// <summary>
+    /// Classify plate boundaries on the GPU. Returns a list of <see cref="Models.BoundaryCell"/>
+    /// by running a per-cell kernel and then compacting non-NONE results on the CPU.
+    /// </summary>
+    public List<Models.BoundaryCell> ClassifyBoundariesGpu(
+        ushort[] plateMap, List<Models.PlateInfo> plates, int gridSize)
+    {
+        var cc = plateMap.Length;
+        var numPlates = plates.Count;
+
+        // Prepare per-plate Euler pole arrays in radians
+        var poleLat = new double[numPlates];
+        var poleLon = new double[numPlates];
+        var omega = new double[numPlates];
+        const double deg2Rad = Math.PI / 180.0;
+        for (var p = 0; p < numPlates; p++)
+        {
+            poleLat[p] = plates[p].AngularVelocity.Lat * deg2Rad;
+            poleLon[p] = plates[p].AngularVelocity.Lon * deg2Rad;
+            omega[p] = plates[p].AngularVelocity.Rate;
+        }
+
+        var bTypeOut = new int[cc];
+        var p1Out = new int[cc];
+        var p2Out = new int[cc];
+        var rsOut = new double[cc];
+
+        using var pmBuf = _accelerator.Allocate1D<ushort>(cc);
+        using var plBuf = _accelerator.Allocate1D<double>(numPlates);
+        using var ploBuf = _accelerator.Allocate1D<double>(numPlates);
+        using var omBuf = _accelerator.Allocate1D<double>(numPlates);
+        using var btBuf = _accelerator.Allocate1D<int>(cc);
+        using var p1Buf = _accelerator.Allocate1D<int>(cc);
+        using var p2Buf = _accelerator.Allocate1D<int>(cc);
+        using var rsBuf = _accelerator.Allocate1D<double>(cc);
+
+        try
+        {
+            pmBuf.CopyFromCPU(plateMap);
+            plBuf.CopyFromCPU(poleLat);
+            ploBuf.CopyFromCPU(poleLon);
+            omBuf.CopyFromCPU(omega);
+
+            _boundaryClassifyKernel(cc,
+                pmBuf.View, plBuf.View, ploBuf.View, omBuf.View,
+                gridSize, numPlates,
+                btBuf.View, p1Buf.View, p2Buf.View, rsBuf.View);
+            _accelerator.Synchronize();
+
+            btBuf.CopyToCPU(bTypeOut);
+            p1Buf.CopyToCPU(p1Out);
+            p2Buf.CopyToCPU(p2Out);
+            rsBuf.CopyToCPU(rsOut);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"GPU boundary classification failed: {ex.Message}");
+            throw new InvalidOperationException(
+                $"GPU boundary classification failed (accelerator: {Info.AcceleratorType}). " +
+                "This may indicate a GPU driver issue or incompatible accelerator state.",
+                ex);
+        }
+
+        // CPU compaction: filter non-NONE entries into List<BoundaryCell>
+        var boundaries = new List<Models.BoundaryCell>();
+        for (var i = 0; i < cc; i++)
+        {
+            if (bTypeOut[i] == 0) continue; // NONE
+            boundaries.Add(new Models.BoundaryCell
+            {
+                CellIndex = i,
+                Type = (Models.BoundaryType)bTypeOut[i],
+                Plate1 = p1Out[i],
+                Plate2 = p2Out[i],
+                RelativeSpeed = rsOut[i],
+            });
+        }
+
+        return boundaries;
     }
 
     public void Dispose()
