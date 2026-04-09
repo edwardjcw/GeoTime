@@ -46,11 +46,10 @@ public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
         var stepSize = deltaMa / steps;
         for (var i = 0; i < steps; i++)
         {
-            var step = i; // capture for the lambda
-            sim.AdvanceSimulation(stepSize, phase =>
+            var step = i;
+            await sim.AdvanceSimulationAsync(stepSize, async phase =>
             {
-                // Fire-and-forget: SignalR queues async sends internally so this is safe.
-                _ = Clients.Caller.SendAsync("SimulationProgress", new
+                await Clients.Caller.SendAsync("SimulationProgress", new
                 {
                     phase,
                     step = step + 1,
@@ -66,11 +65,7 @@ public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
                 totalSteps = steps,
             });
 
-            // Strategy F: push binary state bundle directly to the caller after each step.
-            // Layout: [height bytes | temp bytes | precip bytes] = 3 × cellCount × 4 bytes.
             await PushStateBundleAsync();
-
-            // Phase L6: broadcast changed feature labels to all clients after each step.
             await PushFeaturesUpdatedAsync(currentTick: sim.State.FeatureRegistry.LastUpdatedTick);
         }
 

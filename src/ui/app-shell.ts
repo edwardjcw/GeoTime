@@ -68,7 +68,7 @@ export class AppShell {
   private _advancedTimingCanvas: HTMLCanvasElement = document.createElement('canvas');
   private _advancedLoadCanvas: HTMLCanvasElement = document.createElement('canvas');
   private _advancedProcessingEl: HTMLElement = document.createElement('div');
-  private _tickHistory: Array<{ tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number; tick: number }> = [];
+  private _tickHistory: Array<{ tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number; tectonicAdvectionMs?: number; tectonicCollisionMs?: number; tectonicBoundaryMs?: number; tectonicDynamicsMs?: number; tectonicVolcanismMs?: number; tick: number }> = [];
 
   // ── Inspect panel elements ──────────────────────────────────────────────
   private inspectPanel: HTMLElement;
@@ -1642,7 +1642,7 @@ export class AppShell {
 
   /** Update the log panel with timing stats and recent events. */
   updateLogPanel(
-    stats: { tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number } | null,
+    stats: { tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number; tectonicAdvectionMs?: number; tectonicCollisionMs?: number; tectonicBoundaryMs?: number; tectonicDynamicsMs?: number; tectonicVolcanismMs?: number } | null,
     events: Array<{ timeMa: number; type: string; description: string }>,
     tickCount?: number,
   ): void {
@@ -1654,13 +1654,25 @@ export class AppShell {
     // Timing section
     this.logTimingEl.innerHTML = '';
     if (stats && stats.totalMs > 0) {
-      const phases: [string, number][] = [
-        ['⛰ Tectonic',   stats.tectonicMs],
+      const phases: [string, number][] = [];
+      // Show sub-phase breakdown if available, otherwise show total
+      if (stats.tectonicAdvectionMs !== undefined) {
+        phases.push(
+          ['⛰ Advection',   stats.tectonicAdvectionMs],
+          ['⛰ Collision',   stats.tectonicCollisionMs ?? 0],
+          ['⛰ Boundaries',  stats.tectonicBoundaryMs ?? 0],
+          ['⛰ Dynamics',    stats.tectonicDynamicsMs ?? 0],
+          ['🌋 Volcanism',   stats.tectonicVolcanismMs ?? 0],
+        );
+      } else {
+        phases.push(['⛰ Tectonic', stats.tectonicMs]);
+      }
+      phases.push(
         ['🌊 Surface',    stats.surfaceMs],
         ['☁️ Atmosphere', stats.atmosphereMs],
         ['🌿 Vegetation', stats.vegetationMs],
         ['🧬 Biomatter',  stats.biomatterMs],
-      ];
+      );
       for (const [label, ms] of phases) {
         const row = el('div', { display: 'flex', justifyContent: 'space-between', gap: '12px' });
         const lbl = document.createElement('span');
@@ -1742,7 +1754,7 @@ export class AppShell {
   }
 
   /** Push a tick stats snapshot into the history ring buffer (max 50). */
-  pushTickHistory(stats: { tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number }, tickCount: number): void {
+  pushTickHistory(stats: { tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number; tectonicAdvectionMs?: number; tectonicCollisionMs?: number; tectonicBoundaryMs?: number; tectonicDynamicsMs?: number; tectonicVolcanismMs?: number }, tickCount: number): void {
     this._tickHistory.push({ ...stats, tick: tickCount });
     if (this._tickHistory.length > 50) this._tickHistory.shift();
     if (this._advancedViewOpen) this._renderAdvancedGraphs();

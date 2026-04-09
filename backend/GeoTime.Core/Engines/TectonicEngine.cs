@@ -33,6 +33,9 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
 
     private double _accumulator;
 
+    /// <summary>S1: Cached boundary cells reused across sub-ticks within a single Tick.</summary>
+    private List<BoundaryCell>? _cachedBoundaries;
+
     public void Initialize(List<PlateInfo> plates, List<HotspotInfo> hotspots,
         AtmosphericComposition atmosphere, SimulationState state)
     {
@@ -66,12 +69,17 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         AdvectPlates(_state, deltaMa, timeMa);
         UpdatePlateCenters(_state);
 
+        // S1: Cache boundaries once after advection
+        _cachedBoundaries = BoundaryClassifier.Classify(_state.PlateMap, _plates, _state.GridSize);
+
         while (_accumulator >= minTickInterval)
         {
             _accumulator -= minTickInterval;
             var subTime = timeMa - _accumulator;
             all.AddRange(ProcessTick(subTime, minTickInterval));
         }
+
+        _cachedBoundaries = null;
 
         // Update dirty mask: cells where height changed by > 0.5 m need reprocessing.
         var heightMap = _state.HeightMap;
@@ -83,12 +91,57 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         return all;
     }
 
+    public async Task<List<EruptionRecord>> TickAsync(double timeMa, double deltaMa, Func<string, Task>? onSubPhase = null)
+    {
+        if (_state == null || deltaMa <= 0) return [];
+        _accumulator += deltaMa;
+        var all = new List<EruptionRecord>();
+
+        var cc = _state.CellCount;
+        var prevHeight = new float[cc];
+        Array.Copy(_state.HeightMap, prevHeight, cc);
+
+        AdvectPlates(_state, deltaMa, timeMa);
+        if (onSubPhase != null) await onSubPhase("tectonic:advection");
+
+        UpdatePlateCenters(_state);
+
+        // Cache boundaries once after advection (S1 optimization)
+        _cachedBoundaries = BoundaryClassifier.Classify(_state.PlateMap, _plates, _state.GridSize);
+        if (onSubPhase != null) await onSubPhase("tectonic:collision");
+
+        while (_accumulator >= minTickInterval)
+        {
+            _accumulator -= minTickInterval;
+            var subTime = timeMa - _accumulator;
+
+            if (onSubPhase != null) await onSubPhase("tectonic:boundaries");
+
+            all.AddRange(ProcessTick(subTime, minTickInterval));
+
+            if (onSubPhase != null) await onSubPhase("tectonic:dynamics");
+        }
+
+        _cachedBoundaries = null;
+
+        // Update dirty mask
+        var heightMap = _state.HeightMap;
+        var dirty = _state.DirtyMask;
+        const float DirtyThreshold = 0.5f;
+        for (var i = 0; i < cc; i++)
+            dirty[i] = MathF.Abs(heightMap[i] - prevHeight[i]) > DirtyThreshold;
+
+        if (onSubPhase != null) await onSubPhase("tectonic:volcanism");
+
+        return all;
+    }
+
     private List<EruptionRecord> ProcessTick(double timeMa, double deltaMa)
     {
         var state = _state!;
         var gs = state.GridSize;
 
-        var boundaries = BoundaryClassifier.Classify(state.PlateMap, _plates, gs);
+        var boundaries = _cachedBoundaries ?? BoundaryClassifier.Classify(state.PlateMap, _plates, gs);
         ProcessConvergent(boundaries, deltaMa, timeMa, state);
         ProcessDivergent(boundaries, deltaMa, timeMa, state);
         ApplyIsostasy(state, deltaMa);

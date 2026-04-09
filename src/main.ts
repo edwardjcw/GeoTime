@@ -974,7 +974,11 @@ shell.onEventLayerChange(async (eventType: string | null) => {
 
 /** Each agent's latest status: 'idle' | 'running' | 'done'. */
 const agentStatuses: Record<string, 'idle' | 'running' | 'done'> = {
-  tectonic:   'idle',
+  'tectonic:advection':  'idle',
+  'tectonic:collision':  'idle',
+  'tectonic:boundaries': 'idle',
+  'tectonic:dynamics':   'idle',
+  'tectonic:volcanism':  'idle',
   surface:    'idle',
   atmosphere: 'idle',
   vegetation: 'idle',
@@ -982,15 +986,38 @@ const agentStatuses: Record<string, 'idle' | 'running' | 'done'> = {
 };
 
 function updateAgentStatuses(phase: string): void {
-  // Phases arrive in order: tectonic → surface (parallel: atmosphere+vegetation) → biomatter → complete
   if (phase === 'tectonic') {
-    agentStatuses.tectonic = 'running';
+    // Old-style "tectonic" phase — mark first sub-phase as running
+    agentStatuses['tectonic:advection'] = 'running';
+    agentStatuses['tectonic:collision'] = 'idle';
+    agentStatuses['tectonic:boundaries'] = 'idle';
+    agentStatuses['tectonic:dynamics'] = 'idle';
+    agentStatuses['tectonic:volcanism'] = 'idle';
     agentStatuses.surface = 'idle';
     agentStatuses.atmosphere = 'idle';
     agentStatuses.vegetation = 'idle';
     agentStatuses.biomatter = 'idle';
+  } else if (phase === 'tectonic:advection') {
+    agentStatuses['tectonic:advection'] = 'done';
+    agentStatuses['tectonic:collision'] = 'running';
+  } else if (phase === 'tectonic:collision') {
+    agentStatuses['tectonic:collision'] = 'done';
+    agentStatuses['tectonic:boundaries'] = 'running';
+  } else if (phase === 'tectonic:boundaries') {
+    agentStatuses['tectonic:boundaries'] = 'done';
+    agentStatuses['tectonic:dynamics'] = 'running';
+  } else if (phase === 'tectonic:dynamics') {
+    agentStatuses['tectonic:dynamics'] = 'done';
+    agentStatuses['tectonic:volcanism'] = 'running';
+  } else if (phase === 'tectonic:volcanism') {
+    agentStatuses['tectonic:volcanism'] = 'done';
   } else if (phase === 'surface') {
-    agentStatuses.tectonic = 'done';
+    // Mark all tectonic sub-phases as done
+    agentStatuses['tectonic:advection'] = 'done';
+    agentStatuses['tectonic:collision'] = 'done';
+    agentStatuses['tectonic:boundaries'] = 'done';
+    agentStatuses['tectonic:dynamics'] = 'done';
+    agentStatuses['tectonic:volcanism'] = 'done';
     agentStatuses.surface = 'running';
     agentStatuses.atmosphere = 'running';
     agentStatuses.vegetation = 'running';
@@ -1002,7 +1029,6 @@ function updateAgentStatuses(phase: string): void {
   } else if (phase === 'complete') {
     agentStatuses.biomatter = 'done';
   } else {
-    // Unknown phase — log and leave statuses unchanged so the panel remains readable.
     console.debug(`[agents] unknown phase: ${phase}`);
   }
   shell.updateAgentStatuses(agentStatuses);
@@ -1020,7 +1046,11 @@ function resetAgentStatuses(): void {
 /** Update agent statuses based on last-tick timing stats so the panel shows which engines actually ran. */
 function updateAgentStatusesFromStats(stats: api.TickStats | null): void {
   if (!stats) { resetAgentStatuses(); return; }
-  agentStatuses.tectonic   = stats.tectonicMs   > 0 ? 'done' : 'idle';
+  agentStatuses['tectonic:advection']  = (stats.tectonicAdvectionMs ?? 0)  > 0 ? 'done' : 'idle';
+  agentStatuses['tectonic:collision']  = (stats.tectonicCollisionMs ?? 0)  > 0 ? 'done' : 'idle';
+  agentStatuses['tectonic:boundaries'] = (stats.tectonicBoundaryMs ?? 0)   > 0 ? 'done' : 'idle';
+  agentStatuses['tectonic:dynamics']   = (stats.tectonicDynamicsMs ?? 0)   > 0 ? 'done' : 'idle';
+  agentStatuses['tectonic:volcanism']  = (stats.tectonicVolcanismMs ?? 0)  > 0 ? 'done' : 'idle';
   agentStatuses.surface    = stats.surfaceMs     > 0 ? 'done' : 'idle';
   agentStatuses.atmosphere = stats.atmosphereMs  > 0 ? 'done' : 'idle';
   agentStatuses.vegetation = stats.vegetationMs  > 0 ? 'done' : 'idle';
@@ -1045,10 +1075,15 @@ function refreshLogPanel(): void {
 // simulation loop still drives advances via the REST API; SignalR is used
 // only for lightweight status feedback.
 const PHASE_LABELS: Record<string, string> = {
-  tectonic:  '⛰ Tectonic\u2026',
-  surface:   '🌊 Surface\u2026',
-  biomatter: '🌿 Biomatter\u2026',
-  complete:  '',
+  tectonic:              '⛰ Tectonic\u2026',
+  'tectonic:advection':  '⛰ Advection\u2026',
+  'tectonic:collision':  '⛰ Collision\u2026',
+  'tectonic:boundaries': '⛰ Boundaries\u2026',
+  'tectonic:dynamics':   '⛰ Dynamics\u2026',
+  'tectonic:volcanism':  '🌋 Volcanism\u2026',
+  surface:               '🌊 Surface\u2026',
+  biomatter:             '🌿 Biomatter\u2026',
+  complete:              '',
 };
 
 const simSocket = api.createSimulationSocket({

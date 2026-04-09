@@ -20,6 +20,13 @@ export interface TickStats {
   vegetationMs: number;
   biomatterMs: number;
   totalMs: number;
+  // Tectonic sub-phase timing
+  tectonicAdvectionMs?: number;
+  tectonicCollisionMs?: number;
+  tectonicBoundaryMs?: number;
+  tectonicDynamicsMs?: number;
+  tectonicVolcanismMs?: number;
+  tectonicTotalMs?: number;
 }
 
 export interface AdvanceResult {
