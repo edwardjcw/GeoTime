@@ -72,6 +72,11 @@ public sealed class SimulationOrchestrator : IDisposable
     private uint _currentSeed;
     private readonly int _gridSize;
 
+    /// <summary>S6: Run feature detection only every N ticks to reduce overhead.</summary>
+    private const int FeatureDetectionInterval = 5;
+    /// <summary>S6: Counter tracking ticks since last feature detection run.</summary>
+    private int _ticksSinceLastDetection;
+
     public SimulationOrchestrator(int gridSize = GridConstants.GRID_SIZE)
     {
         _gridSize = gridSize;
@@ -99,6 +104,7 @@ public sealed class SimulationOrchestrator : IDisposable
         EventLog.Clear();
         Snapshots.Clear();
         TickCount = 0;
+        _ticksSinceLastDetection = FeatureDetectionInterval - 1; // S6: first tick will trigger detection
 
         _tectonic = new TectonicEngine(Bus, EventLog, seed, 0.1, _gpu);
         _tectonic.Initialize(result.Plates, result.Hotspots, result.Atmosphere, State);
@@ -190,9 +196,13 @@ public sealed class SimulationOrchestrator : IDisposable
         _biomatter?.Tick(Clock.T, deltaMa);
         stats.BiomatterMs = sw.ElapsedMilliseconds;
 
-        // Update the feature registry after all engines have processed this tick.
-        if (_tectonic != null)
+        // S6: Run feature detection only every FeatureDetectionInterval ticks
+        // to reduce per-tick overhead.  Always run on the first tick (counter starts
+        // at 0 after GeneratePlanet) so the registry is populated immediately.
+        _ticksSinceLastDetection++;
+        if (_tectonic != null && _ticksSinceLastDetection >= FeatureDetectionInterval)
         {
+            _ticksSinceLastDetection = 0;
             var plates   = _tectonic.GetPlates();
             var hotspots = _tectonic.GetHotspots();
             var prevRegistry = State.FeatureRegistry;
@@ -299,8 +309,12 @@ public sealed class SimulationOrchestrator : IDisposable
         _biomatter?.Tick(Clock.T, deltaMa);
         stats.BiomatterMs = sw.ElapsedMilliseconds;
 
-        if (_tectonic != null)
+        // S6: Feature detection throttling (same logic as sync path).
+        // The counter is shared between sync and async paths; only one runs per tick.
+        _ticksSinceLastDetection++;
+        if (_tectonic != null && _ticksSinceLastDetection >= FeatureDetectionInterval)
         {
+            _ticksSinceLastDetection = 0;
             var plates   = _tectonic.GetPlates();
             var hotspots = _tectonic.GetHotspots();
             var prevRegistry = State.FeatureRegistry;

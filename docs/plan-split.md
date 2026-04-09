@@ -423,28 +423,28 @@ Since `AdvectPlates()` runs once per tick and sub-ticks do not move plates, the 
 
 ## 8. Implementation Plan (Ordered Steps)
 
-### Phase S1 — Boundary Classifier Caching (Quick Win)
+### Phase S1 — Boundary Classifier Caching (Quick Win) ✅
 **Effort:** Low | **Impact:** 4–5× on boundary classification | **Files:** `TectonicEngine.cs`
 
-- [ ] Cache the `BoundaryClassifier.Classify()` result after advection
-- [ ] Reuse the cached result for all sub-ticks within the same tick
-- [ ] Clear the cache when the plate map changes (on `AdvectPlates()`)
-- [ ] Add unit test verifying cache hit across sub-ticks
+- [x] Cache the `BoundaryClassifier.Classify()` result after advection
+- [x] Reuse the cached result for all sub-ticks within the same tick
+- [x] Clear the cache when the plate map changes (on `AdvectPlates()`)
+- [x] Add unit test verifying cache hit across sub-ticks
 
-### Phase S2 — Async Pipeline
+### Phase S2 — Async Pipeline ✅
 **Effort:** Medium | **Impact:** Eliminates UI freeze | **Files:** `TectonicEngine.cs`, `SimulationOrchestrator.cs`, `Program.cs`, `SimulationHub.cs`, `main.ts`
 
-- [ ] Convert `TectonicEngine.Tick()` to `TickAsync()` with `Func<string, Task>` callback
-- [ ] Split the tectonic tick body into named sub-phase methods
-- [ ] Convert `SimulationOrchestrator.AdvanceSimulationCore()` to `async Task`
-- [ ] Update `AdvanceSimulation()` to call `AdvanceSimulationCoreAsync()`
-- [ ] Update REST endpoint to `await` the async advance
-- [ ] Update `SimulationHub.AdvanceSimulation` to use the async path
-- [ ] Extend `SimulationTickStats` with per-sub-phase timing fields
-- [ ] Update frontend `agentStatuses` to include tectonic sub-phases
-- [ ] Update frontend `PHASE_LABELS` for tectonic sub-phase names
-- [ ] Test that SignalR progress messages arrive during the tick (not only after)
-- [ ] Add backend unit test for async tick stats
+- [x] Convert `TectonicEngine.Tick()` to `TickAsync()` with `Func<string, Task>` callback
+- [x] Split the tectonic tick body into named sub-phase methods
+- [x] Convert `SimulationOrchestrator.AdvanceSimulationCore()` to `async Task`
+- [x] Update `AdvanceSimulation()` to call `AdvanceSimulationCoreAsync()`
+- [x] Update REST endpoint to `await` the async advance
+- [x] Update `SimulationHub.AdvanceSimulation` to use the async path
+- [x] Extend `SimulationTickStats` with per-sub-phase timing fields
+- [x] Update frontend `agentStatuses` to include tectonic sub-phases
+- [x] Update frontend `PHASE_LABELS` for tectonic sub-phase names
+- [x] Test that SignalR progress messages arrive during the tick (not only after)
+- [x] Add backend unit test for async tick stats
 
 ### Phase S3 — GPU Boundary Classification Kernel ✅
 **Effort:** Medium | **Impact:** 10–20× on boundary classification | **Files:** `GpuComputeService.cs`, `BoundaryClassifier.cs`, `TectonicEngine.cs`
@@ -466,24 +466,24 @@ Since `AdvectPlates()` runs once per tick and sub-ticks do not move plates, the 
 - [x] ConcurrentDictionary backing store for thread-safe collection access
 - [x] Add unit tests for concurrent stratigraphy access
 
-### Phase S5 — GPU Collision Resolution Kernel
+### Phase S5 — GPU Collision Resolution Kernel ✅
 **Effort:** High | **Impact:** 3–5× on scatter phase | **Files:** `GpuComputeService.cs`, `TectonicEngine.cs`
 
-- [ ] Design packed-priority representation for collision resolution
-- [ ] Add `CollisionScatterKernel` to `GpuComputeService`
-- [ ] Kernel uses `Atomic.Max` on packed priority to select winning source per destination
-- [ ] Second-pass kernel copies winning source data to destination arrays
-- [ ] CPU handles stratigraphy remapping (cannot be done on GPU due to dictionary structure)
-- [ ] Retain CPU fallback for scatter + collision
-- [ ] Add unit tests comparing GPU and CPU scatter results
+- [x] Design packed-priority representation for collision resolution
+- [x] Add `CollisionScatterKernel` to `GpuComputeService`
+- [x] Kernel uses `Atomic.Max` on packed priority to select winning source per destination
+- [x] Second-pass kernel copies winning source data to destination arrays
+- [x] CPU handles stratigraphy remapping (cannot be done on GPU due to dictionary structure)
+- [x] Retain CPU fallback for scatter + collision
+- [x] Add unit tests comparing GPU and CPU scatter results
 
-### Phase S6 — Feature Detection Throttling
+### Phase S6 — Feature Detection Throttling ✅
 **Effort:** Low | **Impact:** 4–5× reduction in feature detection overhead | **Files:** `SimulationOrchestrator.cs`
 
-- [ ] Add `_featureDetectionInterval` field (default: 5 ticks)
-- [ ] Skip feature detection on intermediate ticks
-- [ ] Ensure feature registry is still populated on the first tick after planet generation
-- [ ] Add unit test verifying features still update at the correct cadence
+- [x] Add `_featureDetectionInterval` field (default: 5 ticks)
+- [x] Skip feature detection on intermediate ticks
+- [x] Ensure feature registry is still populated on the first tick after planet generation
+- [x] Add unit test verifying features still update at the correct cadence
 
 ### Phase S7 — GPU Convergent/Divergent Processing
 **Effort:** Medium | **Impact:** 2–3× on dynamics sub-phase | **Files:** `GpuComputeService.cs`, `TectonicEngine.cs`

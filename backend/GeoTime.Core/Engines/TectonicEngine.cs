@@ -294,40 +294,46 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
             }
         }
 
-        // ── Phase 2: Scatter + collision resolution (CPU) ────────────────────
-        // Collision logic depends on plate type branching and sequential ordering,
-        // so it runs on the CPU using the precomputed destMap.
-        for (var i = 0; i < cc; i++)
+        // ── Phase 2: Scatter + collision resolution ─────────────────────────────
+        // GPU path uses atomic operations for parallel collision resolution;
+        // CPU fallback uses the sequential loop with plate-type branching.
+        bool gpuCollisionDone = false;
+        if (gpu != null)
         {
-            var destIdx = destMap[i];
-            stratigraphyMapping[i] = destIdx;
-            hitCount[destIdx]++;
-
-            if (newHeight[destIdx] <= EMPTY)
+            try
             {
-                newHeight[destIdx]   = state.HeightMap[i];
-                newCrust[destIdx]    = state.CrustThicknessMap[i];
-                newRockType[destIdx] = state.RockTypeMap[i];
-                newRockAge[destIdx]  = state.RockAgeMap[i];
-                newPlateMap[destIdx] = state.PlateMap[i];
+                var result = gpu.ResolveCollisionsGpu(destMap,
+                    state.HeightMap, state.CrustThicknessMap, state.RockTypeMap,
+                    state.RockAgeMap, state.PlateMap, _plates, (float)deltaMa);
+
+                Array.Copy(result.newHeight,   newHeight,   cc);
+                Array.Copy(result.newCrust,    newCrust,    cc);
+                Array.Copy(result.newRockType, newRockType, cc);
+                Array.Copy(result.newRockAge,  newRockAge,  cc);
+                Array.Copy(result.newPlateMap, newPlateMap, cc);
+                Array.Copy(result.hitCount,    hitCount,    cc);
+
+                // Build stratigraphy mapping from destMap
+                for (var i = 0; i < cc; i++)
+                    stratigraphyMapping[i] = destMap[i];
+
+                gpuCollisionDone = true;
             }
-            else
+            catch
             {
-                int plateIdx = state.PlateMap[i];
-                var srcPlate = _plates[plateIdx];
-                var dstPlate = _plates[newPlateMap[destIdx]];
+                // GPU collision failed — fall through to CPU path
+            }
+        }
 
-                if (!srcPlate.IsOceanic && !dstPlate.IsOceanic)
-                {
-                    newHeight[destIdx] = Math.Max(newHeight[destIdx], state.HeightMap[i]);
-                    newHeight[destIdx] += (float)(50.0 * deltaMa);
-                    newCrust[destIdx] += state.CrustThicknessMap[i] * 0.3f;
-                }
-                else if (srcPlate.IsOceanic && !dstPlate.IsOceanic)
-                {
-                    newHeight[destIdx] += (float)(10.0 * deltaMa);
-                }
-                else if (!srcPlate.IsOceanic && dstPlate.IsOceanic)
+        if (!gpuCollisionDone)
+        {
+            for (var i = 0; i < cc; i++)
+            {
+                var destIdx = destMap[i];
+                stratigraphyMapping[i] = destIdx;
+                hitCount[destIdx]++;
+
+                if (newHeight[destIdx] <= EMPTY)
                 {
                     newHeight[destIdx]   = state.HeightMap[i];
                     newCrust[destIdx]    = state.CrustThicknessMap[i];
@@ -337,13 +343,38 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
                 }
                 else
                 {
-                    if (state.RockAgeMap[i] < newRockAge[destIdx])
+                    int plateIdx = state.PlateMap[i];
+                    var srcPlate = _plates[plateIdx];
+                    var dstPlate = _plates[newPlateMap[destIdx]];
+
+                    if (!srcPlate.IsOceanic && !dstPlate.IsOceanic)
+                    {
+                        newHeight[destIdx] = Math.Max(newHeight[destIdx], state.HeightMap[i]);
+                        newHeight[destIdx] += (float)(50.0 * deltaMa);
+                        newCrust[destIdx] += state.CrustThicknessMap[i] * 0.3f;
+                    }
+                    else if (srcPlate.IsOceanic && !dstPlate.IsOceanic)
+                    {
+                        newHeight[destIdx] += (float)(10.0 * deltaMa);
+                    }
+                    else if (!srcPlate.IsOceanic && dstPlate.IsOceanic)
                     {
                         newHeight[destIdx]   = state.HeightMap[i];
                         newCrust[destIdx]    = state.CrustThicknessMap[i];
                         newRockType[destIdx] = state.RockTypeMap[i];
                         newRockAge[destIdx]  = state.RockAgeMap[i];
                         newPlateMap[destIdx] = state.PlateMap[i];
+                    }
+                    else
+                    {
+                        if (state.RockAgeMap[i] < newRockAge[destIdx])
+                        {
+                            newHeight[destIdx]   = state.HeightMap[i];
+                            newCrust[destIdx]    = state.CrustThicknessMap[i];
+                            newRockType[destIdx] = state.RockTypeMap[i];
+                            newRockAge[destIdx]  = state.RockAgeMap[i];
+                            newPlateMap[destIdx] = state.PlateMap[i];
+                        }
                     }
                 }
             }
