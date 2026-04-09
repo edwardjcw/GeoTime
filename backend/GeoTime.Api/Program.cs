@@ -84,20 +84,15 @@ app.MapPost("/api/planet/generate", (GenerateRequest req, SimulationOrchestrator
 
 app.MapPost("/api/simulation/advance", async (AdvanceRequest req, SimulationOrchestrator sim, IHubContext<SimulationHub> hubContext) =>
 {
-    // Collect phase names in order during the synchronous simulation run.
-    var phases = new List<string>();
-    sim.AdvanceSimulation(req.DeltaMa, phase => phases.Add(phase));
-
-    // Send progress events in order *before* returning the HTTP response so
-    // the frontend receives them in the correct sequence.
-    foreach (var phase in phases)
+    // Use async pipeline to allow SignalR messages to flush between phases
+    await sim.AdvanceSimulationAsync(req.DeltaMa, async phase =>
     {
         await hubContext.Clients.All.SendAsync("SimulationProgress", new
         {
             phase,
             timeMa = sim.GetCurrentTime(),
         });
-    }
+    });
 
     var stats = sim.LastTickStats;
     return Results.Ok(new
@@ -112,6 +107,13 @@ app.MapPost("/api/simulation/advance", async (AdvanceRequest req, SimulationOrch
             vegetationMs = stats.VegetationMs,
             biomatterMs  = stats.BiomatterMs,
             totalMs      = stats.TotalMs,
+            // Sub-phase timing
+            tectonicAdvectionMs  = stats.TectonicAdvectionMs,
+            tectonicCollisionMs  = stats.TectonicCollisionMs,
+            tectonicBoundaryMs   = stats.TectonicBoundaryMs,
+            tectonicDynamicsMs   = stats.TectonicDynamicsMs,
+            tectonicVolcanismMs  = stats.TectonicVolcanismMs,
+            tectonicTotalMs      = stats.TectonicTotalMs,
         },
     });
 }).WithName("AdvanceSimulation");
@@ -128,6 +130,13 @@ app.MapGet("/api/simulation/stats", (SimulationOrchestrator sim) =>
         biomatterMs  = stats.BiomatterMs,
         totalMs      = stats.TotalMs,
         timeMa       = stats.TimeMa,
+        // Sub-phase timing
+        tectonicAdvectionMs  = stats.TectonicAdvectionMs,
+        tectonicCollisionMs  = stats.TectonicCollisionMs,
+        tectonicBoundaryMs   = stats.TectonicBoundaryMs,
+        tectonicDynamicsMs   = stats.TectonicDynamicsMs,
+        tectonicVolcanismMs  = stats.TectonicVolcanismMs,
+        tectonicTotalMs      = stats.TectonicTotalMs,
     });
 }).WithName("GetSimulationStats");
 

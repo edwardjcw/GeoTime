@@ -12,7 +12,15 @@ namespace GeoTime.Core;
 /// <summary>Per-phase timing breakdown for the most recent simulation tick.</summary>
 public sealed class SimulationTickStats
 {
-    public long TectonicMs  { get; set; }
+    // Tectonic sub-phases
+    public long TectonicAdvectionMs  { get; set; }
+    public long TectonicCollisionMs  { get; set; }
+    public long TectonicBoundaryMs   { get; set; }
+    public long TectonicDynamicsMs   { get; set; }
+    public long TectonicVolcanismMs  { get; set; }
+    public long TectonicTotalMs      { get; set; }
+    // Keep existing fields
+    public long TectonicMs  { get; set; }   // keep for backward compatibility, same as TectonicTotalMs
     public long SurfaceMs   { get; set; }
     public long AtmosphereMs { get; set; }
     public long VegetationMs { get; set; }
@@ -220,6 +228,111 @@ public sealed class SimulationOrchestrator : IDisposable
         }
 
         onProgress?.Invoke("complete");
+    }
+
+    /// <summary>Advance the simulation asynchronously, with sub-phase progress callbacks.</summary>
+    public async Task AdvanceSimulationAsync(double deltaMa, Func<string, Task>? onProgress = null)
+    {
+        if (_tectonic == null || deltaMa <= 0) return;
+
+        if (!_advanceLock.Wait(0))
+        {
+            System.Diagnostics.Debug.WriteLine("[SimulationOrchestrator] Concurrent advance skipped — previous tick still running.");
+            return;
+        }
+        try
+        {
+            await AdvanceSimulationCoreAsync(deltaMa, onProgress);
+        }
+        finally
+        {
+            _advanceLock.Release();
+        }
+    }
+
+    private async Task AdvanceSimulationCoreAsync(double deltaMa, Func<string, Task>? onProgress)
+    {
+        var total = Stopwatch.StartNew();
+        var sw    = new Stopwatch();
+        var stats = new SimulationTickStats { TimeMa = Clock.T + deltaMa };
+
+        var logLengthBefore = EventLog.Length;
+
+        Clock.T += deltaMa;
+        TickCount++;
+
+        // Tectonic with sub-phase timing
+        if (onProgress != null) await onProgress("tectonic");
+        sw.Restart();
+
+        var tecSw = Stopwatch.StartNew();
+        await _tectonic!.TickAsync(Clock.T, deltaMa, async subPhase =>
+        {
+            // Record sub-phase timing
+            var elapsed = tecSw.ElapsedMilliseconds;
+            switch (subPhase)
+            {
+                case "tectonic:advection":  stats.TectonicAdvectionMs = elapsed; break;
+                case "tectonic:collision":  stats.TectonicCollisionMs = elapsed; break;
+                case "tectonic:boundaries": stats.TectonicBoundaryMs  = elapsed; break;
+                case "tectonic:dynamics":   stats.TectonicDynamicsMs  = elapsed; break;
+                case "tectonic:volcanism":  stats.TectonicVolcanismMs = elapsed; break;
+            }
+            tecSw.Restart();
+            if (onProgress != null) await onProgress(subPhase);
+        });
+        stats.TectonicMs = sw.ElapsedMilliseconds;
+        stats.TectonicTotalMs = stats.TectonicMs;
+
+        // Use the same AdaptiveResolution / FullResolution logic
+        if (AdaptiveResolutionEnabled && _gridSize == GridConstants.GRID_SIZE)
+        {
+            ApplyAdaptiveResolution(deltaMa, phase => { onProgress?.Invoke(phase).GetAwaiter().GetResult(); }, stats);
+        }
+        else
+        {
+            RunFullResolutionEngines(deltaMa, phase => { onProgress?.Invoke(phase).GetAwaiter().GetResult(); }, stats);
+        }
+
+        if (onProgress != null) await onProgress("biomatter");
+        sw.Restart();
+        _biomatter?.Tick(Clock.T, deltaMa);
+        stats.BiomatterMs = sw.ElapsedMilliseconds;
+
+        if (_tectonic != null)
+        {
+            var plates   = _tectonic.GetPlates();
+            var hotspots = _tectonic.GetHotspots();
+            var prevRegistry = State.FeatureRegistry;
+            _featureDetector.Detect(State, plates, hotspots,
+                EventLog.GetAll(), _currentSeed, State.FeatureRegistry.LastUpdatedTick + 1);
+            _featureEvolution.Track(State, prevRegistry, State.FeatureRegistry,
+                State.FeatureRegistry.LastUpdatedTick);
+        }
+
+        if (_tectonic != null)
+        {
+            var tickEvents = EventLog.GetAll()
+                .Skip(logLengthBefore)
+                .ToList();
+            if (tickEvents.Count > 0)
+                _eventDeposition.Deposit(State, _tectonic.Stratigraphy, tickEvents, Clock.T);
+        }
+
+        stats.TotalMs = total.ElapsedMilliseconds;
+        LastTickStats = stats;
+
+        if (stats.TotalMs > 0)
+        {
+            EventLog.Record(new GeoLogEntry
+            {
+                TimeMa = Clock.T,
+                Type = "TICK_STATS",
+                Description = $"Total={stats.TotalMs}ms | Tectonic={stats.TectonicMs}ms | Surface={stats.SurfaceMs}ms | Atmo={stats.AtmosphereMs}ms | Veg={stats.VegetationMs}ms | Bio={stats.BiomatterMs}ms",
+            });
+        }
+
+        if (onProgress != null) await onProgress("complete");
     }
 
     private void RunFullResolutionEngines(double deltaMa, Action<string>? onProgress, SimulationTickStats stats)

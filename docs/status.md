@@ -281,3 +281,27 @@ npx playwright test  # E2E
 - [x] `tests/label-renderer.test.ts` — 4 new tests: former name subtitle display, most recent former name shown, full lineage tooltip, no former names when list empty.
 
 **Test count**: 347 (previous backend) + 4 new = **351 total backend tests**; 407 (previous frontend) + 4 new = **411 total frontend Vitest tests**
+
+---
+
+## Phase S1 — Boundary Classifier Caching ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Core/Engines/TectonicEngine.cs` — Added `_cachedBoundaries` field. `Tick()` and `TickAsync()` classify boundaries once after `AdvectPlates()` and reuse the cached list for all sub-ticks. Cache cleared after the sub-tick loop. `ProcessTick()` uses `_cachedBoundaries ?? BoundaryClassifier.Classify(...)` for safety.
+- [x] `backend/GeoTime.Tests/SplitPhaseTests.cs` — 2 tests: `S1_BoundaryCacheReusedAcrossSubTicks`, `S1_SyncTickStillWorksWithCache`
+
+## Phase S2 — Async Pipeline ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Core/Engines/TectonicEngine.cs` — Added `TickAsync()` with `Func<string, Task>` callback for sub-phase progress (`tectonic:advection`, `tectonic:collision`, `tectonic:boundaries`, `tectonic:dynamics`, `tectonic:volcanism`)
+- [x] `backend/GeoTime.Core/SimulationOrchestrator.cs` — Extended `SimulationTickStats` with sub-phase timing fields (`TectonicAdvectionMs`, `TectonicCollisionMs`, `TectonicBoundaryMs`, `TectonicDynamicsMs`, `TectonicVolcanismMs`, `TectonicTotalMs`). Added `AdvanceSimulationAsync()` and `AdvanceSimulationCoreAsync()` methods that use `TickAsync` and flush progress via async callbacks.
+- [x] `backend/GeoTime.Api/SimulationHub.cs` — Converted `AdvanceSimulation` to use `AdvanceSimulationAsync` so SignalR messages flush between sub-phases
+- [x] `backend/GeoTime.Api/Program.cs` — REST `/api/simulation/advance` uses `AdvanceSimulationAsync`; both advance and stats endpoints include sub-phase timing
+- [x] `src/api/backend-client.ts` — Added optional sub-phase timing fields to `TickStats` interface
+- [x] `src/main.ts` — Updated `agentStatuses` to include 5 tectonic sub-phases; updated `updateAgentStatuses`, `updateAgentStatusesFromStats`, `PHASE_LABELS` for sub-phase display
+- [x] `src/ui/app-shell.ts` — Updated `updateLogPanel` to show sub-phase timing breakdown when available; updated `pushTickHistory` and `_tickHistory` types
+- [x] `backend/GeoTime.Tests/SplitPhaseTests.cs` — 2 async tests: `S2_AsyncAdvance_ProducesSubPhaseProgress`, `S2_AsyncAdvance_PopulatesSubPhaseTiming`
+
+**Test count**: 351 (previous backend) + 4 new = **355 total backend tests**
