@@ -56,6 +56,13 @@ public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
                     totalSteps = steps,
                     timeMa = sim.GetCurrentTime(),
                 });
+
+                // S8: Push incremental height-only update after tectonic collision
+                // and after surface processing so the globe shows terrain changes mid-tick.
+                if (phase is "tectonic:collision" or "surface")
+                {
+                    await PushIncrementalHeightAsync(phase);
+                }
             });
 
             await Clients.Caller.SendAsync("SimulationTick", new
@@ -93,6 +100,25 @@ public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
         Buffer.BlockCopy(temp,   0, bundle, floatBytes,     floatBytes);
         Buffer.BlockCopy(precip, 0, bundle, floatBytes * 2, floatBytes);
         await Clients.Caller.SendAsync("StateBundleData", bundle);
+    }
+
+    /// <summary>
+    /// S8: Push a height-only incremental update to the caller so the globe shows
+    /// terrain changes mid-tick (e.g. after tectonic collision or surface erosion).
+    /// Includes a <c>phase</c> field so the frontend knows which processing stage
+    /// produced this intermediate snapshot.
+    /// </summary>
+    private async Task PushIncrementalHeightAsync(string phase)
+    {
+        var height = sim.State.HeightMap;
+        var floatBytes = height.Length * sizeof(float);
+        var bundle = new byte[floatBytes];
+        Buffer.BlockCopy(height, 0, bundle, 0, floatBytes);
+        await Clients.Caller.SendAsync("IncrementalStateData", new
+        {
+            phase,
+            heightMap = bundle,
+        });
     }
 
     /// <summary>

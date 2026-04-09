@@ -92,6 +92,21 @@ app.MapPost("/api/simulation/advance", async (AdvanceRequest req, SimulationOrch
             phase,
             timeMa = sim.GetCurrentTime(),
         });
+
+        // S8: Push incremental height-only update after tectonic collision and
+        // surface processing so connected clients see terrain changes mid-tick.
+        if (phase is "tectonic:collision" or "surface")
+        {
+            var height = sim.State.HeightMap;
+            var floatBytes = height.Length * sizeof(float);
+            var bundle = new byte[floatBytes];
+            Buffer.BlockCopy(height, 0, bundle, 0, floatBytes);
+            await hubContext.Clients.All.SendAsync("IncrementalStateData", new
+            {
+                phase,
+                heightMap = bundle,
+            });
+        }
     });
 
     var stats = sim.LastTickStats;

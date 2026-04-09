@@ -1117,6 +1117,21 @@ const simSocket = api.createSimulationSocket({
         .catch(() => {/* non-critical */});
     }
   },
+  // S8: Handle incremental height-map updates pushed mid-tick.
+  // This allows the globe to show terrain changes (tectonic collision, erosion)
+  // before the full tick completes, giving visual feedback during long ticks.
+  onIncrementalStateData: (event) => {
+    if (!pendingSimRequest) return; // ignore stale mid-tick updates
+    try {
+      const heightMap = new Float32Array(event.heightMap);
+      if (heightMap.length === GRID_SIZE * GRID_SIZE) {
+        renderer.updateHeightMap(heightMap, GRID_SIZE);
+      }
+    } catch {
+      // Non-critical: if the incremental update fails, the full bundle
+      // will arrive at the end of the tick anyway.
+    }
+  },
 });
 
 // Connect with a short retry delay — the backend may not be ready immediately.

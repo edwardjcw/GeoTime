@@ -361,6 +361,8 @@ export type SimulationEventHandler = {
   onProgress?: (event: { phase: string; step?: number; totalSteps?: number; timeMa?: number }) => void;
   /** Phase L6: called when one or more feature labels changed after a tick. */
   onFeaturesUpdated?: (event: { tick: number; labels: FeatureLabel[] }) => void;
+  /** S8: Incremental height-only state data pushed mid-tick for visual feedback. */
+  onIncrementalStateData?: (event: { phase: string; heightMap: ArrayBuffer }) => void;
 };
 
 /**
@@ -439,6 +441,30 @@ export function createSimulationSocket(handlers: SimulationEventHandler) {
               case 'FeaturesUpdated':
                 // Phase L6: changed feature labels pushed after each tick.
                 handlers.onFeaturesUpdated?.(args[0]);
+                break;
+              case 'IncrementalStateData':
+                // S8: Incremental height-only state data pushed mid-tick.
+                // args[0] is { phase: string, heightMap: base64/Uint8Array }
+                if (args[0] && args[0].heightMap) {
+                  let heightBuf: ArrayBuffer;
+                  if (args[0].heightMap instanceof Uint8Array) {
+                    const u8 = args[0].heightMap;
+                    heightBuf = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
+                  } else if (args[0].heightMap instanceof ArrayBuffer) {
+                    heightBuf = args[0].heightMap;
+                  } else {
+                    // SignalR JSON protocol sends byte[] as base64 string
+                    const b64 = args[0].heightMap as string;
+                    const raw = atob(b64);
+                    const bytes = new Uint8Array(raw.length);
+                    for (let j = 0; j < raw.length; j++) bytes[j] = raw.charCodeAt(j);
+                    heightBuf = bytes.buffer as ArrayBuffer;
+                  }
+                  handlers.onIncrementalStateData?.({
+                    phase: args[0].phase ?? '',
+                    heightMap: heightBuf,
+                  });
+                }
                 break;
             }
           }

@@ -226,4 +226,46 @@ public class SignalRIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> 
         Assert.True(payload.TryGetProperty("labels", out var labelsEl), "Payload should contain labels");
         Assert.True(labelsEl.GetArrayLength() > 0, "labels array should be non-empty");
     }
+
+    // ── S8 — Incremental State Data Tests ───────────────────────────────────
+
+    [Fact]
+    public async Task S8_Hub_AdvanceSimulation_ReceivesIncrementalStateData()
+    {
+        var httpClient = factory.CreateClient();
+        await httpClient.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+
+        var server = factory.Server;
+        var connection = new HubConnectionBuilder()
+            .WithUrl(
+                new Uri(server.BaseAddress, "/hubs/simulation"),
+                o => o.HttpMessageHandlerFactory = _ => server.CreateHandler())
+            .Build();
+
+        var receivedPhases = new List<string>();
+        var tcs = new TaskCompletionSource<bool>();
+
+        connection.On<System.Text.Json.JsonElement>("IncrementalStateData", data =>
+        {
+            if (data.TryGetProperty("phase", out var phaseEl))
+            {
+                var phase = phaseEl.GetString() ?? "";
+                lock (receivedPhases) { receivedPhases.Add(phase); }
+            }
+            if (data.TryGetProperty("heightMap", out _))
+            {
+                tcs.TrySetResult(true);
+            }
+        });
+
+        await connection.StartAsync();
+        await connection.InvokeAsync("AdvanceSimulation", 1.0, 1);
+
+        var gotData = await Task.WhenAny(tcs.Task, Task.Delay(15000)) == tcs.Task;
+        await connection.DisposeAsync();
+
+        Assert.True(gotData, "Should receive IncrementalStateData during advance");
+        // Should receive at least the tectonic:collision phase
+        Assert.Contains("tectonic:collision", receivedPhases);
+    }
 }
