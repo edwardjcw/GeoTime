@@ -27,6 +27,8 @@ public sealed class SimulationTickStats
     public long BiomatterMs  { get; set; }
     public long TotalMs      { get; set; }
     public double TimeMa     { get; set; }
+    /// <summary>True when at least one GPU kernel ran successfully this tick.</summary>
+    public bool IsGpuActive  { get; set; }
 }
 
 /// <summary>
@@ -224,16 +226,18 @@ public sealed class SimulationOrchestrator : IDisposable
         }
 
         stats.TotalMs = total.ElapsedMilliseconds;
+        stats.IsGpuActive = _gpu.IsGpuActive;
         LastTickStats = stats;
 
         // Log per-tick timing so the event log helps diagnose slow ticks.
         if (stats.TotalMs > 0)
         {
+            var compute = stats.IsGpuActive ? "GPU" : "CPU";
             EventLog.Record(new GeoLogEntry
             {
                 TimeMa = Clock.T,
                 Type = "TICK_STATS",
-                Description = $"Total={stats.TotalMs}ms | Tectonic={stats.TectonicMs}ms | Surface={stats.SurfaceMs}ms | Atmo={stats.AtmosphereMs}ms | Veg={stats.VegetationMs}ms | Bio={stats.BiomatterMs}ms",
+                Description = $"[{compute}] Total={stats.TotalMs}ms | Tectonic={stats.TectonicMs}ms | Surface={stats.SurfaceMs}ms | Atmo={stats.AtmosphereMs}ms | Veg={stats.VegetationMs}ms | Bio={stats.BiomatterMs}ms",
             });
         }
 
@@ -334,15 +338,17 @@ public sealed class SimulationOrchestrator : IDisposable
         }
 
         stats.TotalMs = total.ElapsedMilliseconds;
+        stats.IsGpuActive = _gpu.IsGpuActive;
         LastTickStats = stats;
 
         if (stats.TotalMs > 0)
         {
+            var compute = stats.IsGpuActive ? "GPU" : "CPU";
             EventLog.Record(new GeoLogEntry
             {
                 TimeMa = Clock.T,
                 Type = "TICK_STATS",
-                Description = $"Total={stats.TotalMs}ms | Tectonic={stats.TectonicMs}ms | Surface={stats.SurfaceMs}ms | Atmo={stats.AtmosphereMs}ms | Veg={stats.VegetationMs}ms | Bio={stats.BiomatterMs}ms",
+                Description = $"[{compute}] Total={stats.TotalMs}ms | Tectonic={stats.TectonicMs}ms | Surface={stats.SurfaceMs}ms | Atmo={stats.AtmosphereMs}ms | Veg={stats.VegetationMs}ms | Bio={stats.BiomatterMs}ms",
             });
         }
 

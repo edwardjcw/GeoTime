@@ -27,6 +27,8 @@ export interface TickStats {
   tectonicDynamicsMs?: number;
   tectonicVolcanismMs?: number;
   tectonicTotalMs?: number;
+  /** True when at least one GPU kernel ran this tick. */
+  isGpuActive?: boolean;
 }
 
 export interface AdvanceResult {
