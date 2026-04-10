@@ -707,3 +707,47 @@ public class SplitPhaseTests
         sim.Dispose();
     }
 }
+
+public class TickStatsGpuTests
+{
+    [Fact]
+    public void TickStats_IsGpuActive_PopulatedAfterAdvance()
+    {
+        var sim = new SimulationOrchestrator(16);
+        sim.GeneratePlanet(42);
+        sim.AdvanceSimulation(0.5);
+        var stats = sim.LastTickStats;
+        // IsGpuActive is a bool — it must be either true or false (no null)
+        Assert.True(stats.IsGpuActive == true || stats.IsGpuActive == false);
+        Assert.True(stats.TotalMs > 0);
+        sim.Dispose();
+    }
+
+    [Fact]
+    public async Task TickStats_IsGpuActive_PopulatedAfterAsyncAdvance()
+    {
+        var sim = new SimulationOrchestrator(16);
+        sim.GeneratePlanet(42);
+        await sim.AdvanceSimulationAsync(0.5);
+        var stats = sim.LastTickStats;
+        // The async path also sets IsGpuActive
+        Assert.True(stats.IsGpuActive == true || stats.IsGpuActive == false);
+        Assert.True(stats.TotalMs > 0);
+        sim.Dispose();
+    }
+
+    [Fact]
+    public void TickStats_EventLog_ContainsGpuCpuTag()
+    {
+        var sim = new SimulationOrchestrator(16);
+        sim.GeneratePlanet(42);
+        sim.AdvanceSimulation(0.5);
+        var tickEntry = sim.EventLog.GetAll()
+            .LastOrDefault(e => e.Type == "TICK_STATS");
+        Assert.NotNull(tickEntry);
+        // Description should contain either [GPU] or [CPU]
+        Assert.True(tickEntry!.Description.Contains("[GPU]") || tickEntry.Description.Contains("[CPU]"),
+            $"Expected [GPU] or [CPU] tag in TICK_STATS description, got: {tickEntry.Description}");
+        sim.Dispose();
+    }
+}

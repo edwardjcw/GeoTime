@@ -1506,3 +1506,72 @@ test.describe('Phase D3 — LLM Provider Settings', () => {
     await expect(page.locator('#llm-settings-panel')).toBeVisible();
   });
 });
+
+// ─── UI Fixes — Rate slider, Time readout, Event layers, Advanced View ────────
+
+test.describe('UI Fixes — Rate slider, Time readout, Event layers, Advanced View', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+  });
+
+  test('rate slider label shows 3 decimal places (default 0.010 Ma/s)', async ({ page }) => {
+    // The default rate label should show 3 decimal places
+    const rateText = await page.locator('text=Rate:').textContent();
+    expect(rateText).toMatch(/Rate: 0\.010 Ma\/s/);
+  });
+
+  test('rate slider shows 3 decimal places when moved', async ({ page }) => {
+    const slider = page.locator('input[type="range"]');
+    // Move slider to a different position
+    await slider.fill('400');
+    const rateText = await page.locator('text=Rate:').textContent();
+    // Should show exactly 3 decimal places
+    expect(rateText).toMatch(/Rate: \d+\.\d{3} Ma\/s/);
+  });
+
+  test('time readout shows 3 decimal places in Ma format', async ({ page }) => {
+    await page.waitForTimeout(500);
+    const timeText = await page.locator('text=Time:').textContent();
+    // Should show 3 decimal places (e.g., "Time: -4500.000 Ma" or "Time: -4.500 Ga")
+    expect(timeText).toMatch(/Time: -?\d+\.\d{3}\s*(Ma|Ga)/);
+  });
+
+  test('event layers button shows dropdown when clicked', async ({ page }) => {
+    const eventLayersBtn = page.locator('button', { hasText: 'event layers' });
+    await expect(eventLayersBtn).toBeVisible();
+
+    // Click to activate — dropdown should become visible
+    await eventLayersBtn.click();
+    const select = page.locator('select');
+    await expect(select).toBeVisible();
+  });
+
+  test('event layers dropdown hides when toggled off', async ({ page }) => {
+    const eventLayersBtn = page.locator('button', { hasText: 'event layers' });
+    await eventLayersBtn.click(); // on
+    await eventLayersBtn.click(); // off
+    const select = page.locator('select');
+    await expect(select).not.toBeVisible();
+  });
+
+  test('Advanced View section exists in log panel', async ({ page }) => {
+    // Open the log panel
+    const logBtn = page.locator('button[title*="log"], button', { hasText: '📊' }).first();
+    await logBtn.click();
+    await expect(page.locator('text=Advanced View')).toBeVisible();
+  });
+
+  test('Advanced View toggle shows processing status and log sections', async ({ page }) => {
+    // Open log panel
+    const logBtn = page.locator('button', { hasText: '📊' }).first();
+    await logBtn.click();
+    // Open advanced view
+    const advBtn = page.locator('button', { hasText: /Advanced View/ });
+    await advBtn.click();
+    await expect(page.locator('text=Current Processing')).toBeVisible();
+    await expect(page.locator('text=Recent Tick Logs')).toBeVisible();
+    await expect(page.locator('text=Agent Timing History')).toBeVisible();
+    await expect(page.locator('text=Computational Load')).toBeVisible();
+  });
+});
