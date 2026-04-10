@@ -357,3 +357,43 @@ npx playwright test  # E2E
 - [x] `src/main.ts` — Added `onIncrementalStateData` handler to the SignalR socket: decodes the height map as Float32Array and calls `renderer.updateHeightMap()` mid-tick, guarded by `pendingSimRequest` to avoid stale updates.
 - [x] `backend/GeoTime.Tests/SignalRIntegrationTests.cs` — 1 new S8 test: verifies `IncrementalStateData` is received during hub `AdvanceSimulation` with `tectonic:collision` phase.
 - [x] `tests/incremental-state.test.ts` — 4 new Vitest tests: type verification, event decoding, Float32Array roundtrip, stale update guard.
+
+---
+
+## UI Fixes — Rate Slider, Time Readout, Event Layers, Advanced View ✅
+
+**Completed** (this session)
+
+- [x] **Issue 4 — Rate slider 3 decimal places + default 0.010 Ma/s**
+  - `src/ui/app-shell.ts` — Slider default value changed from 600 to 200 (gives 0.010 Ma/s via log-scale mapping). Rate label shows 3 decimal places (`toFixed(3)`). Initial label text `'Rate: 0.010 Ma/s'`. Added `getRate()` public method.
+  - `src/main.ts` — `simRate` default changed from `1` to `0.01`.
+
+- [x] **Issue 5 — Time readout 3 decimal places**
+  - `src/ui/app-shell.ts` — `setSimTime()` now uses `toFixed(3)` for both Ma and Ga formats.
+
+- [x] **Issue 3 — Event layers dropdown shows when clicked**
+  - `src/ui/app-shell.ts` — Toggle click condition changed from `options.length > 1` to `options.length > 0`. Select initialised with a placeholder option at construction. `setEventLayerTypes()` shows the select whenever the toggle is active regardless of type count, and uses "no event types yet" placeholder text when empty.
+
+- [x] **Issue 2 — Canvas graph stretching fixed**
+  - `src/ui/app-shell.ts` — `_renderTimingGraph()` and `_renderLoadGraph()` now sync canvas buffer dimensions (`canvas.width`, `canvas.height`) from `clientWidth`/`clientHeight` before drawing, eliminating stretch. Removed hard-coded `width`/`height` attributes from canvas element construction.
+
+- [x] **Issue 1 — Advanced view fine-grained logs + percentage + GPU/CPU tags**
+  - `src/ui/app-shell.ts` — Added `_advancedLogEl` panel for per-phase tick logs with `[GPU]`/`[CPU]` tags and `% of total` breakdown. Added `_lastTickStats` and `_isGpu` fields. `setAdvancedProcessingStatus()` now shows per-phase percentage (when done) and GPU/CPU badge per phase. `pushTickHistory()` also updates the log panel. `setComputeMode()` stores `_isGpu`.
+  - `backend/GeoTime.Core/SimulationOrchestrator.cs` — `SimulationTickStats` gains `IsGpuActive` bool. Both sync and async advance paths set `IsGpuActive = _gpu.IsGpuActive`. TICK_STATS log description prefixed with `[GPU]` or `[CPU]`.
+  - `src/api/backend-client.ts` — `TickStats` interface gains `isGpuActive?: boolean` field.
+
+- [x] **Issue 6 — What is Tris?**
+  - "Tris" is short for **Triangles**. It shows the triangle (polygon) count of the 3D WebGL globe renderer, displayed in the HUD as "Tris: NNN". This is a standard graphics performance indicator showing how many triangles are being processed per frame by the GPU.
+
+- [x] `tests/cell-info.test.ts` — 9 new Vitest tests: time format 3dp (Ma/Ga), rate slider default 0.010, getRate() initial value, event layer dropdown show/hide, advanced view smoke tests.
+- [x] `e2e/app-shell.spec.ts` — 7 new Playwright tests: rate slider label 3dp, rate slider moved shows 3dp, time readout 3dp, event layers shows on click, event layers hides on toggle off, advanced view section exists, advanced view sections visible.
+- [x] `backend/GeoTime.Tests/SplitPhaseTests.cs` — 3 new xUnit tests: `IsGpuActive` populated after sync advance, `IsGpuActive` populated after async advance, TICK_STATS log description contains [GPU]/[CPU] tag.
+
+**Test count**: 415 (previous frontend) + 9 new = **424 total frontend Vitest tests passing**; 3 new backend tests.
+
+---
+
+## FAQ
+
+**Q: What is "Tris" in the HUD?**
+A: "Tris" = Triangles. The number of triangles the 3D globe renderer submits to the WebGL GPU each frame. Useful for monitoring rendering performance.

@@ -68,7 +68,19 @@ export class AppShell {
   private _advancedTimingCanvas: HTMLCanvasElement = document.createElement('canvas');
   private _advancedLoadCanvas: HTMLCanvasElement = document.createElement('canvas');
   private _advancedProcessingEl: HTMLElement = document.createElement('div');
-  private _tickHistory: Array<{ tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number; tectonicAdvectionMs?: number; tectonicCollisionMs?: number; tectonicBoundaryMs?: number; tectonicDynamicsMs?: number; tectonicVolcanismMs?: number; tick: number }> = [];
+  private _advancedLogEl: HTMLElement = document.createElement('div');
+  private _tickHistory: Array<{ tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number; tectonicAdvectionMs?: number; tectonicCollisionMs?: number; tectonicBoundaryMs?: number; tectonicDynamicsMs?: number; tectonicVolcanismMs?: number; isGpuActive?: boolean; tick: number }> = [];
+  private _lastTickStats: { tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number; tectonicAdvectionMs?: number; tectonicCollisionMs?: number; tectonicBoundaryMs?: number; tectonicDynamicsMs?: number; tectonicVolcanismMs?: number; isGpuActive?: boolean } | null = null;
+  private _isGpu = false;
+
+  /**
+   * Phases that use GPU kernels when GPU acceleration is active.
+   * Volcanism, vegetation, and biomatter always run on CPU.
+   */
+  private static readonly GPU_PHASES = new Set([
+    'tectonic:advection', 'tectonic:collision', 'tectonic:boundaries', 'tectonic:dynamics',
+    'surface', 'atmosphere',
+  ]);
 
   // ── Inspect panel elements ──────────────────────────────────────────────
   private inspectPanel: HTMLElement;
@@ -600,9 +612,28 @@ export class AppShell {
     Object.assign(procTitle.style, { opacity: '0.5', fontSize: '10px' });
     this._advancedViewContainer.appendChild(procTitle);
 
-    this._advancedProcessingEl = el('div', { fontSize: '11px' });
+    this._advancedProcessingEl = el('div', { fontSize: '11px', lineHeight: '1.7' });
     this._advancedProcessingEl.textContent = '— idle —';
     this._advancedViewContainer.appendChild(this._advancedProcessingEl);
+
+    // Fine-grained log section
+    const advLogTitle = document.createElement('div');
+    advLogTitle.textContent = 'Recent Tick Logs';
+    Object.assign(advLogTitle.style, { opacity: '0.5', fontSize: '10px', marginTop: '4px' });
+    this._advancedViewContainer.appendChild(advLogTitle);
+
+    this._advancedLogEl = el('div', {
+      fontSize: '10px',
+      fontFamily: 'monospace',
+      maxHeight: '80px',
+      overflowY: 'auto',
+      background: 'rgba(0,0,0,0.3)',
+      borderRadius: '3px',
+      padding: '4px 6px',
+      lineHeight: '1.6',
+    });
+    this._advancedLogEl.textContent = '— no ticks yet —';
+    this._advancedViewContainer.appendChild(this._advancedLogEl);
 
     // Agent Timing History graph
     const timingTitle = document.createElement('div');
@@ -611,8 +642,6 @@ export class AppShell {
     this._advancedViewContainer.appendChild(timingTitle);
 
     this._advancedTimingCanvas = document.createElement('canvas');
-    this._advancedTimingCanvas.width = 260;
-    this._advancedTimingCanvas.height = 120;
     Object.assign(this._advancedTimingCanvas.style, {
       background: 'rgba(0,0,0,0.3)',
       borderRadius: '3px',
@@ -628,8 +657,6 @@ export class AppShell {
     this._advancedViewContainer.appendChild(loadTitle);
 
     this._advancedLoadCanvas = document.createElement('canvas');
-    this._advancedLoadCanvas.width = 260;
-    this._advancedLoadCanvas.height = 80;
     Object.assign(this._advancedLoadCanvas.style, {
       background: 'rgba(0,0,0,0.3)',
       borderRadius: '3px',
@@ -785,7 +812,7 @@ export class AppShell {
       gap: '4px',
     });
     this.rateLabel = document.createElement('span');
-    this.rateLabel.textContent = 'Rate: 1.00 Ma/s';
+    this.rateLabel.textContent = 'Rate: 0.010 Ma/s';
     this.rateLabel.style.opacity = '0.6';
 
     this.rateSlider = document.createElement('input');
@@ -793,12 +820,12 @@ export class AppShell {
     // Use a logarithmic mapping: slider 0..1000 → rate 0.001..100
     this.rateSlider.min = '0';
     this.rateSlider.max = '1000';
-    this.rateSlider.value = '600'; // default ≈ 1
+    this.rateSlider.value = '200'; // default ≈ 0.010 Ma/s
     this.rateSlider.style.width = '100%';
     this.rateSlider.style.accentColor = '#4af';
     this.rateSlider.addEventListener('input', () => {
       const rate = sliderToRate(Number(this.rateSlider.value));
-      this.rateLabel.textContent = `Rate: ${rate.toFixed(2)} Ma/s`;
+      this.rateLabel.textContent = `Rate: ${rate.toFixed(3)} Ma/s`;
       this.rateChangeCb?.(rate);
     });
 
@@ -854,8 +881,8 @@ export class AppShell {
     this._eventLayerToggleBtn.addEventListener('click', () => {
       this._eventLayerActive = !this._eventLayerActive;
       this._eventLayerToggleBtn.style.background = this._eventLayerActive ? '#a62' : 'rgba(255,255,255,0.08)';
-      // Show the dropdown only when event layers is active and there are types available.
-      this._eventLayerSelect.style.display = this._eventLayerActive && this._eventLayerSelect.options.length > 1 ? 'block' : 'none';
+      // Show the dropdown whenever event layers is active (even if no types yet).
+      this._eventLayerSelect.style.display = this._eventLayerActive && this._eventLayerSelect.options.length > 0 ? 'block' : 'none';
       const type = this._eventLayerActive ? (this._eventLayerSelect.value || null) : null;
       this._eventLayerChangeCb?.(type);
     });
@@ -871,6 +898,11 @@ export class AppShell {
       fontSize: '11px',
       display: 'none',
     });
+    // Add a default placeholder option so the select is never empty.
+    const defaultPlaceholder = document.createElement('option');
+    defaultPlaceholder.value = '';
+    defaultPlaceholder.textContent = '— no event types yet —';
+    this._eventLayerSelect.appendChild(defaultPlaceholder);
     this._eventLayerSelect.addEventListener('change', () => {
       if (this._eventLayerActive) {
         this._eventLayerChangeCb?.(this._eventLayerSelect.value || null);
@@ -1073,9 +1105,9 @@ export class AppShell {
   setSimTime(timeMa: number): void {
     const abs = Math.abs(timeMa);
     if (abs >= 1000) {
-      this.timeEl.textContent = `Time: ${(timeMa / 1000).toFixed(2)} Ga`;
+      this.timeEl.textContent = `Time: ${(timeMa / 1000).toFixed(3)} Ga`;
     } else {
-      this.timeEl.textContent = `Time: ${timeMa.toFixed(2)} Ma`;
+      this.timeEl.textContent = `Time: ${timeMa.toFixed(3)} Ma`;
     }
   }
 
@@ -1103,6 +1135,7 @@ export class AppShell {
    * @param frontendGpu - WebGL renderer string from the browser (optional)
    */
   setComputeMode(isGpu: boolean, deviceName: string, memoryMb = 0, frontendGpu?: string): void {
+    this._isGpu = isGpu;
     const icon = isGpu ? '🖥 GPU' : '⚙️ CPU';
     this.computeEl.textContent = `${icon}`;
     const memLabel = isGpu && memoryMb > 0 ? ` · ${memoryMb >= 1024 ? (memoryMb / 1024).toFixed(1) + ' GB' : memoryMb + ' MB'}` : '';
@@ -1122,6 +1155,11 @@ export class AppShell {
 
   onRateChange(cb: (rate: number) => void): void {
     this.rateChangeCb = cb;
+  }
+
+  /** Return the current rate value from the slider. */
+  getRate(): number {
+    return sliderToRate(Number(this.rateSlider.value));
   }
 
   /** Register save-state callback. */
@@ -1494,7 +1532,7 @@ export class AppShell {
     this._eventLayerSelect.innerHTML = '';
     const placeholder = document.createElement('option');
     placeholder.value = '';
-    placeholder.textContent = '— select type —';
+    placeholder.textContent = types.length === 0 ? '— no event types yet —' : '— select type —';
     this._eventLayerSelect.appendChild(placeholder);
     for (const t of types) {
       const opt = document.createElement('option');
@@ -1502,8 +1540,8 @@ export class AppShell {
       opt.textContent = t;
       this._eventLayerSelect.appendChild(opt);
     }
-    // Dropdown is only visible when the event layers toggle is active.
-    this._eventLayerSelect.style.display = (this._eventLayerActive && types.length > 0) ? 'block' : 'none';
+    // Dropdown is visible whenever the event layers toggle is active.
+    this._eventLayerSelect.style.display = this._eventLayerActive ? 'block' : 'none';
   }
 
   /** Set event markers on the geological timeline. */
@@ -1754,22 +1792,81 @@ export class AppShell {
   }
 
   /** Push a tick stats snapshot into the history ring buffer (max 50). */
-  pushTickHistory(stats: { tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number; tectonicAdvectionMs?: number; tectonicCollisionMs?: number; tectonicBoundaryMs?: number; tectonicDynamicsMs?: number; tectonicVolcanismMs?: number }, tickCount: number): void {
+  pushTickHistory(stats: { tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number; tectonicAdvectionMs?: number; tectonicCollisionMs?: number; tectonicBoundaryMs?: number; tectonicDynamicsMs?: number; tectonicVolcanismMs?: number; isGpuActive?: boolean }, tickCount: number): void {
     this._tickHistory.push({ ...stats, tick: tickCount });
+    this._lastTickStats = { ...stats };
     if (this._tickHistory.length > 50) this._tickHistory.shift();
-    if (this._advancedViewOpen) this._renderAdvancedGraphs();
+    if (this._advancedViewOpen) {
+      this._renderAdvancedGraphs();
+      this._updateAdvancedLog();
+    }
   }
 
-  /** Update the processing status indicator. */
+  /** Update the processing status indicator with per-phase percentage and GPU/CPU tags. */
   setAdvancedProcessingStatus(statuses: Record<string, 'idle' | 'running' | 'done'>): void {
     if (!this._advancedViewOpen) return;
-    const lines: string[] = [];
     const icons: Record<string, string> = { idle: '○', running: '⟳', done: '✓' };
     const colors: Record<string, string> = { idle: '#666', running: '#4af', done: '#4c8' };
+    const total = this._lastTickStats?.totalMs ?? 0;
+
+    const phaseMs: Record<string, number> = {
+      'tectonic:advection':  this._lastTickStats?.tectonicAdvectionMs  ?? 0,
+      'tectonic:collision':  this._lastTickStats?.tectonicCollisionMs  ?? 0,
+      'tectonic:boundaries': this._lastTickStats?.tectonicBoundaryMs   ?? 0,
+      'tectonic:dynamics':   this._lastTickStats?.tectonicDynamicsMs   ?? 0,
+      'tectonic:volcanism':  this._lastTickStats?.tectonicVolcanismMs  ?? 0,
+      surface:               this._lastTickStats?.surfaceMs     ?? 0,
+      atmosphere:            this._lastTickStats?.atmosphereMs  ?? 0,
+      vegetation:            this._lastTickStats?.vegetationMs  ?? 0,
+      biomatter:             this._lastTickStats?.biomatterMs   ?? 0,
+    };
+
+    const lines: string[] = [];
     for (const [agent, status] of Object.entries(statuses)) {
-      lines.push(`<span style="color:${colors[status]}">${icons[status]}</span> ${agent}: <span style="color:${colors[status]}">${status}</span>`);
+      const computeTag = this._isGpu && AppShell.GPU_PHASES.has(agent) ? '<span style="color:#7ef;font-size:9px">[GPU]</span>' : '<span style="color:#adf;font-size:9px">[CPU]</span>';
+      let pctStr = '';
+      if (status === 'done' && total > 0) {
+        pctStr = ` <span style="color:#999;font-size:9px">${AppShell._pct(phaseMs[agent] ?? 0, total)}%</span>`;
+      }
+      lines.push(`<div><span style="color:${colors[status]}">${icons[status]}</span> ${agent} ${computeTag}<span style="color:${colors[status]}">${status}</span>${pctStr}</div>`);
     }
-    this._advancedProcessingEl.innerHTML = lines.join(' &nbsp;|&nbsp; ');
+    this._advancedProcessingEl.innerHTML = lines.join('');
+  }
+
+  /** Compute percentage of a phase ms relative to total, rounded. */
+  private static _pct(ms: number, total: number): number {
+    return total > 0 ? Math.round((ms / total) * 100) : 0;
+  }
+
+  /** Refresh the fine-grained tick log in the advanced view. */
+  private _updateAdvancedLog(): void {
+    if (!this._lastTickStats) return;
+    const s = this._lastTickStats;
+    const compute = (s.isGpuActive ?? this._isGpu) ? 'GPU' : 'CPU';
+    const total = s.totalMs;
+    const lines: string[] = [];
+    const pct = (ms: number) => total > 0 ? `${AppShell._pct(ms, total)}%` : '—';
+
+    const hasSubPhases = s.tectonicAdvectionMs !== undefined;
+    if (hasSubPhases) {
+      lines.push(`<span style="color:#7ef">[${compute}]</span> <span style="color:#ef4">Tectonic sub-phases:</span>`);
+      lines.push(`  ⛰ Advect  ${s.tectonicAdvectionMs}ms (${pct(s.tectonicAdvectionMs ?? 0)})`);
+      lines.push(`  ⛰ Collide ${s.tectonicCollisionMs}ms (${pct(s.tectonicCollisionMs ?? 0)})`);
+      lines.push(`  ⛰ Bounds  ${s.tectonicBoundaryMs}ms (${pct(s.tectonicBoundaryMs ?? 0)})`);
+      lines.push(`  ⛰ Dynamics ${s.tectonicDynamicsMs}ms (${pct(s.tectonicDynamicsMs ?? 0)})`);
+      lines.push(`  🌋 Volcanism ${s.tectonicVolcanismMs}ms (${pct(s.tectonicVolcanismMs ?? 0)})`);
+    } else {
+      lines.push(`<span style="color:#7ef">[${compute}]</span> ⛰ Tectonic ${s.tectonicMs}ms (${pct(s.tectonicMs)})`);
+    }
+    lines.push(`<span style="color:#7ef">[${compute}]</span> 🌊 Surface ${s.surfaceMs}ms (${pct(s.surfaceMs)})`);
+    lines.push(`<span style="color:#7ef">[${compute}]</span> ☁️ Atmosphere ${s.atmosphereMs}ms (${pct(s.atmosphereMs)})`);
+    lines.push(`<span style="color:#adf">[CPU]</span> 🌿 Vegetation ${s.vegetationMs}ms (${pct(s.vegetationMs)})`);
+    lines.push(`<span style="color:#adf">[CPU]</span> 🧬 Biomatter ${s.biomatterMs}ms (${pct(s.biomatterMs)})`);
+    lines.push(`<b>Total: ${total}ms</b>`);
+
+    this._advancedLogEl.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
+    // Scroll to bottom
+    this._advancedLogEl.scrollTop = this._advancedLogEl.scrollHeight;
   }
 
   /** Render the timing history and computational load charts on Canvas. */
@@ -1783,6 +1880,11 @@ export class AppShell {
     const canvas = this._advancedTimingCanvas;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    // Sync canvas buffer dimensions with its CSS-rendered size to avoid stretching.
+    const cw = canvas.clientWidth || 260;
+    const ch = canvas.clientHeight || 120;
+    if (canvas.width !== cw) canvas.width = cw;
+    if (canvas.height !== ch) canvas.height = ch;
     const w = canvas.width;
     const h = canvas.height;
     ctx.clearRect(0, 0, w, h);
@@ -1843,6 +1945,11 @@ export class AppShell {
     const canvas = this._advancedLoadCanvas;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    // Sync canvas buffer dimensions with its CSS-rendered size to avoid stretching.
+    const cw = canvas.clientWidth || 260;
+    const ch = canvas.clientHeight || 80;
+    if (canvas.width !== cw) canvas.width = cw;
+    if (canvas.height !== ch) canvas.height = ch;
     const w = canvas.width;
     const h = canvas.height;
     ctx.clearRect(0, 0, w, h);

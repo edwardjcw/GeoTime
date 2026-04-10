@@ -30,8 +30,8 @@ const labelRenderer = new LabelRenderer(shell.getLabelLayer());
 let simTimeMa = -4500;
 /** Whether the simulation is paused locally. */
 let paused = false;
-/** Simulation rate (Ma per second of real time). */
-let simRate = 1;
+/** Simulation rate (Ma per second of real time). Default matches the slider default (0.010 Ma/s). */
+let simRate = 0.01;
 
 // Initialise the HUD time display immediately so it never shows "--"
 shell.setSimTime(simTimeMa);

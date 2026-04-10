@@ -707,3 +707,48 @@ public class SplitPhaseTests
         sim.Dispose();
     }
 }
+
+public class TickStatsGpuTests
+{
+    [Fact]
+    public void TickStats_IsGpuActive_MatchesGpuServiceState()
+    {
+        // IsGpuActive should reflect the actual GPU service state after an advance.
+        var sim = new SimulationOrchestrator(16);
+        sim.GeneratePlanet(42);
+        sim.AdvanceSimulation(0.5);
+        var stats = sim.LastTickStats;
+        // The value must match what the GPU service reports.
+        Assert.Equal(sim.GetComputeInfo().Mode == GeoTime.Core.Compute.ComputeMode.GPU, stats.IsGpuActive);
+        Assert.True(stats.TotalMs > 0);
+        sim.Dispose();
+    }
+
+    [Fact]
+    public async Task TickStats_IsGpuActive_MatchesGpuServiceState_Async()
+    {
+        // The async path must also set IsGpuActive to match the GPU service.
+        var sim = new SimulationOrchestrator(16);
+        sim.GeneratePlanet(42);
+        await sim.AdvanceSimulationAsync(0.5);
+        var stats = sim.LastTickStats;
+        Assert.Equal(sim.GetComputeInfo().Mode == GeoTime.Core.Compute.ComputeMode.GPU, stats.IsGpuActive);
+        Assert.True(stats.TotalMs > 0);
+        sim.Dispose();
+    }
+
+    [Fact]
+    public void TickStats_EventLog_ContainsGpuCpuTag()
+    {
+        var sim = new SimulationOrchestrator(16);
+        sim.GeneratePlanet(42);
+        sim.AdvanceSimulation(0.5);
+        var tickEntry = sim.EventLog.GetAll()
+            .LastOrDefault(e => e.Type == "TICK_STATS");
+        Assert.NotNull(tickEntry);
+        // Description should contain either [GPU] or [CPU]
+        Assert.True(tickEntry!.Description.Contains("[GPU]") || tickEntry.Description.Contains("[CPU]"),
+            $"Expected [GPU] or [CPU] tag in TICK_STATS description, got: {tickEntry.Description}");
+        sim.Dispose();
+    }
+}

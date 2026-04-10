@@ -186,3 +186,159 @@ describe('AppShell – updateLogPanel', () => {
     expect(text).toContain('none');
   });
 });
+
+describe('AppShell – setSimTime (3 decimal places)', () => {
+  let root: HTMLElement;
+  let shell: AppShell;
+
+  beforeEach(() => {
+    root = document.createElement('div');
+    document.body.appendChild(root);
+    shell = new AppShell(root);
+  });
+
+  it('should show time in Ma with 3 decimal places', () => {
+    shell.setSimTime(-500.123456);
+    const text = root.textContent ?? '';
+    expect(text).toMatch(/Time: -?[\d]+\.\d{3} Ma/);
+  });
+
+  it('should show time in Ga with 3 decimal places when ≥1000 Ma', () => {
+    shell.setSimTime(1500);
+    const text = root.textContent ?? '';
+    expect(text).toMatch(/Time: [\d]+\.\d{3} Ga/);
+  });
+});
+
+describe('AppShell – rate slider defaults', () => {
+  let root: HTMLElement;
+  let shell: AppShell;
+
+  beforeEach(() => {
+    root = document.createElement('div');
+    document.body.appendChild(root);
+    shell = new AppShell(root);
+  });
+
+  it('should display default rate label with 3 decimal places', () => {
+    const text = root.textContent ?? '';
+    expect(text).toMatch(/Rate: 0\.010 Ma\/s/);
+  });
+
+  it('should return initial rate of ~0.010 from getRate()', () => {
+    const rate = shell.getRate();
+    expect(rate).toBeCloseTo(0.010, 2);
+  });
+});
+
+describe('AppShell – event layer dropdown', () => {
+  let root: HTMLElement;
+  let shell: AppShell;
+
+  beforeEach(() => {
+    root = document.createElement('div');
+    document.body.appendChild(root);
+    shell = new AppShell(root);
+  });
+
+  it('should show dropdown when event layers is toggled on (even with no types)', () => {
+    // No types populated yet — find the toggle button and click it
+    const btn = Array.from(root.querySelectorAll('button')).find(
+      (b) => b.textContent === 'event layers',
+    );
+    expect(btn).toBeTruthy();
+    btn!.click();
+    // After toggle the select should be visible
+    const select = root.querySelector('select');
+    expect(select).toBeTruthy();
+    expect(select!.style.display).not.toBe('none');
+  });
+
+  it('should show dropdown with types after setEventLayerTypes', () => {
+    // First activate the toggle
+    const btn = Array.from(root.querySelectorAll('button')).find(
+      (b) => b.textContent === 'event layers',
+    );
+    btn!.click();
+    shell.setEventLayerTypes(['ImpactEjecta', 'VolcanicAsh']);
+    const select = root.querySelector('select')!;
+    expect(select.style.display).not.toBe('none');
+    expect(select.options.length).toBe(3); // placeholder + 2 types
+  });
+
+  it('should hide dropdown when event layers is toggled off', () => {
+    const btn = Array.from(root.querySelectorAll('button')).find(
+      (b) => b.textContent === 'event layers',
+    );
+    btn!.click(); // on
+    btn!.click(); // off
+    const select = root.querySelector('select')!;
+    expect(select.style.display).toBe('none');
+  });
+});
+
+describe('AppShell – advanced view processing status with GPU/CPU tags and percentage', () => {
+  let root: HTMLElement;
+  let shell: AppShell;
+
+  beforeEach(() => {
+    root = document.createElement('div');
+    document.body.appendChild(root);
+    shell = new AppShell(root);
+    // Open the log panel first, then the advanced view
+    const logBtn = root.querySelector<HTMLButtonElement>('[data-log-btn]');
+    if (logBtn) logBtn.click();
+  });
+
+  it('pushTickHistory stores stats and advancedLogEl shows tick data when view is open', () => {
+    // Open the advanced view button
+    const advBtn = Array.from(root.querySelectorAll('button')).find(
+      (b) => b.textContent?.includes('Advanced View'),
+    );
+    if (advBtn) advBtn.click(); // open advanced view
+
+    shell.pushTickHistory(
+      {
+        tectonicMs: 100, surfaceMs: 50, atmosphereMs: 30, vegetationMs: 10, biomatterMs: 5,
+        totalMs: 195, isGpuActive: false,
+        tectonicAdvectionMs: 40, tectonicCollisionMs: 30, tectonicBoundaryMs: 15,
+        tectonicDynamicsMs: 10, tectonicVolcanismMs: 5,
+      },
+      1,
+    );
+    // The advanced log element should contain tick data with total ms
+    const logText = root.textContent ?? '';
+    expect(logText).toContain('195ms');
+    // Should contain CPU tag since isGpuActive = false
+    expect(logText).toContain('[CPU]');
+  });
+
+  it('setComputeMode with GPU=true causes GPU tags to appear in processing status', () => {
+    shell.setComputeMode(true, 'Test GPU', 4096);
+
+    // Open the advanced view
+    const advBtn = Array.from(root.querySelectorAll('button')).find(
+      (b) => b.textContent?.includes('Advanced View'),
+    );
+    if (advBtn) advBtn.click();
+
+    // Push tick stats so lastTickStats is populated
+    shell.pushTickHistory(
+      { tectonicMs: 100, surfaceMs: 50, atmosphereMs: 30, vegetationMs: 10, biomatterMs: 5, totalMs: 195 },
+      1,
+    );
+
+    // Trigger processing status update
+    shell.setAdvancedProcessingStatus({
+      'tectonic:advection': 'done',
+      surface: 'done',
+      vegetation: 'done',
+    });
+
+    const html = root.innerHTML;
+    // GPU phases should show [GPU] tag, CPU phases [CPU]
+    expect(html).toContain('[GPU]'); // tectonic:advection and surface are GPU
+    expect(html).toContain('[CPU]'); // vegetation is always CPU
+  });
+});
+
