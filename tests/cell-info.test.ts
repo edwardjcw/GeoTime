@@ -290,19 +290,55 @@ describe('AppShell – advanced view processing status with GPU/CPU tags and per
     if (logBtn) logBtn.click();
   });
 
-  it('pushTickHistory stores stats and updates advancedLogEl when open', () => {
-    // Force advanced view open via pushTickHistory with isGpuActive
+  it('pushTickHistory stores stats and advancedLogEl shows tick data when view is open', () => {
+    // Open the advanced view button
+    const advBtn = Array.from(root.querySelectorAll('button')).find(
+      (b) => b.textContent?.includes('Advanced View'),
+    );
+    if (advBtn) advBtn.click(); // open advanced view
+
     shell.pushTickHistory(
-      { tectonicMs: 100, surfaceMs: 50, atmosphereMs: 30, vegetationMs: 10, biomatterMs: 5, totalMs: 200, isGpuActive: true },
+      {
+        tectonicMs: 100, surfaceMs: 50, atmosphereMs: 30, vegetationMs: 10, biomatterMs: 5,
+        totalMs: 195, isGpuActive: false,
+        tectonicAdvectionMs: 40, tectonicCollisionMs: 30, tectonicBoundaryMs: 15,
+        tectonicDynamicsMs: 10, tectonicVolcanismMs: 5,
+      },
       1,
     );
-    // After push, getRate() should still work
-    expect(shell.getRate()).toBeCloseTo(0.010, 2);
+    // The advanced log element should contain tick data with total ms
+    const logText = root.textContent ?? '';
+    expect(logText).toContain('195ms');
+    // Should contain CPU tag since isGpuActive = false
+    expect(logText).toContain('[CPU]');
   });
 
-  it('setComputeMode stores GPU flag', () => {
+  it('setComputeMode with GPU=true causes GPU tags to appear in processing status', () => {
     shell.setComputeMode(true, 'Test GPU', 4096);
-    // No assertion needed for internal state, just verify no crash
+
+    // Open the advanced view
+    const advBtn = Array.from(root.querySelectorAll('button')).find(
+      (b) => b.textContent?.includes('Advanced View'),
+    );
+    if (advBtn) advBtn.click();
+
+    // Push tick stats so lastTickStats is populated
+    shell.pushTickHistory(
+      { tectonicMs: 100, surfaceMs: 50, atmosphereMs: 30, vegetationMs: 10, biomatterMs: 5, totalMs: 195 },
+      1,
+    );
+
+    // Trigger processing status update
+    shell.setAdvancedProcessingStatus({
+      'tectonic:advection': 'done',
+      surface: 'done',
+      vegetation: 'done',
+    });
+
+    const html = root.innerHTML;
+    // GPU phases should show [GPU] tag, CPU phases [CPU]
+    expect(html).toContain('[GPU]'); // tectonic:advection and surface are GPU
+    expect(html).toContain('[CPU]'); // vegetation is always CPU
   });
 });
 

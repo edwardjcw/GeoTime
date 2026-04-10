@@ -73,6 +73,15 @@ export class AppShell {
   private _lastTickStats: { tectonicMs: number; surfaceMs: number; atmosphereMs: number; vegetationMs: number; biomatterMs: number; totalMs: number; tectonicAdvectionMs?: number; tectonicCollisionMs?: number; tectonicBoundaryMs?: number; tectonicDynamicsMs?: number; tectonicVolcanismMs?: number; isGpuActive?: boolean } | null = null;
   private _isGpu = false;
 
+  /**
+   * Phases that use GPU kernels when GPU acceleration is active.
+   * Volcanism, vegetation, and biomatter always run on CPU.
+   */
+  private static readonly GPU_PHASES = new Set([
+    'tectonic:advection', 'tectonic:collision', 'tectonic:boundaries', 'tectonic:dynamics',
+    'surface', 'atmosphere',
+  ]);
+
   // ── Inspect panel elements ──────────────────────────────────────────────
   private inspectPanel: HTMLElement;
   private inspectContent: HTMLElement;
@@ -1800,8 +1809,6 @@ export class AppShell {
     const colors: Record<string, string> = { idle: '#666', running: '#4af', done: '#4c8' };
     const total = this._lastTickStats?.totalMs ?? 0;
 
-    // Map each phase to its compute type (GPU when _isGpu active, else CPU; some phases are always CPU)
-    const gpuPhases = new Set(['tectonic:advection', 'tectonic:collision', 'tectonic:boundaries', 'tectonic:dynamics', 'surface', 'atmosphere']);
     const phaseMs: Record<string, number> = {
       'tectonic:advection':  this._lastTickStats?.tectonicAdvectionMs  ?? 0,
       'tectonic:collision':  this._lastTickStats?.tectonicCollisionMs  ?? 0,
@@ -1816,16 +1823,19 @@ export class AppShell {
 
     const lines: string[] = [];
     for (const [agent, status] of Object.entries(statuses)) {
-      const computeTag = this._isGpu && gpuPhases.has(agent) ? '<span style="color:#7ef;font-size:9px">[GPU]</span>' : '<span style="color:#adf;font-size:9px">[CPU]</span>';
+      const computeTag = this._isGpu && AppShell.GPU_PHASES.has(agent) ? '<span style="color:#7ef;font-size:9px">[GPU]</span>' : '<span style="color:#adf;font-size:9px">[CPU]</span>';
       let pctStr = '';
       if (status === 'done' && total > 0) {
-        const ms = phaseMs[agent] ?? 0;
-        const pct = Math.round((ms / total) * 100);
-        pctStr = ` <span style="color:#999;font-size:9px">${pct}%</span>`;
+        pctStr = ` <span style="color:#999;font-size:9px">${AppShell._pct(phaseMs[agent] ?? 0, total)}%</span>`;
       }
       lines.push(`<div><span style="color:${colors[status]}">${icons[status]}</span> ${agent} ${computeTag}<span style="color:${colors[status]}">${status}</span>${pctStr}</div>`);
     }
     this._advancedProcessingEl.innerHTML = lines.join('');
+  }
+
+  /** Compute percentage of a phase ms relative to total, rounded. */
+  private static _pct(ms: number, total: number): number {
+    return total > 0 ? Math.round((ms / total) * 100) : 0;
   }
 
   /** Refresh the fine-grained tick log in the advanced view. */
@@ -1835,7 +1845,7 @@ export class AppShell {
     const compute = (s.isGpuActive ?? this._isGpu) ? 'GPU' : 'CPU';
     const total = s.totalMs;
     const lines: string[] = [];
-    const pct = (ms: number) => total > 0 ? `${Math.round((ms / total) * 100)}%` : '—';
+    const pct = (ms: number) => total > 0 ? `${AppShell._pct(ms, total)}%` : '—';
 
     const hasSubPhases = s.tectonicAdvectionMs !== undefined;
     if (hasSubPhases) {

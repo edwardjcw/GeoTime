@@ -711,27 +711,28 @@ public class SplitPhaseTests
 public class TickStatsGpuTests
 {
     [Fact]
-    public void TickStats_IsGpuActive_PopulatedAfterAdvance()
+    public void TickStats_IsGpuActive_MatchesGpuServiceState()
     {
+        // IsGpuActive should reflect the actual GPU service state after an advance.
         var sim = new SimulationOrchestrator(16);
         sim.GeneratePlanet(42);
         sim.AdvanceSimulation(0.5);
         var stats = sim.LastTickStats;
-        // IsGpuActive is a bool — it must be either true or false (no null)
-        Assert.True(stats.IsGpuActive == true || stats.IsGpuActive == false);
+        // The value must match what the GPU service reports.
+        Assert.Equal(sim.GetComputeInfo().Mode == GeoTime.Core.Compute.ComputeMode.GPU, stats.IsGpuActive);
         Assert.True(stats.TotalMs > 0);
         sim.Dispose();
     }
 
     [Fact]
-    public async Task TickStats_IsGpuActive_PopulatedAfterAsyncAdvance()
+    public async Task TickStats_IsGpuActive_MatchesGpuServiceState_Async()
     {
+        // The async path must also set IsGpuActive to match the GPU service.
         var sim = new SimulationOrchestrator(16);
         sim.GeneratePlanet(42);
         await sim.AdvanceSimulationAsync(0.5);
         var stats = sim.LastTickStats;
-        // The async path also sets IsGpuActive
-        Assert.True(stats.IsGpuActive == true || stats.IsGpuActive == false);
+        Assert.Equal(sim.GetComputeInfo().Mode == GeoTime.Core.Compute.ComputeMode.GPU, stats.IsGpuActive);
         Assert.True(stats.TotalMs > 0);
         sim.Dispose();
     }
