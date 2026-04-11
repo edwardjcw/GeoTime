@@ -51,9 +51,10 @@ public sealed class GlacialEngine(int gridSize, GpuComputeService? gpu = null)
                     (float)ICE_ACCUMULATION_RATE, (float)ICE_ABLATION_RATE);
                 gpuIceDone = true;
             }
-            catch
+            catch (Exception ex)
             {
                 // GPU ice thickness update failed — fall through to CPU path
+                System.Diagnostics.Debug.WriteLine($"[GlacialEngine] GPU ice thickness update failed: {ex.Message}");
             }
         }
 

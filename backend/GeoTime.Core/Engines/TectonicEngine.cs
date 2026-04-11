@@ -330,9 +330,10 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
                 destMap = gpu.ComputeAdvectDestinations(state.PlateMap, kx, ky, kz, cosTheta, sinTheta, gs);
                 gpuAdvectDone = true;
             }
-            catch
+            catch (Exception ex)
             {
                 // GPU advect failed (e.g. out of memory) — fall through to CPU path
+                System.Diagnostics.Debug.WriteLine($"[TectonicEngine] GPU advect scatter failed: {ex.Message}");
                 destMap = null!;
             }
         }
@@ -487,9 +488,10 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
                     hitCount, GAP_FLOOR_HEIGHT, GAP_CRUST_KM, (byte)RockType.IGN_BASALT, (float)timeMa);
                 gpuGapFillDone = true;
             }
-            catch
+            catch (Exception ex)
             {
                 // GPU gap fill failed — fall through to CPU path
+                System.Diagnostics.Debug.WriteLine($"[TectonicEngine] GPU gap fill failed: {ex.Message}");
             }
         }
 
@@ -565,9 +567,10 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
                 (sumX, sumY, sumZ, count) = gpu.ComputePlateCenterSums(state.PlateMap, gs, numPlates);
                 gpuCentersDone = true;
             }
-            catch
+            catch (Exception ex)
             {
                 // GPU plate centers failed — fall through to CPU path
+                System.Diagnostics.Debug.WriteLine($"[TectonicEngine] GPU plate centers failed: {ex.Message}");
                 sumX = sumY = sumZ = count = null!;
             }
         }
@@ -684,9 +687,10 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
                 gpu.ApplyIsostasy(state.HeightMap, state.CrustThicknessMap, relaxF, factor, offset);
                 return;
             }
-            catch
+            catch (Exception ex)
             {
                 // GPU isostasy failed — fall through to CPU path
+                System.Diagnostics.Debug.WriteLine($"[TectonicEngine] GPU isostasy failed: {ex.Message}");
             }
         }
 

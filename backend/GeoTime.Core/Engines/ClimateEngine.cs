@@ -41,9 +41,10 @@ public sealed class ClimateEngine(int gridSize, GpuComputeService? gpu = null)
                     (float)alpha, (float)dT_ghg, (float)dT_milan);
                 gpuTempDone = true;
             }
-            catch
+            catch (Exception ex)
             {
                 // GPU temperature update failed — fall through to CPU path
+                System.Diagnostics.Debug.WriteLine($"[ClimateEngine] GPU temperature update failed: {ex.Message}");
             }
         }
 
@@ -92,9 +93,10 @@ public sealed class ClimateEngine(int gridSize, GpuComputeService? gpu = null)
                 gpu.ComputeWinds(state.WindUMap, state.WindVMap, gridSize);
                 gpuWindDone = true;
             }
-            catch
+            catch (Exception ex)
             {
                 // GPU wind computation failed — fall through to CPU path
+                System.Diagnostics.Debug.WriteLine($"[ClimateEngine] GPU wind computation failed: {ex.Message}");
             }
         }
 
@@ -153,9 +155,10 @@ public sealed class ClimateEngine(int gridSize, GpuComputeService? gpu = null)
                 gpu.DiffuseTemperature(temp, gridSize, DiffusionAlpha);
                 return;
             }
-            catch
+            catch (Exception ex)
             {
                 // GPU diffusion failed — fall through to CPU path
+                System.Diagnostics.Debug.WriteLine($"[ClimateEngine] GPU diffusion failed: {ex.Message}");
             }
         }
 
