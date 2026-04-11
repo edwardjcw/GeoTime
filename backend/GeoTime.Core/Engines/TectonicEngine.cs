@@ -21,6 +21,26 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
     /// <summary>Thin oceanic crust thickness for newly created rift cells (km).</summary>
     private const float GAP_CRUST_KM = 7f;
 
+    /// <summary>
+    /// Minimum fraction of total cells a connected component must have to be kept as part of its plate.
+    /// Fragments smaller than this are reassigned to the surrounding plate.
+    /// </summary>
+    private const double MIN_FRAGMENT_FRACTION = 0.005; // 0.5% of total cells
+
+    /// <summary>
+    /// Minimum fraction of total cells a plate must occupy to survive.
+    /// Plates below this threshold are absorbed into their largest neighbor.
+    /// </summary>
+    private const double MIN_PLATE_FRACTION = 0.005; // 0.5% of total cells
+
+    /// <summary>
+    /// Minimum fraction of total cells a rift zone must occupy to nucleate a new plate.
+    /// </summary>
+    private const double MIN_RIFT_PLATE_FRACTION = 0.02; // 2% of total cells
+
+    /// <summary>Maximum number of plates allowed to prevent unbounded growth.</summary>
+    private const int MAX_PLATES = 30;
+
     public StratigraphyStack Stratigraphy { get; } = new();
     private readonly BoundaryClassifier _classifier = new();
     private readonly VolcanismEngine _volcanism = new();
@@ -67,6 +87,14 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         //    movement.  Sub-tick boundary processes then operate on the updated
         //    plate configuration.
         AdvectPlates(_state, deltaMa, timeMa);
+
+        // Consolidate plate fragments: reassign isolated cells to neighboring plates
+        // so that boundaries remain clean and plate territories stay spatially coherent.
+        ConsolidatePlateFragments(_state);
+
+        // Manage plate lifecycle: absorb tiny plates, nucleate new plates at rifts.
+        ManagePlateLifecycle(_state, timeMa);
+
         UpdatePlateCenters(_state);
 
         // S1: Cache boundaries once after advection (S3: GPU when available)
@@ -103,6 +131,10 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
 
         AdvectPlates(_state, deltaMa, timeMa);
         if (onSubPhase != null) await onSubPhase("tectonic:advection");
+
+        // Consolidate plate fragments and manage lifecycle after advection.
+        ConsolidatePlateFragments(_state);
+        ManagePlateLifecycle(_state, timeMa);
 
         UpdatePlateCenters(_state);
 
@@ -728,6 +760,398 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
                 }
             }
         });
+    }
+
+    // ── Plate consolidation: remove lattice-like fragmentation ─────────────────
+
+    /// <summary>
+    /// After advection, isolated cells or small clusters of a plate can end up
+    /// deep inside another plate's territory.  This creates an unrealistic
+    /// lattice pattern and exponentially increases boundary count.
+    /// 
+    /// This method identifies connected components for each plate via flood-fill,
+    /// keeps only the largest component as the "real" plate body, and reassigns
+    /// all smaller fragments to the dominant neighboring plate.
+    /// </summary>
+    internal void ConsolidatePlateFragments(SimulationState state)
+    {
+        var gs = state.GridSize;
+        var cc = state.CellCount;
+        var plateMap = state.PlateMap;
+
+        // componentId[cell] = unique component ID assigned by flood-fill
+        var componentId = new int[cc];
+        Array.Fill(componentId, -1);
+
+        // Track component info: componentId → (plateId, cellCount)
+        var componentPlate = new List<int>();  // componentId → plateId
+        var componentSize = new List<int>();   // componentId → cell count
+        var nextComponent = 0;
+
+        // Flood-fill to identify connected components
+        var queue = new Queue<int>();
+        var neighbors = new int[4];
+        for (var i = 0; i < cc; i++)
+        {
+            if (componentId[i] >= 0) continue;
+
+            int plateId = plateMap[i];
+            int compId = nextComponent++;
+            componentPlate.Add(plateId);
+            componentSize.Add(0);
+
+            queue.Enqueue(i);
+            componentId[i] = compId;
+
+            while (queue.Count > 0)
+            {
+                var cell = queue.Dequeue();
+                componentSize[compId]++;
+
+                var row = cell / gs;
+                var col = cell % gs;
+                // Check 4 neighbors (up, down, left-wrap, right-wrap)
+                var nCount = 0;
+                if (row > 0) neighbors[nCount++] = (row - 1) * gs + col;
+                if (row < gs - 1) neighbors[nCount++] = (row + 1) * gs + col;
+                neighbors[nCount++] = row * gs + ((col - 1 + gs) % gs);
+                neighbors[nCount++] = row * gs + ((col + 1) % gs);
+
+                for (var n = 0; n < nCount; n++)
+                {
+                    var ni = neighbors[n];
+                    if (componentId[ni] < 0 && plateMap[ni] == plateId)
+                    {
+                        componentId[ni] = compId;
+                        queue.Enqueue(ni);
+                    }
+                }
+            }
+        }
+
+        // For each plate, find the largest connected component
+        var numPlates = _plates.Count;
+        var largestComponent = new int[numPlates]; // plateId → componentId of largest
+        var largestSize = new int[numPlates];
+
+        for (var c = 0; c < nextComponent; c++)
+        {
+            var pid = componentPlate[c];
+            if (pid < numPlates && componentSize[c] > largestSize[pid])
+            {
+                largestSize[pid] = componentSize[c];
+                largestComponent[pid] = c;
+            }
+        }
+
+        // Determine minimum fragment size threshold.
+        // Fragments smaller than this are reassigned to the neighboring plate.
+        // Use Math.Max(2,...) so even on small grids, isolated cells are cleaned up.
+        var minFragmentSize = Math.Max(2, (int)(cc * MIN_FRAGMENT_FRACTION));
+
+        // Reassign cells in small fragments to the dominant neighboring plate.
+        // A fragment is reassigned if:
+        // 1) It is NOT the largest component of its plate AND is below the size threshold, OR
+        // 2) Even the largest component of its plate is below the threshold (entire plate is too small)
+        for (var i = 0; i < cc; i++)
+        {
+            var compId = componentId[i];
+            var pid = componentPlate[compId];
+            if (pid >= numPlates) continue;
+
+            var isLargest = compId == largestComponent[pid];
+            var tooSmall = componentSize[compId] < minFragmentSize;
+
+            // Keep if this is the largest component AND it's big enough
+            if (isLargest && !tooSmall) continue;
+            // Keep non-largest fragments if they're still big enough
+            if (!isLargest && !tooSmall) continue;
+
+            // Find the dominant neighbor plate (different from current plate)
+            var row = i / gs;
+            var col = i % gs;
+            var neighborPlate = FindDominantNeighborPlate(row, col, gs, plateMap, (ushort)pid);
+            if (neighborPlate >= 0)
+            {
+                plateMap[i] = (ushort)neighborPlate;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Find the most common plate among neighbors that differs from the given plate.
+    /// Uses a 3×3 neighborhood (8-connected + center excluded).
+    /// </summary>
+    private static int FindDominantNeighborPlate(int row, int col, int gs, ushort[] plateMap, ushort excludePlate)
+    {
+        // Count neighbor plates in a small window
+        Span<int> counts = stackalloc int[32]; // up to 32 plates; overflow handled below
+        counts.Clear();
+        var maxPlateId = counts.Length - 1;
+        var bestPlate = -1;
+        var bestCount = 0;
+
+        for (var dr = -1; dr <= 1; dr++)
+        {
+            var nr = row + dr;
+            if (nr < 0 || nr >= gs) continue;
+            for (var dc = -1; dc <= 1; dc++)
+            {
+                if (dr == 0 && dc == 0) continue;
+                var nc = ((col + dc) % gs + gs) % gs;
+                var ni = nr * gs + nc;
+                int p = plateMap[ni];
+                if (p == excludePlate) continue;
+
+                if (p <= maxPlateId)
+                {
+                    counts[p]++;
+                    if (counts[p] > bestCount)
+                    {
+                        bestCount = counts[p];
+                        bestPlate = p;
+                    }
+                }
+                else if (bestPlate < 0)
+                {
+                    bestPlate = p;
+                }
+            }
+        }
+
+        return bestPlate;
+    }
+
+    // ── Plate lifecycle management ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Manages plate lifecycle:
+    /// 1) Absorbs plates that have shrunk below the minimum viable size into
+    ///    their largest neighbor.
+    /// 2) Nucleates new plates at large contiguous rift/gap zones where new
+    ///    oceanic crust has formed with no strong plate affinity.
+    /// </summary>
+    internal void ManagePlateLifecycle(SimulationState state, double timeMa)
+    {
+        AbsorbTinyPlates(state, timeMa);
+        NucleateRiftPlates(state, timeMa);
+    }
+
+    /// <summary>
+    /// Plates that have shrunk below MIN_PLATE_FRACTION of total cells are absorbed:
+    /// all their cells are reassigned to the most common neighboring plate.
+    /// The plate entry is kept in the list (to preserve indices) but its area becomes 0.
+    /// </summary>
+    private void AbsorbTinyPlates(SimulationState state, double timeMa)
+    {
+        var cc = state.CellCount;
+        var gs = state.GridSize;
+        var plateMap = state.PlateMap;
+        var numPlates = _plates.Count;
+
+        // Count cells per plate
+        var plateCounts = new int[numPlates];
+        for (var i = 0; i < cc; i++)
+        {
+            int p = plateMap[i];
+            if (p < numPlates) plateCounts[p]++;
+        }
+
+        var minPlateSize = (int)(cc * MIN_PLATE_FRACTION);
+        if (minPlateSize < 2) minPlateSize = 2;
+
+        for (var p = 0; p < numPlates; p++)
+        {
+            if (plateCounts[p] == 0 || plateCounts[p] >= minPlateSize) continue;
+
+            // Find the most common neighboring plate for this plate's cells
+            var neighborCounts = new int[numPlates];
+            for (var i = 0; i < cc; i++)
+            {
+                if (plateMap[i] != p) continue;
+                var row = i / gs;
+                var col = i % gs;
+                // Check 4-connected neighbors
+                if (row > 0 && plateMap[(row - 1) * gs + col] != p)
+                    neighborCounts[plateMap[(row - 1) * gs + col]]++;
+                if (row < gs - 1 && plateMap[(row + 1) * gs + col] != p)
+                    neighborCounts[plateMap[(row + 1) * gs + col]]++;
+                var left = row * gs + ((col - 1 + gs) % gs);
+                if (plateMap[left] != p) neighborCounts[plateMap[left]]++;
+                var right = row * gs + ((col + 1) % gs);
+                if (plateMap[right] != p) neighborCounts[plateMap[right]]++;
+            }
+
+            // Find the dominant neighbor
+            var bestNeighbor = -1;
+            var bestCount = 0;
+            for (var n = 0; n < numPlates; n++)
+            {
+                if (neighborCounts[n] > bestCount)
+                {
+                    bestCount = neighborCounts[n];
+                    bestNeighbor = n;
+                }
+            }
+
+            if (bestNeighbor < 0) continue;
+
+            // Reassign all cells of this plate to the dominant neighbor
+            for (var i = 0; i < cc; i++)
+            {
+                if (plateMap[i] == p)
+                    plateMap[i] = (ushort)bestNeighbor;
+            }
+
+            _plates[p].Area = 0;
+
+            bus.Emit("PLATE_ABSORBED", new { absorbedPlate = p, absorbingPlate = bestNeighbor });
+            eventLog.Record(new GeoLogEntry
+            {
+                TimeMa = timeMa,
+                Type = "PLATE_ABSORBED",
+                Description = $"Plate {p} absorbed by plate {bestNeighbor} (too small to sustain)",
+            });
+        }
+    }
+
+    /// <summary>
+    /// Look for large contiguous regions of young oceanic crust that span
+    /// multiple plate territories.  When a rift zone is big enough, nucleate
+    /// a new plate to represent the freshly created oceanic lithosphere.
+    /// </summary>
+    private void NucleateRiftPlates(SimulationState state, double timeMa)
+    {
+        if (_plates.Count >= MAX_PLATES) return;
+
+        var cc = state.CellCount;
+        var gs = state.GridSize;
+        var plateMap = state.PlateMap;
+        var minRiftSize = (int)(cc * MIN_RIFT_PLATE_FRACTION);
+
+        // Identify rift candidates: young oceanic basalt with thin crust
+        // that sits at a plate boundary (neighbors with different plates).
+        // Rock age must be recent (within 5 Ma of current time) to distinguish
+        // newly formed rift crust from the planet's original oceanic lithosphere.
+        var isRiftCandidate = new bool[cc];
+        const float MaxRiftAge = 5f; // Ma
+        for (var i = 0; i < cc; i++)
+        {
+            if (state.RockTypeMap[i] != (byte)RockType.IGN_BASALT) continue;
+            if (state.CrustThicknessMap[i] > 10f) continue;
+            if (state.HeightMap[i] > -2000f) continue;
+            if (Math.Abs(state.RockAgeMap[i] - timeMa) > MaxRiftAge) continue;
+
+            // Must be at or near a boundary
+            var row = i / gs;
+            var col = i % gs;
+            int myPlate = plateMap[i];
+            var atBoundary = false;
+            if (row > 0 && plateMap[(row - 1) * gs + col] != myPlate) atBoundary = true;
+            if (!atBoundary && row < gs - 1 && plateMap[(row + 1) * gs + col] != myPlate) atBoundary = true;
+            if (!atBoundary)
+            {
+                var left = row * gs + ((col - 1 + gs) % gs);
+                if (plateMap[left] != myPlate) atBoundary = true;
+            }
+            if (!atBoundary)
+            {
+                var right = row * gs + ((col + 1) % gs);
+                if (plateMap[right] != myPlate) atBoundary = true;
+            }
+
+            isRiftCandidate[i] = atBoundary;
+        }
+
+        // Flood-fill to find contiguous rift zones
+        var visited = new bool[cc];
+        var queue = new Queue<int>();
+        var riftCells = new List<int>();
+        var neighbors = new int[4];
+
+        for (var i = 0; i < cc; i++)
+        {
+            if (!isRiftCandidate[i] || visited[i]) continue;
+
+            riftCells.Clear();
+            queue.Enqueue(i);
+            visited[i] = true;
+
+            while (queue.Count > 0)
+            {
+                var cell = queue.Dequeue();
+                riftCells.Add(cell);
+
+                var row = cell / gs;
+                var col = cell % gs;
+                var nCount = 0;
+                if (row > 0) neighbors[nCount++] = (row - 1) * gs + col;
+                if (row < gs - 1) neighbors[nCount++] = (row + 1) * gs + col;
+                neighbors[nCount++] = row * gs + ((col - 1 + gs) % gs);
+                neighbors[nCount++] = row * gs + ((col + 1) % gs);
+
+                for (var n = 0; n < nCount; n++)
+                {
+                    var ni = neighbors[n];
+                    if (!visited[ni] && isRiftCandidate[ni])
+                    {
+                        visited[ni] = true;
+                        queue.Enqueue(ni);
+                    }
+                }
+            }
+
+            if (riftCells.Count < minRiftSize) continue;
+            if (_plates.Count >= MAX_PLATES) break;
+
+            // Create a new plate for this rift zone
+            var newPlateId = _plates.Count;
+            // Compute center of the rift zone
+            double sumX = 0, sumY = 0, sumZ = 0;
+            foreach (var cell in riftCells)
+            {
+                var row = cell / gs;
+                var col = cell % gs;
+                var lat = RowToLat(row, gs);
+                var lon = ColToLon(col, gs);
+                var cosLat = Math.Cos(lat);
+                sumX += cosLat * Math.Cos(lon);
+                sumY += cosLat * Math.Sin(lon);
+                sumZ += Math.Sin(lat);
+            }
+            var r = Math.Sqrt(sumX * sumX + sumY * sumY + sumZ * sumZ);
+            var centerLat = r > 1e-12 ? Math.Asin(Math.Clamp(sumZ / r, -1, 1)) / DEG2RAD : 0;
+            var centerLon = r > 1e-12 ? Math.Atan2(sumY, sumX) / DEG2RAD : 0;
+
+            // Give the new plate a slow random angular velocity
+            var newPlate = new PlateInfo
+            {
+                Id = newPlateId,
+                CenterLat = centerLat,
+                CenterLon = centerLon,
+                AngularVelocity = new AngularVelocity
+                {
+                    Lat = _rng.NextFloat(-1, 1),
+                    Lon = _rng.NextFloat(-1, 1),
+                    Rate = _rng.NextFloat(0.3, 2.0),
+                },
+                IsOceanic = true,
+                Area = (double)riftCells.Count / cc,
+            };
+            _plates.Add(newPlate);
+
+            // Reassign cells
+            foreach (var cell in riftCells)
+                plateMap[cell] = (ushort)newPlateId;
+
+            bus.Emit("PLATE_NUCLEATED", new { plateId = newPlateId, cellCount = riftCells.Count });
+            eventLog.Record(new GeoLogEntry
+            {
+                TimeMa = timeMa,
+                Type = "PLATE_NUCLEATED",
+                Description = $"New plate {newPlateId} nucleated at rift zone ({riftCells.Count} cells, center {centerLat:F1}°, {centerLon:F1}°)",
+            });
+        }
     }
 
     public IReadOnlyList<PlateInfo> GetPlates() => _plates;
