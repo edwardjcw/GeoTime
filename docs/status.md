@@ -393,6 +393,18 @@ npx playwright test  # E2E
 
 ---
 
+## Plate Coherence — Dynamic Plate Lifecycle ✅
+
+**Completed** (this session)
+
+- [x] `backend/GeoTime.Core/Engines/TectonicEngine.cs` — Added `ConsolidatePlateFragments()`: flood-fill connected component analysis per plate to identify isolated fragments; fragments below 0.5% of total cells are reassigned to the dominant neighboring plate via 8-connected neighbor voting. Added `ManagePlateLifecycle()` with `AbsorbTinyPlates()` (plates below 0.5% of total cells are absorbed into their largest neighbor with event logging) and `NucleateRiftPlates()` (large contiguous zones of young oceanic basalt at plate boundaries spawn new plates with random angular velocities, up to 30 plates max). Both `Tick()` and `TickAsync()` run consolidation and lifecycle management after advection, before boundary classification.
+- [x] `backend/GeoTime.Core/GeoTime.Core.csproj` — Added `InternalsVisibleTo` for `GeoTime.Tests` to enable testing of internal methods.
+- [x] `backend/GeoTime.Tests/PlateCoherenceTests.cs` — 10 new unit tests: isolated cell removal, large region preservation, small cluster removal, boundary count reduction after consolidation, tiny plate absorption, large plate survival, rift plate nucleation, integration with orchestrator (boundary fraction < 40%), uniform plate no-op, long-running boundary stability (count stays < 3× initial after 30 ticks).
+
+**Test count**: 10 new backend tests
+
+---
+
 ## FAQ
 
 **Q: What is "Tris" in the HUD?**
