@@ -32,12 +32,23 @@ public sealed class ClimateEngine(int gridSize, GpuComputeService? gpu = null)
         var alpha = Math.Min(1, deltaMa * 0.5);
 
         // ── GPU path: offload temperature update to the accelerator ──────────
+        bool gpuTempDone = false;
         if (gpu != null)
         {
-            gpu.UpdateTemperature(state.TemperatureMap, state.HeightMap, gridSize,
-                (float)alpha, (float)dT_ghg, (float)dT_milan);
+            try
+            {
+                gpu.UpdateTemperature(state.TemperatureMap, state.HeightMap, gridSize,
+                    (float)alpha, (float)dT_ghg, (float)dT_milan);
+                gpuTempDone = true;
+            }
+            catch (Exception ex)
+            {
+                // GPU temperature update failed — fall through to CPU path
+                System.Diagnostics.Debug.WriteLine($"[ClimateEngine] GPU temperature update failed: {ex.Message}");
+            }
         }
-        else
+
+        if (!gpuTempDone)
         {
             // CPU fallback: Parallel temperature update
             Parallel.For(0, gridSize, row =>
@@ -74,11 +85,22 @@ public sealed class ClimateEngine(int gridSize, GpuComputeService? gpu = null)
         DiffuseTemperature(state.TemperatureMap);
 
         // ── GPU path: offload wind computation to the accelerator ────────────
+        bool gpuWindDone = false;
         if (gpu != null)
         {
-            gpu.ComputeWinds(state.WindUMap, state.WindVMap, gridSize);
+            try
+            {
+                gpu.ComputeWinds(state.WindUMap, state.WindVMap, gridSize);
+                gpuWindDone = true;
+            }
+            catch (Exception ex)
+            {
+                // GPU wind computation failed — fall through to CPU path
+                System.Diagnostics.Debug.WriteLine($"[ClimateEngine] GPU wind computation failed: {ex.Message}");
+            }
         }
-        else
+
+        if (!gpuWindDone)
         {
             // CPU fallback: Parallel 3-cell circulation winds (each cell is independent).
             Parallel.For(0, gridSize, row =>
@@ -128,8 +150,16 @@ public sealed class ClimateEngine(int gridSize, GpuComputeService? gpu = null)
     {
         if (gpu != null)
         {
-            gpu.DiffuseTemperature(temp, gridSize, DiffusionAlpha);
-            return;
+            try
+            {
+                gpu.DiffuseTemperature(temp, gridSize, DiffusionAlpha);
+                return;
+            }
+            catch (Exception ex)
+            {
+                // GPU diffusion failed — fall through to CPU path
+                System.Diagnostics.Debug.WriteLine($"[ClimateEngine] GPU diffusion failed: {ex.Message}");
+            }
         }
 
         // CPU fallback: read-only pass into scratch buffer, write back
