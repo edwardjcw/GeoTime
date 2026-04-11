@@ -322,11 +322,26 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         // GPU: Rodrigues' rotation kernel computes destMap[srcIdx] = destIdx.
         // CPU fallback: inline rotation loop.
         int[] destMap;
+        bool gpuAdvectDone = false;
         if (gpu != null)
         {
-            destMap = gpu.ComputeAdvectDestinations(state.PlateMap, kx, ky, kz, cosTheta, sinTheta, gs);
+            try
+            {
+                destMap = gpu.ComputeAdvectDestinations(state.PlateMap, kx, ky, kz, cosTheta, sinTheta, gs);
+                gpuAdvectDone = true;
+            }
+            catch
+            {
+                // GPU advect failed (e.g. out of memory) — fall through to CPU path
+                destMap = null!;
+            }
         }
         else
+        {
+            destMap = null!;
+        }
+
+        if (!gpuAdvectDone)
         {
             destMap = new int[cc];
             for (var i = 0; i < cc; i++)
@@ -463,12 +478,22 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         // ── Phase 3: Gap fill ────────────────────────────────────────────────
         // GPU fills the simple per-cell properties; CPU handles plate assignment
         // via neighbor search which is irregular and not suited for GPU.
+        bool gpuGapFillDone = false;
         if (gpu != null)
         {
-            gpu.FillGapCells(newHeight, newCrust, newRockType, newRockAge,
-                hitCount, GAP_FLOOR_HEIGHT, GAP_CRUST_KM, (byte)RockType.IGN_BASALT, (float)timeMa);
+            try
+            {
+                gpu.FillGapCells(newHeight, newCrust, newRockType, newRockAge,
+                    hitCount, GAP_FLOOR_HEIGHT, GAP_CRUST_KM, (byte)RockType.IGN_BASALT, (float)timeMa);
+                gpuGapFillDone = true;
+            }
+            catch
+            {
+                // GPU gap fill failed — fall through to CPU path
+            }
         }
-        else
+
+        if (!gpuGapFillDone)
         {
             for (var i = 0; i < cc; i++)
             {
@@ -531,12 +556,27 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
 
         double[] sumX, sumY, sumZ, count;
 
+        bool gpuCentersDone = false;
         if (gpu != null)
         {
-            // ── GPU path: atomic per-cell accumulation ────────────────────
-            (sumX, sumY, sumZ, count) = gpu.ComputePlateCenterSums(state.PlateMap, gs, numPlates);
+            try
+            {
+                // ── GPU path: atomic per-cell accumulation ────────────────────
+                (sumX, sumY, sumZ, count) = gpu.ComputePlateCenterSums(state.PlateMap, gs, numPlates);
+                gpuCentersDone = true;
+            }
+            catch
+            {
+                // GPU plate centers failed — fall through to CPU path
+                sumX = sumY = sumZ = count = null!;
+            }
         }
         else
+        {
+            sumX = sumY = sumZ = count = null!;
+        }
+
+        if (!gpuCentersDone)
         {
             // ── CPU fallback ──────────────────────────────────────────────
             sumX  = new double[numPlates];
@@ -638,9 +678,16 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
 
         if (gpu != null)
         {
-            // ── GPU / ILGPU path ──────────────────────────────────────────
-            gpu.ApplyIsostasy(state.HeightMap, state.CrustThicknessMap, relaxF, factor, offset);
-            return;
+            try
+            {
+                // ── GPU / ILGPU path ──────────────────────────────────────────
+                gpu.ApplyIsostasy(state.HeightMap, state.CrustThicknessMap, relaxF, factor, offset);
+                return;
+            }
+            catch
+            {
+                // GPU isostasy failed — fall through to CPU path
+            }
         }
 
         // ── CPU SIMD + Parallel.For fallback ─────────────────────────────

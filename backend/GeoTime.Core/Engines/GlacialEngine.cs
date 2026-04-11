@@ -41,13 +41,23 @@ public sealed class GlacialEngine(int gridSize, GpuComputeService? gpu = null)
         var cc = gridSize * gridSize;
 
         // ── Phase 1: per-cell ice accumulation/ablation (GPU or CPU) ──────────
+        bool gpuIceDone = false;
         if (gpu != null)
         {
-            gpu.UpdateIceThickness(IceThickness, hm, tm,
-                (float)ela, (float)deltaMa, (float)GLACIATION_TEMP,
-                (float)ICE_ACCUMULATION_RATE, (float)ICE_ABLATION_RATE);
+            try
+            {
+                gpu.UpdateIceThickness(IceThickness, hm, tm,
+                    (float)ela, (float)deltaMa, (float)GLACIATION_TEMP,
+                    (float)ICE_ACCUMULATION_RATE, (float)ICE_ABLATION_RATE);
+                gpuIceDone = true;
+            }
+            catch
+            {
+                // GPU ice thickness update failed — fall through to CPU path
+            }
         }
-        else
+
+        if (!gpuIceDone)
         {
             for (var i = 0; i < cc; i++)
             {
