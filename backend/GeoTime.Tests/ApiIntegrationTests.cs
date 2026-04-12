@@ -60,6 +60,29 @@ public class ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> fact
         Assert.True(json.TryGetProperty("seed", out _));
     }
 
+    // ── Planet Status ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetPlanetStatus_ReturnsFalseBeforeGeneration()
+    {
+        var response = await _client.GetAsync("/api/planet/status");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("exists").GetBoolean());
+    }
+
+    [Fact]
+    public async Task GetPlanetStatus_ReturnsTrueAfterGeneration()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        var response = await _client.GetAsync("/api/planet/status");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("exists").GetBoolean());
+        Assert.Equal(42u, json.GetProperty("seed").GetUInt32());
+        Assert.True(json.TryGetProperty("timeMa", out _));
+    }
+
     // ── State Maps ────────────────────────────────────────────────────────────
 
     [Fact]

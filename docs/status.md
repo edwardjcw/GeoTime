@@ -112,6 +112,19 @@ npx playwright test  # E2E
 
 ## Bug Fixes (this session)
 
+### Bug Fix: Zipper Artifact on Planet Globe
+
+- [x] `src/render/icosphere.ts` — Fixed antimeridian seam by duplicating vertices where triangles cross the u=0/u=1 UV boundary and shifting their u-coordinate by +1.0. Also corrected pole vertex UVs by setting each pole vertex's u to the average of its triangle neighbors.
+- [x] `src/render/globe-renderer.ts` — Set `wrapS = THREE.RepeatWrapping` on all DataTextures (height, plate, biome, biome base, event layer) so the GPU correctly wraps texture sampling at the seam boundary.
+- [x] `tests/icosphere.test.ts` — Updated vertex count test for seam-fix duplicates, updated UV range test to allow u > 1.0, added seam verification test confirming no triangle has u-range > 0.5.
+
+### Bug Fix: Planet Persistence on Frontend Reconnect
+
+- [x] `backend/GeoTime.Api/Program.cs` — Added `GET /api/planet/status` endpoint returning `{ exists, seed, timeMa }` so the frontend can check if a planet already exists.
+- [x] `src/api/backend-client.ts` — Added `PlanetStatus` interface and `getPlanetStatus()` function.
+- [x] `src/main.ts` — Changed initialization from always generating a new planet to first checking `getPlanetStatus()`. If a planet exists, reconnects via `doReconnectPlanet()` which fetches and displays the existing state. Only the "New Planet" button now triggers planet generation.
+- [x] `backend/GeoTime.Tests/ApiIntegrationTests.cs` — Added 2 tests: `GetPlanetStatus_ReturnsFalseBeforeGeneration` and `GetPlanetStatus_ReturnsTrueAfterGeneration`.
+
 ### Bug Fix: GPU Selection (Frontend WebGL Renderer)
 
 - [x] `src/render/globe-renderer.ts` — Added `powerPreference: 'high-performance'` to `THREE.WebGLRenderer` so the browser's OS GPU selection mechanism prefers the dedicated NVIDIA GPU over the integrated Intel GPU.

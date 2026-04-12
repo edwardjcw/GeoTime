@@ -121,8 +121,79 @@ function seedFromURL(): number | null {
   return null;
 }
 
-// Generate the first planet (from URL seed or random)
-doGeneratePlanet(seedFromURL() ?? randomSeed());
+/**
+ * Reconnect to an existing planet running on the backend without regenerating.
+ * Fetches and displays all current state.
+ */
+async function doReconnectPlanet(seed: number, timeMa: number): Promise<void> {
+  try {
+    simTimeMa = timeMa;
+
+    // Fetch current display data from backend
+    const [heightData, plateData, tempData, precipData] = await Promise.all([
+      api.getHeightMap(),
+      api.getPlateMap(),
+      api.getTemperatureMap(),
+      api.getPrecipitationMap(),
+    ]);
+
+    const heightMap = new Float32Array(heightData);
+    const plateMap = new Uint16Array(plateData);
+
+    renderer.updateHeightMap(heightMap, GRID_SIZE);
+    renderer.updatePlateMap(plateMap, GRID_SIZE);
+
+    renderer.updateBiomeBaseMap(
+      new Float32Array(tempData),
+      new Float32Array(precipData),
+      heightMap,
+      GRID_SIZE,
+    );
+
+    shell.setSeed(seed);
+    shell.setTriangleCount(renderer.getTriangleCount());
+    shell.setSimTime(simTimeMa);
+    shell.setTimelineCursor(4500 + simTimeMa);
+
+    api.listSnapshots().then((info) => {
+      shell.setLoadStateEnabled(info.count > 0);
+    }).catch(() => {/* ignore */});
+
+    api.getComputeInfo().then((info) => {
+      shell.setComputeMode(info.isGpu, info.deviceName, info.memoryMb ?? 0, renderer.getWebGLRendererInfo());
+    }).catch(() => {/* backend may not be ready yet – ignore */});
+
+    api.fetchFeatureLabels()
+      .then((labels) => labelRenderer.setLabels(labels))
+      .catch(() => {/* labels are non-critical */});
+
+    api.fetchEventLayerTypes()
+      .then((types) => shell.setEventLayerTypes(types))
+      .catch(() => {/* event layer types are non-critical */});
+
+    window.location.hash = `seed=${seed}`;
+  } catch (err) {
+    console.error('Failed to reconnect to planet:', err);
+    // Fallback: generate a new planet if reconnection fails
+    return await doGeneratePlanet(seedFromURL() ?? randomSeed());
+  }
+}
+
+// On initial load, check if the backend already has a planet running.
+// Only generate a new planet if no planet exists.
+(async () => {
+  try {
+    const status = await api.getPlanetStatus();
+    if (status.exists) {
+      await doReconnectPlanet(status.seed, status.timeMa);
+    } else {
+      await doGeneratePlanet(seedFromURL() ?? randomSeed());
+    }
+  } catch {
+    // Backend may not be reachable; generate a fresh planet
+    await doGeneratePlanet(seedFromURL() ?? randomSeed());
+  }
+})();
 
 // ── Cross-Section Draw Mode ─────────────────────────────────────────────────
 
