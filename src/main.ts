@@ -175,7 +175,7 @@ async function doReconnectPlanet(seed: number, timeMa: number): Promise<void> {
   } catch (err) {
     console.error('Failed to reconnect to planet:', err);
     // Fallback: generate a new planet if reconnection fails
-    doGeneratePlanet(seedFromURL() ?? randomSeed());
+    return await doGeneratePlanet(seedFromURL() ?? randomSeed());
   }
 }
 
