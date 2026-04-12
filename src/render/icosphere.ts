@@ -191,7 +191,7 @@ export function createIcosphere(subdivisions: number): IcosphereGeometry {
       i1 = dup;
     }
     if (Math.abs(y2) > POLE_THRESHOLD) {
-      const avgU = (outUvs[i0 * 2] + outUvs[i2 * 2]) / 2;
+      const avgU = (outUvs[i0 * 2] + outUvs[i1 * 2]) / 2;
       const dup = outPositions.length / 3;
       outPositions.push(outPositions[i2 * 3], outPositions[i2 * 3 + 1], outPositions[i2 * 3 + 2]);
       outUvs.push(avgU, outUvs[i2 * 2 + 1]);
