@@ -112,7 +112,7 @@ export function createIcosphere(subdivisions: number): IcosphereGeometry {
   }
 
   // ── Seam fix: duplicate vertices at the antimeridian ─────────────────────
-  // Triangles that span the u=0/u=1 boundary produce a "zipper" artefact
+  // Triangles that span the u=0/u=1 boundary produce a "zipper" artifact
   // because the GPU interpolates u from ~1 back to ~0 across the triangle.
   // We detect such triangles and duplicate the offending vertex(es) with
   // u += 1.0 so interpolation proceeds smoothly.  The texture must use
@@ -139,29 +139,13 @@ export function createIcosphere(subdivisions: number): IcosphereGeometry {
     const du20 = Math.abs(u2 - u0);
 
     if (du01 > 0.5 || du12 > 0.5 || du20 > 0.5) {
-      // Triangle spans the seam — find the "majority" side and fix the minority
-      // The majority is the side that has 2+ vertices; the minority gets u += 1.
-      const avg = (u0 + u1 + u2) / 3;
-      // If avg > 0.5, the majority are in the upper range → shift low-u vertices up.
-      // If avg ≤ 0.5, the majority are in the lower range → shift high-u vertices up
-      // won't happen, but handle by shifting low-u vertices down.
-      // Actually: we always shift the minority so they join the majority continuously.
-      // A vertex is on the "low side" when u < 0.5.
-
-      // Count how many are low (< 0.5)
+      // Triangle spans the seam — shift all low-u (< 0.5) vertices up by +1
+      // so the GPU interpolates smoothly across the boundary.
       const lowCount = (u0 < 0.5 ? 1 : 0) + (u1 < 0.5 ? 1 : 0) + (u2 < 0.5 ? 1 : 0);
 
       if (lowCount === 1 || lowCount === 2) {
-        // Shift the minority side: if 1 is low, shift that one up (+1);
-        // if 2 are low, shift the 1 high one down isn't ideal — instead shift the 2 low ones up.
-        const shiftLow = lowCount <= 1; // shift low vertices up by +1 when they're the minority
-        // Actually: if 1 low → shift that 1 up. If 2 low → shift 2 up (majority is high).
-        // Wait — if 2 are low, the majority is low, so we should shift the 1 high one...
-        // But shifting down below 0 would break things. Instead, always shift low ones UP.
-
         const fixVertex = (idx: number, u: number): number => {
-          if ((u < 0.5) === true) {
-            // This vertex needs u += 1
+          if (u < 0.5) {
             let dup = dupCache.get(idx);
             if (dup === undefined) {
               dup = outPositions.length / 3;
@@ -178,12 +162,9 @@ export function createIcosphere(subdivisions: number): IcosphereGeometry {
           return idx;
         };
 
-        if (lowCount <= 2) {
-          // Shift low-u vertices up
-          if (u0 < 0.5) i0 = fixVertex(i0, u0);
-          if (u1 < 0.5) i1 = fixVertex(i1, u1);
-          if (u2 < 0.5) i2 = fixVertex(i2, u2);
-        }
+        if (u0 < 0.5) i0 = fixVertex(i0, u0);
+        if (u1 < 0.5) i1 = fixVertex(i1, u1);
+        if (u2 < 0.5) i2 = fixVertex(i2, u2);
       }
     }
 
