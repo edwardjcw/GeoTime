@@ -101,15 +101,128 @@ export function createIcosphere(subdivisions: number): IcosphereGeometry {
   }
 
   // Equirectangular UV mapping: u = atan2(z, x) / (2π) + 0.5, v = asin(y) / π + 0.5
-  const uvs = new Float32Array(vertexCount * 2);
+  const rawUvs = new Float32Array(vertexCount * 2);
   const TWO_PI = Math.PI * 2;
   for (let i = 0; i < vertexCount; i++) {
     const x = positions[i * 3];
     const y = positions[i * 3 + 1];
     const z = positions[i * 3 + 2];
-    uvs[i * 2] = Math.atan2(z, x) / TWO_PI + 0.5;
-    uvs[i * 2 + 1] = Math.asin(Math.max(-1, Math.min(1, y))) / Math.PI + 0.5;
+    rawUvs[i * 2] = Math.atan2(z, x) / TWO_PI + 0.5;
+    rawUvs[i * 2 + 1] = Math.asin(Math.max(-1, Math.min(1, y))) / Math.PI + 0.5;
   }
 
-  return { positions, indices, uvs };
+  // ── Seam fix: duplicate vertices at the antimeridian ─────────────────────
+  // Triangles that span the u=0/u=1 boundary produce a "zipper" artefact
+  // because the GPU interpolates u from ~1 back to ~0 across the triangle.
+  // We detect such triangles and duplicate the offending vertex(es) with
+  // u += 1.0 so interpolation proceeds smoothly.  The texture must use
+  // RepeatWrapping on the S axis for this to render correctly.
+
+  const outPositions: number[] = Array.from(positions);
+  const outUvs: number[] = Array.from(rawUvs);
+  const outIndices: number[] = [];
+
+  // Cache: original vertex index → duplicated vertex index with u+1
+  const dupCache = new Map<number, number>();
+
+  const faceCount = faces.length;
+  for (let f = 0; f < faceCount; f++) {
+    let i0 = faces[f][0];
+    let i1 = faces[f][1];
+    let i2 = faces[f][2];
+
+    const u0 = outUvs[i0 * 2], u1 = outUvs[i1 * 2], u2 = outUvs[i2 * 2];
+
+    // Check if the triangle crosses the antimeridian seam
+    const du01 = Math.abs(u0 - u1);
+    const du12 = Math.abs(u1 - u2);
+    const du20 = Math.abs(u2 - u0);
+
+    if (du01 > 0.5 || du12 > 0.5 || du20 > 0.5) {
+      // Triangle spans the seam — find the "majority" side and fix the minority
+      // The majority is the side that has 2+ vertices; the minority gets u += 1.
+      const avg = (u0 + u1 + u2) / 3;
+      // If avg > 0.5, the majority are in the upper range → shift low-u vertices up.
+      // If avg ≤ 0.5, the majority are in the lower range → shift high-u vertices up
+      // won't happen, but handle by shifting low-u vertices down.
+      // Actually: we always shift the minority so they join the majority continuously.
+      // A vertex is on the "low side" when u < 0.5.
+
+      // Count how many are low (< 0.5)
+      const lowCount = (u0 < 0.5 ? 1 : 0) + (u1 < 0.5 ? 1 : 0) + (u2 < 0.5 ? 1 : 0);
+
+      if (lowCount === 1 || lowCount === 2) {
+        // Shift the minority side: if 1 is low, shift that one up (+1);
+        // if 2 are low, shift the 1 high one down isn't ideal — instead shift the 2 low ones up.
+        const shiftLow = lowCount <= 1; // shift low vertices up by +1 when they're the minority
+        // Actually: if 1 low → shift that 1 up. If 2 low → shift 2 up (majority is high).
+        // Wait — if 2 are low, the majority is low, so we should shift the 1 high one...
+        // But shifting down below 0 would break things. Instead, always shift low ones UP.
+
+        const fixVertex = (idx: number, u: number): number => {
+          if ((u < 0.5) === true) {
+            // This vertex needs u += 1
+            let dup = dupCache.get(idx);
+            if (dup === undefined) {
+              dup = outPositions.length / 3;
+              outPositions.push(
+                positions[idx * 3],
+                positions[idx * 3 + 1],
+                positions[idx * 3 + 2],
+              );
+              outUvs.push(u + 1.0, outUvs[idx * 2 + 1]);
+              dupCache.set(idx, dup);
+            }
+            return dup;
+          }
+          return idx;
+        };
+
+        if (lowCount <= 2) {
+          // Shift low-u vertices up
+          if (u0 < 0.5) i0 = fixVertex(i0, u0);
+          if (u1 < 0.5) i1 = fixVertex(i1, u1);
+          if (u2 < 0.5) i2 = fixVertex(i2, u2);
+        }
+      }
+    }
+
+    // Fix pole vertices: vertices near the poles have indeterminate u.
+    // Set their u to the average of the other two vertices in the triangle.
+    const y0 = outPositions[i0 * 3 + 1];
+    const y1 = outPositions[i1 * 3 + 1];
+    const y2 = outPositions[i2 * 3 + 1];
+    const POLE_THRESHOLD = 0.999;
+
+    if (Math.abs(y0) > POLE_THRESHOLD) {
+      const avgU = (outUvs[i1 * 2] + outUvs[i2 * 2]) / 2;
+      // Duplicate pole vertex with corrected u
+      const dup = outPositions.length / 3;
+      outPositions.push(outPositions[i0 * 3], outPositions[i0 * 3 + 1], outPositions[i0 * 3 + 2]);
+      outUvs.push(avgU, outUvs[i0 * 2 + 1]);
+      i0 = dup;
+    }
+    if (Math.abs(y1) > POLE_THRESHOLD) {
+      const avgU = (outUvs[i0 * 2] + outUvs[i2 * 2]) / 2;
+      const dup = outPositions.length / 3;
+      outPositions.push(outPositions[i1 * 3], outPositions[i1 * 3 + 1], outPositions[i1 * 3 + 2]);
+      outUvs.push(avgU, outUvs[i1 * 2 + 1]);
+      i1 = dup;
+    }
+    if (Math.abs(y2) > POLE_THRESHOLD) {
+      const avgU = (outUvs[i0 * 2] + outUvs[i2 * 2]) / 2;
+      const dup = outPositions.length / 3;
+      outPositions.push(outPositions[i2 * 3], outPositions[i2 * 3 + 1], outPositions[i2 * 3 + 2]);
+      outUvs.push(avgU, outUvs[i2 * 2 + 1]);
+      i2 = dup;
+    }
+
+    outIndices.push(i0, i1, i2);
+  }
+
+  return {
+    positions: new Float32Array(outPositions),
+    indices: new Uint32Array(outIndices),
+    uvs: new Float32Array(outUvs),
+  };
 }

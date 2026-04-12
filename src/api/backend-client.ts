@@ -148,6 +148,16 @@ async function getBinary(path: string): Promise<ArrayBuffer> {
 
 // ── Public API (REST) ───────────────────────────────────────────────────────
 
+export interface PlanetStatus {
+  exists: boolean;
+  seed: number;
+  timeMa: number;
+}
+
+export async function getPlanetStatus(): Promise<PlanetStatus> {
+  return get('/api/planet/status');
+}
+
 export async function generatePlanet(seed: number = 0): Promise<GenerateResult> {
   return post('/api/planet/generate', { seed });
 }

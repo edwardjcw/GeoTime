@@ -69,6 +69,17 @@ app.MapHub<SimulationHub>("/hubs/simulation");
 
 // ── API Endpoints ─────────────────────────────────────────────────────────────
 
+app.MapGet("/api/planet/status", (SimulationOrchestrator sim) =>
+{
+    var exists = sim.State.CellCount > 0 && sim.GetCurrentSeed() > 0;
+    return Results.Ok(new
+    {
+        exists,
+        seed = sim.GetCurrentSeed(),
+        timeMa = sim.GetCurrentTime(),
+    });
+}).WithName("GetPlanetStatus");
+
 app.MapPost("/api/planet/generate", (GenerateRequest req, SimulationOrchestrator sim) =>
 {
     var seed = req.Seed > 0 ? req.Seed : (uint)Random.Shared.Next(1, int.MaxValue);

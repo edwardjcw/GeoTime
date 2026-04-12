@@ -318,6 +318,7 @@ export class GlobeRenderer {
       THREE.RedFormat,
       THREE.FloatType,
     );
+    this.heightTexture.wrapS = THREE.RepeatWrapping;
     this.heightTexture.flipY = true;
     this.heightTexture.needsUpdate = true;
 
@@ -329,6 +330,7 @@ export class GlobeRenderer {
       THREE.RGBAFormat,
       THREE.UnsignedByteType,
     );
+    this.biomeBaseTexture.wrapS = THREE.RepeatWrapping;
     this.biomeBaseTexture.flipY = true;
     this.biomeBaseTexture.needsUpdate = true;
 
@@ -394,6 +396,7 @@ export class GlobeRenderer {
     );
     this.heightTexture.magFilter = THREE.LinearFilter;
     this.heightTexture.minFilter = THREE.LinearFilter;
+    this.heightTexture.wrapS = THREE.RepeatWrapping;
     this.heightTexture.flipY = true;
     this.heightTexture.needsUpdate = true;
 
@@ -433,6 +436,7 @@ export class GlobeRenderer {
     );
     this.plateTexture.magFilter = THREE.NearestFilter;
     this.plateTexture.minFilter = THREE.NearestFilter;
+    this.plateTexture.wrapS = THREE.RepeatWrapping;
     this.plateTexture.flipY = true;
     this.plateTexture.needsUpdate = true;
 
@@ -574,6 +578,7 @@ export class GlobeRenderer {
     );
     this.biomeTexture.magFilter = THREE.LinearFilter;
     this.biomeTexture.minFilter = THREE.LinearFilter;
+    this.biomeTexture.wrapS = THREE.RepeatWrapping;
     this.biomeTexture.flipY = true;
     this.biomeTexture.needsUpdate = true;
 
@@ -673,6 +678,7 @@ export class GlobeRenderer {
     );
     this.biomeBaseTexture.magFilter = THREE.LinearFilter;
     this.biomeBaseTexture.minFilter = THREE.LinearFilter;
+    this.biomeBaseTexture.wrapS = THREE.RepeatWrapping;
     this.biomeBaseTexture.flipY = true;
     this.biomeBaseTexture.needsUpdate = true;
 
@@ -737,6 +743,7 @@ export class GlobeRenderer {
     this.eventLayerTexture = new THREE.DataTexture(rgba, gridSize, gridSize, THREE.RGBAFormat, THREE.UnsignedByteType);
     this.eventLayerTexture.magFilter = THREE.LinearFilter;
     this.eventLayerTexture.minFilter = THREE.LinearFilter;
+    this.eventLayerTexture.wrapS = THREE.RepeatWrapping;
     this.eventLayerTexture.flipY = true;
     this.eventLayerTexture.needsUpdate = true;
 
