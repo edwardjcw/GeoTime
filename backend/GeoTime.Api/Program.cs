@@ -1,4 +1,5 @@
 using GeoTime.Api;
+using GeoTime.Api.Diagnostics;
 using GeoTime.Api.Llm;
 using GeoTime.Core;
 using GeoTime.Core.Compute;
@@ -8,10 +9,13 @@ using GeoTime.Core.Models;
 using GeoTime.Core.Services;
 using MessagePack;
 using Microsoft.AspNetCore.SignalR;
+using System.Diagnostics;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
+builder.Services.AddSingleton<SessionPerformanceLogger>();
 builder.Services.AddSingleton<SimulationOrchestrator>();
 builder.Services.AddSingleton<CameraStateService>();
 builder.Services.AddSingleton<GeologicalContextAssembler>(sp =>
@@ -62,6 +66,11 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
+app.UseMiddleware<PerformanceLoggingMiddleware>();
+
+var perfLogger = app.Services.GetRequiredService<SessionPerformanceLogger>();
+Console.WriteLine($"[GeoTime] Performance session log: {perfLogger.LogPath}");
+app.Lifetime.ApplicationStopping.Register(() => perfLogger.Dispose());
 
 // ── SignalR Hub ────────────────────────────────────────────────────────────────
 
@@ -80,10 +89,26 @@ app.MapGet("/api/planet/status", (SimulationOrchestrator sim) =>
     });
 }).WithName("GetPlanetStatus");
 
-app.MapPost("/api/planet/generate", (GenerateRequest req, SimulationOrchestrator sim) =>
+app.MapPost("/api/planet/generate", (GenerateRequest req, SimulationOrchestrator sim, SessionPerformanceLogger perfLog) =>
 {
+    var sw = Stopwatch.StartNew();
     var seed = req.Seed > 0 ? req.Seed : (uint)Random.Shared.Next(1, int.MaxValue);
     var result = sim.GeneratePlanet(seed);
+    sw.Stop();
+
+    perfLog.Write("planet_generate", "backend", new
+    {
+        seed = result.Seed,
+        plateCount = result.Plates.Count,
+        hotspotCount = result.Hotspots.Count,
+        timeMa = sim.GetCurrentTime(),
+        gridSize = sim.GridSize,
+        cellCount = sim.State.CellCount,
+        wallMs = sw.ElapsedMilliseconds,
+        compute = PerformanceLogHelpers.ComputePayload(sim),
+        adaptiveResolutionEnabled = sim.AdaptiveResolutionEnabled,
+    });
+
     return Results.Ok(new
     {
         seed = result.Seed,
@@ -93,8 +118,9 @@ app.MapPost("/api/planet/generate", (GenerateRequest req, SimulationOrchestrator
     });
 }).WithName("GeneratePlanet");
 
-app.MapPost("/api/simulation/advance", async (AdvanceRequest req, SimulationOrchestrator sim, IHubContext<SimulationHub> hubContext) =>
+app.MapPost("/api/simulation/advance", async (AdvanceRequest req, SimulationOrchestrator sim, IHubContext<SimulationHub> hubContext, SessionPerformanceLogger perfLog) =>
 {
+    var sw = Stopwatch.StartNew();
     // Use async pipeline to allow SignalR messages to flush between phases
     await sim.AdvanceSimulationAsync(req.DeltaMa, async phase =>
     {
@@ -119,8 +145,22 @@ app.MapPost("/api/simulation/advance", async (AdvanceRequest req, SimulationOrch
             });
         }
     });
+    sw.Stop();
 
     var stats = sim.LastTickStats;
+    perfLog.Write("simulation_advance", "backend", new
+    {
+        deltaMa = req.DeltaMa,
+        skipped = sim.LastAdvanceSkipped,
+        tickCount = sim.TickCount,
+        timeMa = sim.GetCurrentTime(),
+        seed = sim.GetCurrentSeed(),
+        wallMs = sw.ElapsedMilliseconds,
+        adaptiveResolutionEnabled = sim.AdaptiveResolutionEnabled,
+        compute = PerformanceLogHelpers.ComputePayload(sim),
+        stats = PerformanceLogHelpers.TickStatsPayload(stats),
+    });
+
     return Results.Ok(new
     {
         timeMa = sim.GetCurrentTime(),
@@ -133,6 +173,7 @@ app.MapPost("/api/simulation/advance", async (AdvanceRequest req, SimulationOrch
             vegetationMs = stats.VegetationMs,
             biomatterMs  = stats.BiomatterMs,
             totalMs      = stats.TotalMs,
+            isGpuActive  = stats.IsGpuActive,
             // Sub-phase timing
             tectonicAdvectionMs  = stats.TectonicAdvectionMs,
             tectonicCollisionMs  = stats.TectonicCollisionMs,
@@ -140,6 +181,13 @@ app.MapPost("/api/simulation/advance", async (AdvanceRequest req, SimulationOrch
             tectonicDynamicsMs   = stats.TectonicDynamicsMs,
             tectonicVolcanismMs  = stats.TectonicVolcanismMs,
             tectonicTotalMs      = stats.TectonicTotalMs,
+            adaptiveResolutionUsed = stats.AdaptiveResolutionUsed,
+            adaptiveDownsampleMs = stats.AdaptiveDownsampleMs,
+            adaptiveUpsampleMs = stats.AdaptiveUpsampleMs,
+            featureDetectionRan = stats.FeatureDetectionRan,
+            featureDetectionMs = stats.FeatureDetectionMs,
+            eventDepositionMs = stats.EventDepositionMs,
+            eventsThisTick = stats.EventsThisTick,
         },
     });
 }).WithName("AdvanceSimulation");
@@ -156,6 +204,14 @@ app.MapGet("/api/simulation/stats", (SimulationOrchestrator sim) =>
         biomatterMs  = stats.BiomatterMs,
         totalMs      = stats.TotalMs,
         timeMa       = stats.TimeMa,
+        isGpuActive  = stats.IsGpuActive,
+        adaptiveResolutionUsed = stats.AdaptiveResolutionUsed,
+        adaptiveDownsampleMs = stats.AdaptiveDownsampleMs,
+        adaptiveUpsampleMs = stats.AdaptiveUpsampleMs,
+        featureDetectionRan = stats.FeatureDetectionRan,
+        featureDetectionMs = stats.FeatureDetectionMs,
+        eventDepositionMs = stats.EventDepositionMs,
+        eventsThisTick = stats.EventsThisTick,
         // Sub-phase timing
         tectonicAdvectionMs  = stats.TectonicAdvectionMs,
         tectonicCollisionMs  = stats.TectonicCollisionMs,
@@ -184,6 +240,19 @@ app.MapGet("/api/simulation/compute-info", (SimulationOrchestrator sim) =>
         memoryMb       = info.MemoryMb,
     });
 }).WithName("GetComputeInfo");
+
+// ── Session Performance Diagnostics ───────────────────────────────────────────
+
+app.MapGet("/api/diagnostics/session", (SessionPerformanceLogger perfLog) =>
+    Results.Ok(new { logPath = perfLog.LogPath })
+).WithName("GetDiagnosticsSession");
+
+app.MapPost("/api/diagnostics/client-event", (ClientPerfEventRequest req, SessionPerformanceLogger perfLog) =>
+{
+    var payload = req.Data.HasValue ? (object)req.Data.Value : new { };
+    perfLog.Write(req.Event ?? "client_event", "frontend", payload);
+    return Results.Ok();
+}).WithName("PostClientPerfEvent");
 
 // ── Adaptive Resolution Toggle (Recommendation 7) ────────────────────────────
 
@@ -521,7 +590,7 @@ app.MapGet("/api/state/features/labels", (SimulationOrchestrator sim) =>
 // GET /api/llm/providers — list all providers with current status
 app.MapGet("/api/llm/providers", async (LlmProviderFactory factory, LlmSettingsService settings) =>
 {
-    var activeProvider = settings.ActiveProvider;
+    var activeProvider = factory.GetActiveProvider().Name;
     var tasks = factory.GetAllProviders().Select(async p =>
     {
         var status = await p.GetStatusAsync();
@@ -542,9 +611,9 @@ app.MapGet("/api/llm/providers", async (LlmProviderFactory factory, LlmSettingsS
 }).WithName("GetLlmProviders");
 
 // GET /api/llm/active — return active provider name and its settings (key redacted)
-app.MapGet("/api/llm/active", (LlmSettingsService settings) =>
+app.MapGet("/api/llm/active", (LlmProviderFactory factory, LlmSettingsService settings) =>
 {
-    var name = settings.ActiveProvider;
+    var name = factory.GetActiveProvider().Name;
     var cfg  = settings.ProviderConfigs.TryGetValue(name, out var c) ? c : new ProviderSettings();
     return Results.Ok(new
     {
@@ -556,11 +625,16 @@ app.MapGet("/api/llm/active", (LlmSettingsService settings) =>
 }).WithName("GetActiveLlmProvider");
 
 // PUT /api/llm/active — update active provider + config at runtime
-app.MapPut("/api/llm/active", (LlmActiveRequest req, LlmSettingsService settings) =>
+app.MapPut("/api/llm/active", (LlmActiveRequest req, LlmSettingsService settings, LlmProviderFactory factory) =>
 {
-    settings.SetActiveProvider(req.Provider);
     if (req.Settings != null)
         settings.UpdateProviderConfig(req.Provider, req.Settings);
+
+    settings.SetActiveProvider(req.Provider);
+    var resolvedProvider = factory.GetActiveProvider().Name;
+    if (!resolvedProvider.Equals(req.Provider, StringComparison.OrdinalIgnoreCase))
+        settings.SetActiveProvider(resolvedProvider);
+
     settings.Save();
     return Results.Ok(new { provider = settings.ActiveProvider });
 }).WithName("SetActiveLlmProvider");
@@ -776,13 +850,15 @@ app.MapPost("/api/describe/stream", async (
 // ── Event Layer Map API (Phase D6) ────────────────────────────────────────────
 
 // GET /api/state/eventlayermap?eventType=ImpactEjecta&tick=N
-// Returns float[] (one value per cell = total thickness of that event type up to tick N)
+// Returns float[] (one value per cell = current cumulative thickness of that event type)
 app.MapGet("/api/state/eventlayermap", (
     string? eventType,
     long? tick,
     SimulationOrchestrator sim) =>
 {
     if (sim.State.CellCount == 0) return Results.BadRequest("Planet not generated.");
+    if (tick.HasValue)
+        return Results.BadRequest("Historical event-layer filtering by tick is unsupported. Omit tick to retrieve the current cumulative event layer map.");
 
     var filterType = LayerEventType.Normal;
     if (!string.IsNullOrWhiteSpace(eventType))
@@ -842,6 +918,7 @@ static async IAsyncEnumerable<string> StringsToAsyncEnumerable(IEnumerable<strin
 
 record GenerateRequest(uint Seed = 0);
 record AdvanceRequest(double DeltaMa);
+record ClientPerfEventRequest(string? Event, JsonElement? Data);
 record PointDto(double Lat, double Lon);
 record CrossSectionRequest(List<PointDto> Points);
 record RestoreSnapshotRequest(double TargetTimeMa);

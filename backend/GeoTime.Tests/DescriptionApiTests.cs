@@ -1,7 +1,12 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using GeoTime.Core;
+using GeoTime.Core.Services;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace GeoTime.Tests;
 
@@ -10,6 +15,7 @@ public class DescriptionApiTests(WebApplicationFactory<GeoTime.Api.Program> fact
     : IClassFixture<WebApplicationFactory<GeoTime.Api.Program>>
 {
     private readonly HttpClient _client = factory.CreateClient();
+    private const int HistoryTimelineGridSize = 32;
 
     // ─────────────────────────────────────────────────────────────────────────
     // D5 — POST /api/describe
@@ -65,12 +71,25 @@ public class DescriptionApiTests(WebApplicationFactory<GeoTime.Api.Program> fact
     [Fact]
     public async Task Describe_HistoryTimelineIsOrderedAscending()
     {
-        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
-        // Advance a few ticks to build up history
-        await _client.PostAsJsonAsync("/api/simulation/advance", new { deltaMa = 5.0 });
-        await _client.PostAsJsonAsync("/api/simulation/advance", new { deltaMa = 5.0 });
+        using var smallGridFactory = factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<SimulationOrchestrator>();
+                services.RemoveAll<GeologicalContextAssembler>();
+                services.AddSingleton(_ => new SimulationOrchestrator(HistoryTimelineGridSize));
+                services.AddSingleton<GeologicalContextAssembler>(sp =>
+                    new GeologicalContextAssembler(sp.GetRequiredService<SimulationOrchestrator>()));
+            });
+        });
+        using var client = smallGridFactory.CreateClient();
 
-        var response = await _client.PostAsJsonAsync("/api/describe", new { cellIndex = 50 });
+        await client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        // Advance a few ticks to build up history
+        await client.PostAsJsonAsync("/api/simulation/advance", new { deltaMa = 5.0 });
+        await client.PostAsJsonAsync("/api/simulation/advance", new { deltaMa = 5.0 });
+
+        var response = await client.PostAsJsonAsync("/api/describe", new { cellIndex = 50 });
         response.EnsureSuccessStatusCode();
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
 
@@ -158,5 +177,17 @@ public class DescriptionApiTests(WebApplicationFactory<GeoTime.Api.Program> fact
 
         var response = await _client.GetAsync("/api/state/eventlayermap?eventType=NotARealType");
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetEventLayerMap_WithTick_ReturnsBadRequest()
+    {
+        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+
+        var response = await _client.GetAsync("/api/state/eventlayermap?eventType=ImpactEjecta&tick=1");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var message = await response.Content.ReadAsStringAsync();
+        Assert.Contains("Historical event-layer filtering by tick is unsupported", message);
     }
 }

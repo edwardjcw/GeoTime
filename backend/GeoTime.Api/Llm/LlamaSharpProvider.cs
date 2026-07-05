@@ -3,23 +3,22 @@ using System.Runtime.CompilerServices;
 namespace GeoTime.Api.Llm;
 
 /// <summary>
-/// LLM provider that loads a GGUF model file in-process via LLamaSharp.
+/// LLM provider placeholder for future in-process GGUF inference via LLamaSharp.
 /// Config keys: <c>Llm:LlamaSharp:ModelPath</c>, <c>Llm:LlamaSharp:ModelUrl</c>,
 ///              <c>Llm:LlamaSharp:ContextSize</c>, <c>Llm:LlamaSharp:GpuLayers</c>.
 ///
-/// The LLamaSharp NuGet package is an optional dependency. If no model file
-/// has been downloaded yet, <see cref="GetStatusAsync"/> returns
-/// <c>NeedsSetup = true</c>; <see cref="GenerateAsync"/> throws
-/// <see cref="InvalidOperationException"/> until the model is loaded.
+/// Inference is not implemented in this build, so this provider is never
+/// selectable even when a GGUF file has been downloaded and validated.
 /// </summary>
 public sealed class LlamaSharpProvider : ILlmProvider
 {
+    private const string InferenceUnavailableMessage = "LlamaSharp inference is unavailable in this build.";
+
     private readonly LlmSettingsService _settings;
-    private volatile bool _modelLoaded;
 
     public string Name => "LlamaSharp";
 
-    public bool IsAvailable => ModelFileExists();
+    public bool IsAvailable => false;
 
     public LlamaSharpProvider(LlmSettingsService settings)
     {
@@ -30,10 +29,16 @@ public sealed class LlamaSharpProvider : ILlmProvider
     {
         var path = GetModelPath();
         if (string.IsNullOrWhiteSpace(path))
-            return Task.FromResult(new LlmProviderStatus(false, "Model path not configured", true));
+            return Task.FromResult(new LlmProviderStatus(
+                false,
+                $"{InferenceUnavailableMessage} Model path not configured.",
+                true));
 
         if (!File.Exists(path))
-            return Task.FromResult(new LlmProviderStatus(false, "Model not downloaded", true));
+            return Task.FromResult(new LlmProviderStatus(
+                false,
+                $"{InferenceUnavailableMessage} Model not downloaded.",
+                true));
 
         // Verify GGUF magic bytes
         try
@@ -41,28 +46,29 @@ public sealed class LlamaSharpProvider : ILlmProvider
             using var fs = File.OpenRead(path);
             var magic = new byte[4];
             if (fs.Read(magic, 0, 4) < 4 || magic[0] != 'G' || magic[1] != 'G' || magic[2] != 'U' || magic[3] != 'F')
-                return Task.FromResult(new LlmProviderStatus(false, "Invalid GGUF file", true));
+                return Task.FromResult(new LlmProviderStatus(
+                    false,
+                    $"{InferenceUnavailableMessage} Invalid GGUF file.",
+                    true));
         }
         catch (Exception ex)
         {
-            return Task.FromResult(new LlmProviderStatus(false, $"Cannot read model: {ex.Message}", true));
+            return Task.FromResult(new LlmProviderStatus(
+                false,
+                $"{InferenceUnavailableMessage} Cannot read model: {ex.Message}",
+                true));
         }
 
-        if (!_modelLoaded)
-            return Task.FromResult(new LlmProviderStatus(false, "Model not loaded — run setup", true));
-
-        return Task.FromResult(new LlmProviderStatus(true, "Ready (local inference)", false));
+        return Task.FromResult(new LlmProviderStatus(
+            false,
+            $"{InferenceUnavailableMessage} GGUF model is present but generation cannot run.",
+            false));
     }
 
     public Task<string> GenerateAsync(string systemPrompt, string userPrompt, CancellationToken ct = default)
     {
-        if (!_modelLoaded)
-            throw new InvalidOperationException("LlamaSharp model is not loaded. Run the setup flow first.");
-
-        // Actual LLamaSharp inference would go here once the package is added.
-        throw new NotImplementedException(
-            "LLamaSharp in-process inference requires the LLamaSharp NuGet package. " +
-            "Install it via the setup flow or use another provider.");
+        throw new InvalidOperationException(
+            $"{InferenceUnavailableMessage} Use another provider until in-process inference is implemented.");
     }
 
     public async IAsyncEnumerable<string> StreamAsync(string systemPrompt, string userPrompt,
@@ -70,21 +76,6 @@ public sealed class LlamaSharpProvider : ILlmProvider
     {
         var response = await GenerateAsync(systemPrompt, userPrompt, ct);
         yield return response;
-    }
-
-    /// <summary>
-    /// Called by the setup flow after a GGUF file has been downloaded and validated.
-    /// Sets <see cref="_modelLoaded"/> so status reports Ready.
-    /// </summary>
-    public void NotifyModelReady()
-    {
-        _modelLoaded = true;
-    }
-
-    private bool ModelFileExists()
-    {
-        var path = GetModelPath();
-        return !string.IsNullOrWhiteSpace(path) && File.Exists(path);
     }
 
     private string? GetModelPath()

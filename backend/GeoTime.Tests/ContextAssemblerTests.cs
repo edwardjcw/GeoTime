@@ -316,6 +316,42 @@ public class ContextAssemblerTests
         Assert.Null(ctx.RangeName);
     }
 
+    [Fact]
+    public async Task AssembleAsync_RainShadowUsesDetectorMetrics()
+    {
+        const int gs = 32;
+        var orchestrator = new SimulationOrchestrator(gs);
+        var state        = orchestrator.State;
+
+        for (int i = 0; i < state.CellCount; i++) state.HeightMap[i] = -2000f;
+
+        for (int row = 14; row < 19; row++)
+            state.HeightMap[row * gs + 16] = 3000f;
+
+        for (int row = 14; row < 19; row++)
+        {
+            state.PrecipitationMap[row * gs + 15] = 2000f;
+            state.PrecipitationMap[row * gs + 17] = 100f;
+        }
+
+        var detector = new FeatureDetectorService();
+        detector.Detect(state, [], [], [], 42u, 1L);
+
+        var mountainFeature = state.FeatureRegistry.Features.Values
+            .First(f => f.Type == FeatureType.MountainRange
+                        && f.Metrics.ContainsKey("rain_shadow_source"));
+        int cellIndex = mountainFeature.CellIndices[0];
+
+        Assert.True(mountainFeature.Metrics.ContainsKey("precip_delta_windward_mm"));
+        Assert.False(mountainFeature.Metrics.ContainsKey("rain_shadow_intensity"));
+
+        var assembler = new GeologicalContextAssembler(orchestrator);
+        var ctx = await assembler.AssembleAsync(cellIndex);
+
+        Assert.NotNull(ctx);
+        Assert.True(ctx.HasRainShadow);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Nearby features
     // ─────────────────────────────────────────────────────────────────────────

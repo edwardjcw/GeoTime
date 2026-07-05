@@ -29,6 +29,16 @@ public sealed class SimulationTickStats
     public double TimeMa     { get; set; }
     /// <summary>True when at least one GPU kernel ran successfully this tick.</summary>
     public bool IsGpuActive  { get; set; }
+    /// <summary>Simulation step size for this tick (Ma).</summary>
+    public double DeltaMa { get; set; }
+    public int GridSize { get; set; }
+    public bool AdaptiveResolutionUsed { get; set; }
+    public long AdaptiveDownsampleMs { get; set; }
+    public long AdaptiveUpsampleMs { get; set; }
+    public bool FeatureDetectionRan { get; set; }
+    public long FeatureDetectionMs { get; set; }
+    public long EventDepositionMs { get; set; }
+    public int EventsThisTick { get; set; }
 }
 
 /// <summary>
@@ -48,6 +58,12 @@ public sealed class SimulationOrchestrator : IDisposable
 
     /// <summary>Total number of simulation ticks completed since planet generation.</summary>
     public int TickCount { get; private set; }
+
+    /// <summary>True when the most recent advance call was skipped due to a concurrent tick.</summary>
+    public bool LastAdvanceSkipped { get; private set; }
+
+    /// <summary>Active simulation grid dimension (cells per edge).</summary>
+    public int GridSize => _gridSize;
 
     /// <summary>Prevents concurrent AdvanceSimulation calls from corrupting shared state.</summary>
     private readonly SemaphoreSlim _advanceLock = new(1, 1);
@@ -146,11 +162,13 @@ public sealed class SimulationOrchestrator : IDisposable
         // Prevent concurrent advance calls from corrupting simulation state.
         if (!_advanceLock.Wait(0))
         {
+            LastAdvanceSkipped = true;
             System.Diagnostics.Debug.WriteLine("[SimulationOrchestrator] Concurrent advance skipped — previous tick still running.");
             return;
         }
         try
         {
+            LastAdvanceSkipped = false;
             AdvanceSimulationCore(deltaMa, onProgress);
         }
         finally
@@ -163,7 +181,13 @@ public sealed class SimulationOrchestrator : IDisposable
     {
         var total = Stopwatch.StartNew();
         var sw    = new Stopwatch();
-        var stats = new SimulationTickStats { TimeMa = Clock.T + deltaMa };
+        var stats = new SimulationTickStats
+        {
+            TimeMa = Clock.T + deltaMa,
+            DeltaMa = deltaMa,
+            GridSize = _gridSize,
+            AdaptiveResolutionUsed = AdaptiveResolutionEnabled && _gridSize == GridConstants.GRID_SIZE,
+        };
 
         // Capture current log length so we can identify events added this tick.
         var logLengthBefore = EventLog.Length;
@@ -205,6 +229,8 @@ public sealed class SimulationOrchestrator : IDisposable
         if (_tectonic != null && _ticksSinceLastDetection >= FeatureDetectionInterval)
         {
             _ticksSinceLastDetection = 0;
+            stats.FeatureDetectionRan = true;
+            sw.Restart();
             var plates   = _tectonic.GetPlates();
             var hotspots = _tectonic.GetHotspots();
             var prevRegistry = State.FeatureRegistry;
@@ -213,6 +239,7 @@ public sealed class SimulationOrchestrator : IDisposable
             // Phase L4: carry forward history and detect change events.
             _featureEvolution.Track(State, prevRegistry, State.FeatureRegistry,
                 State.FeatureRegistry.LastUpdatedTick);
+            stats.FeatureDetectionMs = sw.ElapsedMilliseconds;
         }
 
         // Phase D1: deposit event-horizon layers for events raised this tick.
@@ -221,8 +248,13 @@ public sealed class SimulationOrchestrator : IDisposable
             var tickEvents = EventLog.GetAll()
                 .Skip(logLengthBefore)
                 .ToList();
+            stats.EventsThisTick = tickEvents.Count;
             if (tickEvents.Count > 0)
+            {
+                sw.Restart();
                 _eventDeposition.Deposit(State, _tectonic.Stratigraphy, tickEvents, Clock.T);
+                stats.EventDepositionMs = sw.ElapsedMilliseconds;
+            }
         }
 
         stats.TotalMs = total.ElapsedMilliseconds;
@@ -251,11 +283,13 @@ public sealed class SimulationOrchestrator : IDisposable
 
         if (!_advanceLock.Wait(0))
         {
+            LastAdvanceSkipped = true;
             System.Diagnostics.Debug.WriteLine("[SimulationOrchestrator] Concurrent advance skipped — previous tick still running.");
             return;
         }
         try
         {
+            LastAdvanceSkipped = false;
             await AdvanceSimulationCoreAsync(deltaMa, onProgress);
         }
         finally
@@ -268,7 +302,13 @@ public sealed class SimulationOrchestrator : IDisposable
     {
         var total = Stopwatch.StartNew();
         var sw    = new Stopwatch();
-        var stats = new SimulationTickStats { TimeMa = Clock.T + deltaMa };
+        var stats = new SimulationTickStats
+        {
+            TimeMa = Clock.T + deltaMa,
+            DeltaMa = deltaMa,
+            GridSize = _gridSize,
+            AdaptiveResolutionUsed = AdaptiveResolutionEnabled && _gridSize == GridConstants.GRID_SIZE,
+        };
 
         var logLengthBefore = EventLog.Length;
 
@@ -319,6 +359,8 @@ public sealed class SimulationOrchestrator : IDisposable
         if (_tectonic != null && _ticksSinceLastDetection >= FeatureDetectionInterval)
         {
             _ticksSinceLastDetection = 0;
+            stats.FeatureDetectionRan = true;
+            sw.Restart();
             var plates   = _tectonic.GetPlates();
             var hotspots = _tectonic.GetHotspots();
             var prevRegistry = State.FeatureRegistry;
@@ -326,6 +368,7 @@ public sealed class SimulationOrchestrator : IDisposable
                 EventLog.GetAll(), _currentSeed, State.FeatureRegistry.LastUpdatedTick + 1);
             _featureEvolution.Track(State, prevRegistry, State.FeatureRegistry,
                 State.FeatureRegistry.LastUpdatedTick);
+            stats.FeatureDetectionMs = sw.ElapsedMilliseconds;
         }
 
         if (_tectonic != null)
@@ -333,8 +376,13 @@ public sealed class SimulationOrchestrator : IDisposable
             var tickEvents = EventLog.GetAll()
                 .Skip(logLengthBefore)
                 .ToList();
+            stats.EventsThisTick = tickEvents.Count;
             if (tickEvents.Count > 0)
+            {
+                sw.Restart();
                 _eventDeposition.Deposit(State, _tectonic.Stratigraphy, tickEvents, Clock.T);
+                stats.EventDepositionMs = sw.ElapsedMilliseconds;
+            }
         }
 
         stats.TotalMs = total.ElapsedMilliseconds;
@@ -391,6 +439,7 @@ public sealed class SimulationOrchestrator : IDisposable
         var fullSize = _gridSize; // 512
 
         // Downsample inputs to coarse grid
+        var downsampleSw = Stopwatch.StartNew();
         var coarseTemp    = AdaptiveResolutionService.Downsample(State.TemperatureMap,   fullSize, CoarseSize);
         var coarsePrecip  = AdaptiveResolutionService.Downsample(State.PrecipitationMap, fullSize, CoarseSize);
         var coarseBiomass = AdaptiveResolutionService.Downsample(State.BiomassMap,       fullSize, CoarseSize);
@@ -404,6 +453,7 @@ public sealed class SimulationOrchestrator : IDisposable
         var coarseHeight = AdaptiveResolutionService.Downsample(State.HeightMap, fullSize, CoarseSize);
         Array.Copy(coarseHeight, coarseState.HeightMap, CoarseSize * CoarseSize);
         Array.Fill(coarseState.DirtyMask, true);
+        stats.AdaptiveDownsampleMs = downsampleSw.ElapsedMilliseconds;
 
         // Build coarse engines that share the GPU service
         var coarseAtmo = new AtmosphereEngine(Bus, EventLog, _currentSeed, CoarseSize, 1.0, _gpu);
@@ -432,9 +482,11 @@ public sealed class SimulationOrchestrator : IDisposable
         stats.VegetationMs = vegMs;
 
         // Upsample coarse results back to full resolution
+        var upsampleSw = Stopwatch.StartNew();
         AdaptiveResolutionService.UpsampleInto(coarseState.TemperatureMap,   CoarseSize, State.TemperatureMap,   fullSize);
         AdaptiveResolutionService.UpsampleInto(coarseState.PrecipitationMap, CoarseSize, State.PrecipitationMap, fullSize);
         AdaptiveResolutionService.UpsampleInto(coarseState.BiomassMap,       CoarseSize, State.BiomassMap,       fullSize);
+        stats.AdaptiveUpsampleMs = upsampleSw.ElapsedMilliseconds;
         AdaptiveResolutionService.UpsampleInto(coarseState.WindUMap,         CoarseSize, State.WindUMap,         fullSize);
         AdaptiveResolutionService.UpsampleInto(coarseState.WindVMap,         CoarseSize, State.WindVMap,         fullSize);
     }
@@ -500,8 +552,11 @@ public sealed class SimulationOrchestrator : IDisposable
             column = new StratigraphicColumn { Layers = [..layers] };
         }
 
+        // Snapshot features so concurrent feature detection cannot invalidate enumeration.
+        var features = State.FeatureRegistry.Features.Values.ToList();
+
         // Collect feature IDs that contain this cell.
-        var featureIds = State.FeatureRegistry.Features.Values
+        var featureIds = features
             .Where(f => f.CellIndices.Contains(cellIndex))
             .Select(f => f.Id)
             .ToList();
@@ -509,7 +564,7 @@ public sealed class SimulationOrchestrator : IDisposable
         // River name: find a river feature whose cells include this cell.
         string? riverName = null;
         string? watershedId = null;
-        foreach (var feat in State.FeatureRegistry.Features.Values)
+        foreach (var feat in features)
         {
             if (feat.CellIndices.Contains(cellIndex))
             {

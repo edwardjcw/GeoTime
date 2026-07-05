@@ -1,14 +1,26 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using GeoTime.Core;
+using GeoTime.Core.Services;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace GeoTime.Tests;
 
-public class ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> factory)
-    : IClassFixture<WebApplicationFactory<GeoTime.Api.Program>>
+public class ApiIntegrationTests : IClassFixture<WebApplicationFactory<GeoTime.Api.Program>>, IDisposable
 {
-    private readonly HttpClient _client = factory.CreateClient();
+    private readonly WebApplicationFactory<GeoTime.Api.Program> _factory;
+    private readonly HttpClient _client;
+    private const int AdvanceSimulationGridSize = 32;
+
+    public ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> factory)
+    {
+        _factory = CreateIsolatedFactory(factory);
+        _client = _factory.CreateClient();
+    }
 
     // ── Planet Generation ─────────────────────────────────────────────────────
 
@@ -37,13 +49,16 @@ public class ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> fact
     [Fact]
     public async Task AdvanceSimulation_MovesTimeForward()
     {
-        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
-        var timeBefore = await GetTimeMa();
+        using var smallGridFactory = CreateIsolatedFactory(_factory, AdvanceSimulationGridSize);
+        using var client = smallGridFactory.CreateClient();
 
-        var response = await _client.PostAsJsonAsync("/api/simulation/advance", new { deltaMa = 10.0 });
+        await client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        var timeBefore = await GetTimeMa(client);
+
+        var response = await client.PostAsJsonAsync("/api/simulation/advance", new { deltaMa = 0.5 });
         response.EnsureSuccessStatusCode();
 
-        var timeAfter = await GetTimeMa();
+        var timeAfter = await GetTimeMa(client);
         Assert.True(timeAfter > timeBefore);
     }
 
@@ -233,9 +248,12 @@ public class ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> fact
     [Fact]
     public async Task GetEvents_WithCount_LimitsResults()
     {
-        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
-        await _client.PostAsJsonAsync("/api/simulation/advance", new { deltaMa = 5.0 });
-        var response = await _client.GetAsync("/api/state/events?count=2");
+        using var smallGridFactory = CreateIsolatedFactory(_factory, AdvanceSimulationGridSize);
+        using var client = smallGridFactory.CreateClient();
+
+        await client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        await client.PostAsJsonAsync("/api/simulation/advance", new { deltaMa = 5.0 });
+        var response = await client.GetAsync("/api/state/events?count=2");
         response.EnsureSuccessStatusCode();
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.True(json.GetArrayLength() <= 2);
@@ -372,13 +390,16 @@ public class ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> fact
     [Fact]
     public async Task RestoreSnapshot_RestoresState()
     {
-        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
-        await _client.PostAsync("/api/snapshots/take", null);
+        using var smallGridFactory = CreateIsolatedFactory(_factory, AdvanceSimulationGridSize);
+        using var client = smallGridFactory.CreateClient();
 
-        var timeBefore = await GetTimeMa();
-        await _client.PostAsJsonAsync("/api/simulation/advance", new { deltaMa = 10.0 });
+        await client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        await client.PostAsync("/api/snapshots/take", null);
 
-        var response = await _client.PostAsJsonAsync("/api/snapshots/restore",
+        var timeBefore = await GetTimeMa(client);
+        await client.PostAsJsonAsync("/api/simulation/advance", new { deltaMa = 10.0 });
+
+        var response = await client.PostAsJsonAsync("/api/snapshots/restore",
             new { targetTimeMa = timeBefore + 1 });
         response.EnsureSuccessStatusCode();
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -588,10 +609,13 @@ public class ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> fact
     [Fact]
     public async Task SaveAndRestoreSnapshot_PreservesFeatureNames()
     {
-        // Generate a planet and capture the feature names.
-        await _client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+        using var smallGridFactory = CreateIsolatedFactory(_factory, AdvanceSimulationGridSize);
+        using var client = smallGridFactory.CreateClient();
 
-        var labelsBefore = await _client.GetAsync("/api/state/features/labels");
+        // Generate a planet and capture the feature names.
+        await client.PostAsJsonAsync("/api/planet/generate", new { seed = 42u });
+
+        var labelsBefore = await client.GetAsync("/api/state/features/labels");
         labelsBefore.EnsureSuccessStatusCode();
         var beforeArray = await labelsBefore.Content.ReadFromJsonAsync<JsonElement[]>();
         Assert.NotNull(beforeArray);
@@ -605,22 +629,22 @@ public class ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> fact
             .ToArray();
 
         // Save snapshot.
-        var saveResp = await _client.PostAsJsonAsync("/api/snapshots/take", new { });
+        var saveResp = await client.PostAsJsonAsync("/api/snapshots/take", new { });
         saveResp.EnsureSuccessStatusCode();
 
         // Advance simulation to change state.
-        await _client.PostAsJsonAsync("/api/simulation/advance", new { deltaMa = 5.0 });
+        await client.PostAsJsonAsync("/api/simulation/advance", new { deltaMa = 5.0 });
 
         // Restore the snapshot.
-        var info = await _client.GetAsync("/api/snapshots");
+        var info = await client.GetAsync("/api/snapshots");
         var infoJson = await info.Content.ReadFromJsonAsync<JsonElement>();
         var latestTime = infoJson.GetProperty("times").EnumerateArray().Max(t => t.GetDouble());
-        var restoreResp = await _client.PostAsJsonAsync(
+        var restoreResp = await client.PostAsJsonAsync(
             "/api/snapshots/restore", new { targetTimeMa = latestTime });
         restoreResp.EnsureSuccessStatusCode();
 
         // Fetch labels after restore.
-        var labelsAfter = await _client.GetAsync("/api/state/features/labels");
+        var labelsAfter = await client.GetAsync("/api/state/features/labels");
         labelsAfter.EnsureSuccessStatusCode();
         var afterArray = await labelsAfter.Content.ReadFromJsonAsync<JsonElement[]>();
         Assert.NotNull(afterArray);
@@ -641,10 +665,37 @@ public class ApiIntegrationTests(WebApplicationFactory<GeoTime.Api.Program> fact
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private async Task<double> GetTimeMa()
+    private static WebApplicationFactory<GeoTime.Api.Program> CreateIsolatedFactory(
+        WebApplicationFactory<GeoTime.Api.Program> factory,
+        int? gridSize = null)
     {
-        var response = await _client.GetAsync("/api/simulation/time");
+        return factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<SimulationOrchestrator>();
+                services.RemoveAll<GeologicalContextAssembler>();
+                services.AddSingleton(_ => gridSize.HasValue
+                    ? new SimulationOrchestrator(gridSize.Value)
+                    : new SimulationOrchestrator());
+                services.AddSingleton<GeologicalContextAssembler>(sp =>
+                    new GeologicalContextAssembler(sp.GetRequiredService<SimulationOrchestrator>()));
+            });
+        });
+    }
+
+    private Task<double> GetTimeMa() => GetTimeMa(_client);
+
+    private static async Task<double> GetTimeMa(HttpClient client)
+    {
+        var response = await client.GetAsync("/api/simulation/time");
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
         return json.GetProperty("timeMa").GetDouble();
+    }
+
+    public void Dispose()
+    {
+        _client.Dispose();
+        _factory.Dispose();
     }
 }

@@ -29,6 +29,13 @@ export interface TickStats {
   tectonicTotalMs?: number;
   /** True when at least one GPU kernel ran this tick. */
   isGpuActive?: boolean;
+  adaptiveResolutionUsed?: boolean;
+  adaptiveDownsampleMs?: number;
+  adaptiveUpsampleMs?: number;
+  featureDetectionRan?: boolean;
+  featureDetectionMs?: number;
+  eventDepositionMs?: number;
+  eventsThisTick?: number;
 }
 
 export interface AdvanceResult {
@@ -144,6 +151,23 @@ async function getBinary(path: string): Promise<ArrayBuffer> {
   });
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
   return res.arrayBuffer();
+}
+
+/** Fire-and-forget client timing/event report for the backend session log. */
+export function reportClientPerf(event: string, data: Record<string, unknown>): void {
+  void fetch(`${API_BASE}/api/diagnostics/client-event`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ event, data }),
+  }).catch(() => {/* diagnostics must not affect simulation */});
+}
+
+export interface DiagnosticsSessionInfo {
+  logPath: string;
+}
+
+export async function getDiagnosticsSession(): Promise<DiagnosticsSessionInfo> {
+  return get('/api/diagnostics/session');
 }
 
 // ── Public API (REST) ───────────────────────────────────────────────────────
@@ -650,17 +674,37 @@ export function describeStream(
   cellIndex: number,
   onToken: (token: string) => void,
   onDone: () => void,
+  onError?: (error: unknown) => void,
 ): () => void {
-  let es: EventSource | null = null;
   // Use fetch+ReadableStream for POST SSE
   const controller = new AbortController();
+  let completed = false;
+
+  const finish = () => {
+    if (completed) return;
+    completed = true;
+    onDone();
+  };
+
+  const fail = (error: unknown) => {
+    if (completed || controller.signal.aborted) return;
+    completed = true;
+    if (onError) {
+      onError(error);
+    } else {
+      onDone();
+    }
+  };
+
   fetch(`${API_BASE}/api/describe/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ cellIndex }),
     signal: controller.signal,
   }).then(async (resp) => {
-    if (!resp.body) return onDone();
+    if (!resp.ok) throw new Error(`Description stream failed with HTTP ${resp.status}`);
+    if (!resp.body) throw new Error('Description stream response had no body');
+
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
@@ -671,16 +715,21 @@ export function describeStream(
       const parts = buf.split('\n\n');
       buf = parts.pop() ?? '';
       for (const part of parts) {
-        const line = part.startsWith('data: ') ? part.slice(6) : part;
+        const line = part
+          .split(/\r?\n/)
+          .filter((entry) => entry.startsWith('data:'))
+          .map((entry) => entry.replace(/^data:\s?/, ''))
+          .join('\n');
+        if (!line.trim()) continue;
         try {
           const obj = JSON.parse(line) as { token?: string; done?: boolean };
-          if (obj.done) { onDone(); return; }
+          if (obj.done) { finish(); return; }
           if (obj.token) onToken(obj.token);
         } catch {/* ignore */}
       }
     }
-    onDone();
-  }).catch(() => onDone());
+    finish();
+  }).catch((error) => fail(error));
   return () => controller.abort();
 }
 

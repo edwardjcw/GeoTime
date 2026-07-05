@@ -268,14 +268,18 @@ public sealed class LocalLlmSetupService
             await Emit(writer, "Validating GGUF header", 88, modelPath);
             ValidateGguf(modelPath);
 
-            await Emit(writer, "Loading model", 92, "Initialising LlamaSharp context");
-            _llamaSharp.NotifyModelReady();
-
+            await Emit(writer, "Inference unavailable", 92,
+                "GGUF validated; LlamaSharp generation is not implemented in this build");
             _settings.UpdateProviderConfig("LlamaSharp", cfg with { ModelPath = modelPath });
-            _settings.SetActiveProvider("LlamaSharp");
             _settings.Save();
 
-            await writer.WriteAsync(new LlmSetupProgress("Complete", 100, "LlamaSharp model ready", true, false, null));
+            await writer.WriteAsync(new LlmSetupProgress(
+                "Complete",
+                100,
+                "LlamaSharp GGUF downloaded and validated; inference is unavailable in this build.",
+                true,
+                false,
+                null));
         }
         catch (Exception ex)
         {

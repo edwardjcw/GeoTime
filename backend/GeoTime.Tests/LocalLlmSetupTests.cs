@@ -40,7 +40,7 @@ public class LocalLlmSetupTests
     }
 
     [Fact]
-    public async Task LlamaSharpProvider_ValidGgufMagic_NotReadyUntilModelLoaded()
+    public async Task LlamaSharpProvider_ValidGgufMagic_InferenceUnavailable()
     {
         var path = Path.GetTempFileName();
         try
@@ -51,13 +51,11 @@ public class LocalLlmSetupTests
             var settings = BuildSettings(llamaSharpModelPath: path);
             var provider = new LlamaSharpProvider(settings);
 
-            // File exists with valid magic, but NotifyModelReady() has not been called
             var status = await provider.GetStatusAsync();
             Assert.False(status.IsReady);
-            // After NotifyModelReady, should be ready
-            provider.NotifyModelReady();
-            var status2 = await provider.GetStatusAsync();
-            Assert.True(status2.IsReady);
+            Assert.False(status.NeedsSetup);
+            Assert.False(provider.IsAvailable);
+            Assert.Contains("inference is unavailable", status.StatusMessage);
         }
         finally
         {
