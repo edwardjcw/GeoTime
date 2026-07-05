@@ -31,7 +31,8 @@ GeoTime uses a client-server architecture where all computation-heavy simulation
 - **Vegetation**: Miami Model NPP, biomass accumulation, stochastic forest fires, albedo feedback
 - **Biomatter**: Simple non-plant organisms (microbes, plankton, reef builders) driving ocean chemistry, biogenic sedimentation, atmospheric O₂/CH₄, and petroleum source rocks (feature-flagged)
 - **Cross-Section Viewer**: Interactive great-circle cross-sections with split-scale rendering
-- **Performance**: Adaptive tick rate, deterministic seeded PRNG
+- **Geological Descriptions**: Context-backed descriptions with streaming-first UI and batch fallback
+- **Performance**: Adaptive tick rate, deterministic seeded PRNG, CPU/GPU compute paths
 - **UI**: Globe viewport, collapsible sidebar, layer overlays, geological timeline, inspect panel, URL seed sharing
 
 ## Getting Started
@@ -43,7 +44,37 @@ cd backend
 dotnet restore
 dotnet build
 dotnet run --project GeoTime.Api   # Starts API server on http://localhost:5000
-dotnet test                         # Run 156 unit tests
+dotnet test "GeoTime.Tests/GeoTime.Tests.csproj"  # Run backend tests
+```
+
+Optional GPU diagnostic:
+
+```bash
+cd backend
+dotnet run --project GeoTime.Diagnostic
+```
+
+### Performance session logs
+
+Each backend process writes a JSONL performance log for optimization analysis. On startup the console prints the path, and the frontend logs it in the browser console after connecting.
+
+- Default directory: `backend/GeoTime.Api/logs/`
+- Override: set `GEOTIME_PERF_LOG_DIR` or `GeoTime:PerfLogDirectory` in configuration
+- Query current path: `GET /api/diagnostics/session`
+
+Logged events include:
+
+- `session_start` / `session_end` — machine, .NET, and process metadata
+- `planet_generate` — generation wall time, plate/hotspot counts, compute backend
+- `simulation_advance` — per-engine tick timings, GPU activity, adaptive-resolution overhead, feature detection, event deposition
+- `api_request` — wall time and response size for every `/api/*` call
+- `client_advance_cycle` / `client_planet_generate` — frontend round-trip timings, FPS, and stats mirrored from the API
+
+Example analysis:
+
+```bash
+# Slowest simulation advances
+rg '"event":"simulation_advance"' backend/GeoTime.Api/logs/*.jsonl
 ```
 
 ### Frontend (TypeScript/Vite)
@@ -53,8 +84,10 @@ npm install
 npm run dev        # Start dev server (connects to backend at localhost:5000)
 npm run build      # Production build (tsc + vite)
 npm run test       # Run unit tests (Vitest)
-npx playwright test  # Run E2E tests (Playwright)
+npx playwright test --reporter=list  # Run E2E tests (Playwright)
 ```
+
+Playwright is configured to start the backend API and frontend preview on `127.0.0.1` for E2E runs.
 
 Set the backend URL via environment variable if needed:
 ```bash
@@ -98,15 +131,16 @@ The `unreal/GeoTimeUE/` directory contains an Unreal Engine 5 project that conne
 - `GeoTime.Core/Engines/` — All geological simulation engines (tectonic, erosion, glacial, weathering, pedogenesis, climate, weather, vegetation, biomatter, cross-section)
 - `GeoTime.Core/SimulationOrchestrator.cs` — Top-level simulation manager
 - `GeoTime.Api/Program.cs` — REST API endpoints
-- `GeoTime.Tests/` — 156 xUnit tests across 17 test files
+- `GeoTime.Tests/` — xUnit backend tests (412 passing in latest full proof)
+- `GeoTime.Diagnostic/` — optional console utility for GPU compute mode/device diagnostics
 
 ### Frontend (`src/`)
 - `src/api/backend-client.ts` — REST API client for backend communication
 - `src/shared/types.ts` — Shared TypeScript type definitions
 - `src/render/` — Three.js globe renderer, icosphere mesh, cross-section Canvas 2D renderer
 - `src/ui/` — DOM-based app shell with HUD, sidebar, inspect panel, timeline
-- `tests/` — Vitest unit tests
-- `e2e/` — Playwright browser tests
+- `tests/` — Vitest unit tests (430 passing in latest full proof)
+- `e2e/` — Playwright browser tests (102 passing in latest full proof)
 
 ## API Reference
 

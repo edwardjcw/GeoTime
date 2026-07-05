@@ -1,5 +1,21 @@
 # GeoTime Implementation Status
 
+## Current Status Location
+
+This root file is retained for legacy context only. It was written for the earlier frontend-first implementation tracker and is stale for current work.
+
+Use `docs/status.md` as the canonical GeoTime status tracker. Read `docs/instructions.md` before completing or updating `docs/status.md`.
+
+Current baseline after the 2026-07-04 audit remediation run:
+
+- Backend-first architecture is the source of truth for simulation behavior.
+- Final proof passed: backend build, 412 backend tests, frontend build, 430 Vitest tests, and 102 Playwright tests.
+- Playwright/CI now starts backend API and frontend preview on `127.0.0.1`.
+- Unreal API contracts were unaffected by the latest remediation.
+- `backend/GeoTime.Diagnostic/` is an optional GPU diagnostic utility, not part of required setup.
+
+The historical notes below are preserved only as migration context.
+
 ## Phase 1 — Foundation ✅
 
 **Goal**: Shared architecture, planet generation, static globe rendering.

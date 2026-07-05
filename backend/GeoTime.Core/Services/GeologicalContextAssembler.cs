@@ -14,6 +14,9 @@ namespace GeoTime.Core.Services;
 /// </summary>
 public sealed class GeologicalContextAssembler
 {
+    private const float RainShadowLegacyIntensityThreshold = 0.1f;
+    private const float RainShadowPrecipDeltaThresholdMm = 500f;
+
     private readonly SimulationOrchestrator _orchestrator;
 
     /// <param name="orchestrator">The live orchestrator that owns all simulation state.</param>
@@ -297,8 +300,7 @@ public sealed class GeologicalContextAssembler
             return (false, null, null, false, false, null);
 
         mountainFeature.Metrics.TryGetValue("max_elevation_m", out float maxElev);
-        mountainFeature.Metrics.TryGetValue("rain_shadow_intensity", out float rainShadow);
-        bool hasRainShadow = rainShadow > 0.1f;
+        bool hasRainShadow = HasRainShadowMetric(mountainFeature);
 
         // Mountain origin type: check for nearby tectonic-context features.
         string? originType;
@@ -324,6 +326,20 @@ public sealed class GeologicalContextAssembler
                 isWindward,
                 hasRainShadow,
                 originType);
+    }
+
+    private static bool HasRainShadowMetric(DetectedFeature mountainFeature)
+    {
+        if (mountainFeature.Metrics.TryGetValue("rain_shadow_source", out float rainShadowSource)
+            && rainShadowSource > 0f)
+            return true;
+
+        if (mountainFeature.Metrics.TryGetValue("precip_delta_windward_mm", out float precipDelta)
+            && precipDelta > RainShadowPrecipDeltaThresholdMm)
+            return true;
+
+        return mountainFeature.Metrics.TryGetValue("rain_shadow_intensity", out float rainShadowIntensity)
+               && rainShadowIntensity > RainShadowLegacyIntensityThreshold;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

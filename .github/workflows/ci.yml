@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Restore backend
+        run: |
+          dotnet restore backend/GeoTime.Api/GeoTime.Api.csproj
+          dotnet restore backend/GeoTime.Tests/GeoTime.Tests.csproj
+
+      - name: Build backend API
+        run: dotnet build backend/GeoTime.Api/GeoTime.Api.csproj --configuration Release --no-restore
+
+      - name: Test backend
+        run: dotnet test backend/GeoTime.Tests/GeoTime.Tests.csproj --configuration Release --no-restore
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Test frontend
+        run: npm run test
+
+      - name: Test E2E
+        run: npm run test:e2e

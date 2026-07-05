@@ -852,7 +852,7 @@ export class AppShell {
     layerGroup.appendChild(layerTitle);
 
     // Layer names must stay in sync with the switch cases in main.ts onLayerToggle handler.
-    const layerNames = ['plates', 'temperature', 'precipitation', 'biome', 'soil', 'clouds', 'biomass', 'topo', 'weather', 'labels'];
+    const layerNames = ['plates', 'temperature', 'precipitation', 'biome', 'soil', 'clouds', 'biomass', 'biomatter', 'organic-carbon', 'topo', 'weather', 'labels'];
     for (const name of layerNames) {
       const btn = document.createElement('button');
       btn.textContent = name;
@@ -1377,6 +1377,7 @@ export class AppShell {
 
     // Spinner
     const spinner = document.createElement('div');
+    spinner.dataset.descriptionStatus = 'loading';
     spinner.textContent = '⏳ Generating description…';
     spinner.style.opacity = '0.6';
     this._descModal.appendChild(spinner);
@@ -1505,6 +1506,9 @@ export class AppShell {
   /** Append a token to the last paragraph in the description modal (for streaming). */
   appendDescriptionToken(token: string): void {
     if (!this._descModalVisible) return;
+    const loading = this._descModal.querySelector('[data-description-status="loading"]');
+    loading?.remove();
+
     let last = this._descModal.querySelector('p:last-of-type') as HTMLElement | null;
     if (!last) {
       last = document.createElement('p');
@@ -1512,6 +1516,18 @@ export class AppShell {
       this._descModal.appendChild(last);
     }
     last.textContent = (last.textContent ?? '') + token;
+  }
+
+  /** Replace the loading state with an error message. */
+  showDescriptionError(message: string): void {
+    if (!this._descModalVisible) return;
+    const loading = this._descModal.querySelector('[data-description-status="loading"]');
+    loading?.remove();
+
+    const err = document.createElement('div');
+    err.textContent = message;
+    Object.assign(err.style, { color: '#f99', fontSize: '12px' });
+    this._descModal.appendChild(err);
   }
 
   /** Hide (but don't destroy) the description modal. */

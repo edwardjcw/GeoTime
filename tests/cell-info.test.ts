@@ -277,6 +277,58 @@ describe('AppShell – event layer dropdown', () => {
   });
 });
 
+describe('AppShell – description modal streaming', () => {
+  let root: HTMLElement;
+  let shell: AppShell;
+
+  beforeEach(() => {
+    root = document.createElement('div');
+    document.body.appendChild(root);
+    shell = new AppShell(root);
+  });
+
+  it('should replace loading text with streamed tokens', () => {
+    shell.showDescriptionModal();
+    expect(root.textContent).toContain('Generating description');
+
+    shell.appendDescriptionToken('Ancient limestone shelf');
+
+    const text = root.textContent ?? '';
+    expect(text).toContain('Ancient limestone shelf');
+    expect(text).not.toContain('Generating description');
+  });
+
+  it('should show an error message when batch fallback fails', () => {
+    shell.showDescriptionModal();
+    shell.showDescriptionError('Description generation failed.');
+
+    const text = root.textContent ?? '';
+    expect(text).toContain('Description generation failed.');
+    expect(text).not.toContain('Generating description');
+  });
+});
+
+describe('AppShell – biomatter layer buttons', () => {
+  let root: HTMLElement;
+  let shell: AppShell;
+
+  beforeEach(() => {
+    root = document.createElement('div');
+    document.body.appendChild(root);
+    shell = new AppShell(root);
+  });
+
+  it('should expose biomatter and organic carbon overlay toggles', () => {
+    const biomatter = root.querySelector<HTMLButtonElement>('button[data-layer="biomatter"]');
+    const organicCarbon = root.querySelector<HTMLButtonElement>('button[data-layer="organic-carbon"]');
+
+    expect(biomatter).toBeTruthy();
+    expect(organicCarbon).toBeTruthy();
+    expect(biomatter?.textContent).toBe('biomatter');
+    expect(organicCarbon?.textContent).toBe('organic-carbon');
+  });
+});
+
 describe('AppShell – advanced view processing status with GPU/CPU tags and percentage', () => {
   let root: HTMLElement;
   let shell: AppShell;

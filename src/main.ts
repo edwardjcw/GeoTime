@@ -105,6 +105,14 @@ async function doGeneratePlanet(seed: number): Promise<void> {
 
     // Encode seed in URL fragment for sharing
     window.location.hash = `seed=${result.seed}`;
+
+    api.reportClientPerf('client_planet_generate', {
+      seed: result.seed,
+      plateCount: result.plateCount,
+      hotspotCount: result.hotspotCount,
+      timeMa: simTimeMa,
+      triangleCount: renderer.getTriangleCount(),
+    });
   } catch (err) {
     console.error('Failed to generate planet:', err);
   }
@@ -189,6 +197,17 @@ async function doReconnectPlanet(seed: number, timeMa: number): Promise<void> {
     } else {
       await doGeneratePlanet(seedFromURL() ?? randomSeed());
     }
+    api.getDiagnosticsSession()
+      .then((info) => {
+        console.info(`[GeoTime] Performance session log: ${info.logPath}`);
+        api.reportClientPerf('client_session_start', {
+          userAgent: navigator.userAgent,
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+          devicePixelRatio: window.devicePixelRatio,
+          logPath: info.logPath,
+        });
+      })
+      .catch(() => {/* diagnostics optional at startup */});
   } catch {
     // Backend may not be reachable; generate a fresh planet
     await doGeneratePlanet(seedFromURL() ?? randomSeed());
@@ -312,6 +331,26 @@ function biomassColor(b: number): [number, number, number] {
   return [Math.round(10 + f * 20), Math.round(40 + f * 190), Math.round(10 + f * 20)];
 }
 
+/** Biomatter density (kg C/m²) → RGB: sparse dark violet to dense blue-magenta. */
+function biomatterColor(density: number): [number, number, number] {
+  const f = Math.min(1, density / 3);
+  return [
+    Math.round(28 + f * 92),
+    Math.round(18 + f * 102),
+    Math.round(80 + f * 150),
+  ];
+}
+
+/** Organic carbon (kg C/m²) → RGB: lean dark soil to carbon-rich amber-brown. */
+function organicCarbonColor(carbon: number): [number, number, number] {
+  const f = Math.min(1, carbon / 5);
+  return [
+    Math.round(45 + f * 135),
+    Math.round(30 + f * 95),
+    Math.round(12 + f * 38),
+  ];
+}
+
 /** Elevation (m) → RGB: vivid topographic bands (ocean → peaks). */
 function topoColor(h: number): [number, number, number] {
   if (h < -5000) return [0, 20, 140];
@@ -401,6 +440,24 @@ const LAYER_LEGENDS: Record<string, { title: string; items: Array<{ color: strin
       { color: 'rgb(15,120,15)',  label: '4 kg/m²' },
       { color: 'rgb(20,190,20)',  label: '8 kg/m²' },
       { color: 'rgb(30,230,30)',  label: '12+ kg/m² (lush)' },
+    ],
+  },
+  biomatter: {
+    title: 'Biomatter Density',
+    items: [
+      { color: 'rgb(28,18,80)',    label: '0 kg C/m² (sparse)' },
+      { color: 'rgb(59,52,130)',   label: '1 kg C/m²' },
+      { color: 'rgb(89,86,180)',   label: '2 kg C/m²' },
+      { color: 'rgb(120,120,230)', label: '3+ kg C/m² (dense)' },
+    ],
+  },
+  'organic-carbon': {
+    title: 'Organic Carbon',
+    items: [
+      { color: 'rgb(45,30,12)',   label: '0 kg C/m² (lean)' },
+      { color: 'rgb(99,68,27)',   label: '2 kg C/m²' },
+      { color: 'rgb(153,106,42)', label: '4 kg C/m²' },
+      { color: 'rgb(180,125,50)', label: '5+ kg C/m² (rich)' },
     ],
   },
   topo: {
@@ -589,6 +646,18 @@ async function fetchLayerRgba(layer: string): Promise<Uint8Array | null> {
     for (let i = 0; i < cellCount; i++) {
       const [r, g, b] = biomassColor(data[i]);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 180;
+    }
+  } else if (layer === 'biomatter') {
+    const data = await api.getBiomatterMap();
+    for (let i = 0; i < cellCount; i++) {
+      const [r, g, b] = biomatterColor(data[i]);
+      rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 185;
+    }
+  } else if (layer === 'organic-carbon') {
+    const data = await api.getOrganicCarbonMap();
+    for (let i = 0; i < cellCount; i++) {
+      const [r, g, b] = organicCarbonColor(data[i]);
+      rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 185;
     }
   } else if (layer === 'topo') {
     const data = await api.getHeightMap();
@@ -976,6 +1045,8 @@ let lastTickStats: api.TickStats | null = null;
 
 /** Total ticks completed (from backend advance response). */
 let totalTickCount = 0;
+/** Last measured FPS from the render loop. */
+let lastMeasuredFps = 0;
 
 /** Re-fetch and display the pinned cell's inspection data. */
 function refreshInspectCell(): void {
@@ -1010,16 +1081,53 @@ function refreshInspectCell(): void {
 
 // ── Description Modal (Phase D5) ────────────────────────────────────────────
 
+let cancelDescriptionStream: (() => void) | null = null;
+
 shell.onDescribeOpen(() => {
   if (selectedCellIndex < 0) return;
+
+  cancelDescriptionStream?.();
+  cancelDescriptionStream = null;
+
+  const cellIndex = selectedCellIndex;
   shell.showDescriptionModal();
-  api.describeCell(selectedCellIndex)
-    .then((resp) => {
-      shell.populateDescriptionModal(resp);
-    })
-    .catch((err) => {
-      console.error('Description failed:', err);
-    });
+
+  let receivedToken = false;
+  let settled = false;
+
+  const fallbackToBatch = (reason: unknown) => {
+    if (settled) return;
+    settled = true;
+    cancelDescriptionStream = null;
+    console.warn('Description stream failed; falling back to batch response:', reason);
+    shell.showDescriptionModal();
+    api.describeCell(cellIndex)
+      .then((resp) => {
+        shell.populateDescriptionModal(resp);
+      })
+      .catch((err) => {
+        console.error('Description failed:', err);
+        shell.showDescriptionError('Description generation failed. Check the backend logs for details.');
+      });
+  };
+
+  cancelDescriptionStream = api.describeStream(
+    cellIndex,
+    (token) => {
+      receivedToken = true;
+      shell.appendDescriptionToken(token);
+    },
+    () => {
+      if (settled) return;
+      if (!receivedToken) {
+        fallbackToBatch(new Error('Description stream ended without content'));
+        return;
+      }
+      settled = true;
+      cancelDescriptionStream = null;
+    },
+    fallbackToBatch,
+  );
 });
 
 // ── Event Layer Overlay (Phase D6) ──────────────────────────────────────────
@@ -1241,6 +1349,7 @@ function simTick(): void {
   simRequestController = new AbortController();
   api.advanceSimulation(deltaMa, simRequestController.signal)
     .then(async (result) => {
+      const advanceWallMs = Math.round(performance.now() - simRequestStartMs);
       simTimeMa = result.timeMa;
       shell.setSimTime(simTimeMa);
       shell.setTimelineCursor(4500 + simTimeMa);
@@ -1267,7 +1376,9 @@ function simTick(): void {
       }
 
       // Fetch updated height+temperature+precipitation in a single request.
+      const bundleStart = performance.now();
       const bundle = await api.getStateBundle(GRID_SIZE * GRID_SIZE);
+      const bundleWallMs = Math.round(performance.now() - bundleStart);
       const heightMap = bundle.heightMap;
       renderer.updateHeightMap(heightMap, GRID_SIZE);
 
@@ -1286,7 +1397,9 @@ function simTick(): void {
 
       // Re-render any active data overlays so they reflect the new state.
       // This keeps the visual overlay in sync with the updated simulation.
+      let overlayWallMs = 0;
       if (activeDataLayers.size > 0) {
+        const overlayStart = performance.now();
         // Refresh the most-recently-activated overlay (the one currently visible).
         const layers = [...activeDataLayers];
         const layerToRefresh = layers[layers.length - 1];
@@ -1296,7 +1409,23 @@ function simTick(): void {
             renderer.updateColorMap(rgba, GRID_SIZE);
           }
         }
+        overlayWallMs = Math.round(performance.now() - overlayStart);
       }
+
+      api.reportClientPerf('client_advance_cycle', {
+        deltaMa,
+        tickCount: totalTickCount,
+        timeMa: simTimeMa,
+        simRate,
+        paused,
+        advanceWallMs,
+        bundleWallMs,
+        overlayWallMs,
+        totalClientWallMs: advanceWallMs + bundleWallMs + overlayWallMs,
+        fps: lastMeasuredFps,
+        activeLayerCount: activeDataLayers.size,
+        stats: lastTickStats,
+      });
     })
     .catch((err: unknown) => {
       if (err instanceof Error && err.name === 'AbortError') return; // user-initiated or timeout-based abort
@@ -1339,7 +1468,8 @@ function loop(now: number): void {
   frameCount++;
   fpsAccum += dtMs;
   if (fpsAccum >= 500) {
-    shell.setFps((frameCount / fpsAccum) * 1000);
+    lastMeasuredFps = Math.round((frameCount / fpsAccum) * 1000);
+    shell.setFps(lastMeasuredFps);
     frameCount = 0;
     fpsAccum = 0;
   }

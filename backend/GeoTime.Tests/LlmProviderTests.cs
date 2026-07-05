@@ -83,6 +83,29 @@ public class LlmProviderTests
         var status = await provider.GetStatusAsync();
         Assert.False(status.IsReady);
         Assert.True(status.NeedsSetup);
+        Assert.Contains("inference is unavailable", status.StatusMessage);
+    }
+
+    [Fact]
+    public async Task LlamaSharpProvider_ValidGgufMagic_InferenceUnavailable()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllBytesAsync(path, [(byte)'G', (byte)'G', (byte)'U', (byte)'F', 0x00]);
+            var settings = BuildSettings(active: "LlamaSharp", llamaSharpModelPath: path);
+            var provider = new LlamaSharpProvider(settings);
+
+            Assert.False(provider.IsAvailable);
+            var status = await provider.GetStatusAsync();
+            Assert.False(status.IsReady);
+            Assert.False(status.NeedsSetup);
+            Assert.Contains("inference is unavailable", status.StatusMessage);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     // ── LlmProviderFactory — fallback behaviour ───────────────────────────────
@@ -111,6 +134,31 @@ public class LlmProviderTests
 
         var active = factory.GetActiveProvider();
         Assert.Equal("Template", active.Name);
+    }
+
+    [Fact]
+    public async Task Factory_LlamaSharpConfiguredWithModel_FallsBackToTemplate()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllBytesAsync(path, [(byte)'G', (byte)'G', (byte)'U', (byte)'F', 0x00]);
+            var settings = BuildSettings(active: "LlamaSharp", llamaSharpModelPath: path);
+            var providers = new ILlmProvider[]
+            {
+                new LlamaSharpProvider(settings),
+                new TemplateFallbackProvider(),
+            };
+            var factory = new LlmProviderFactory(settings, providers);
+
+            var active = factory.GetActiveProvider();
+
+            Assert.Equal("Template", active.Name);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [Fact]

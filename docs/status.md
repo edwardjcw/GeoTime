@@ -1,15 +1,40 @@
 # GeoTime — docs/status.md
 
+## Current Audit Remediation Baseline (2026-07-04)
+
+GeoTime is currently in a backend-first, reliable/testable state after the audit remediation run. The canonical status tracker is this file; root `status.md` is now a navigation note for legacy context.
+
+### Final Proof
+
+- [x] `cd backend && dotnet build` passed in 1.77s.
+- [x] `cd backend && dotnet test "GeoTime.Tests/GeoTime.Tests.csproj"` passed 412 tests in 5m37.3s.
+- [x] `npm run build` passed in 2.89s.
+- [x] `npm run test` passed 430 tests in 22.1s.
+- [x] `npx playwright test --reporter=list` passed 102 tests in 5m30.5s.
+
+### Remediation Notes
+
+- Backend reliability: formerly hanging `DescriptionApiTests.Describe_HistoryTimelineIsOrderedAscending` and formerly failing `ApiIntegrationTests.AdvanceSimulation_MovesTimeForward` now use small-grid test DI and pass in focused suites.
+- Context accuracy: `GeologicalContextAssembler` reads `rain_shadow_source` and `precip_delta_windward_mm` while preserving legacy `rain_shadow_intensity`; focused context tests passed 19/19.
+- API/LLM behavior: event-layer `tick` requests now return 400 unsupported; LlamaSharp remains non-ready/non-active until inference exists; focused tests passed 32/32.
+- Frontend reliability: description UI streams first with batch fallback; biomatter and organic-carbon overlays are exposed; focused Vitest coverage passed 31 tests.
+- E2E/CI: Playwright Chromium is installed, Playwright starts the backend API and frontend preview on `127.0.0.1`, and CI now covers backend, frontend, and E2E gates.
+- Unreal: latest remediation did not change Unreal API contracts.
+- Optional tooling: `backend/GeoTime.Diagnostic/` is an optional GPU diagnostic console utility; it is not required for normal build/test flow.
+- Documentation hygiene: `docs/instructions.md` now exists and must be read before future `docs/status.md` completion/update tasks.
+
 ## Instructions for Future Agents
 
 This file is the **first thing to read** when picking up work on GeoTime. It provides context, constraints, and a tracker for what has been done and what remains.
+
+Also read `docs/instructions.md` before completing or updating this file.
 
 ### Key Principles
 1. **Backend-first**: All simulation logic lives in C# (`backend/GeoTime.Core`). The TypeScript frontend is display-only. New features that affect planet evolution must be implemented as engines or services in `GeoTime.Core`.
 2. **Test as you go**: Every backend change needs xUnit tests (`backend/GeoTime.Tests/`); every frontend change needs Vitest unit tests (`tests/`) and Playwright E2E tests (`e2e/`). Pull requests should include screenshots.
 3. **Simulation realism**: If a feature affects how the land develops over time (e.g., rivers shaping terrain, ice caps modulating climate), it must be wired into `SimulationOrchestrator.AdvanceSimulationCore` — not left as a passive label.
 4. **Minimal changes**: Change only what is needed. Avoid refactoring unrelated code.
-5. **Build and test before committing**: Run `dotnet test` (backend) and `npx vitest run` (frontend) after changes. Use `report_progress` to push commits.
+5. **Verify before review**: Run the relevant focused proof for the change; broad proof commands require coordinator/user approval. Do not commit unless explicitly requested.
 6. **Keep Unreal up to date**: An alternative to the frontend is `unreal`. Make sure all features in the frontend are equally represented in `unreal`.
 7. **Update documents**: This document should be updated as a change log for future reference. Readme documents should also be kept up to date.
 8. **GPU**: Every compute change should be implemented for the GPU if it would improve performance.
@@ -18,12 +43,15 @@ This file is the **first thing to read** when picking up work on GeoTime. It pro
 ```bash
 # Backend
 cd backend && dotnet build
-cd backend && dotnet test
+cd backend && dotnet test "GeoTime.Tests/GeoTime.Tests.csproj"
 
 # Frontend
 npm run build
-npx vitest run
-npx playwright test  # E2E
+npm run test
+npx playwright test --reporter=list  # E2E
+
+# Optional GPU diagnostic
+cd backend && dotnet run --project GeoTime.Diagnostic
 ```
 
 ### Plan documents
