@@ -334,4 +334,27 @@ public class PlateAdvectionTests
         Assert.NotEmpty(layers0);
         Assert.Equal(RockType.IGN_GABBRO, layers0[0].RockType);
     }
+
+    [Fact]
+    public void P1_1_AdvectionPhaseTimings_PopulatedAfterTick()
+    {
+        var gs = 16;
+        var state = MakeSmallState(gs);
+        var plates = MakeTwoPlates(rate0: 50.0, rate1: -50.0);
+        var bus = new EventBus();
+        var log = new EventLog();
+        var engine = new TectonicEngine(bus, log, 42, 0.1);
+        engine.Initialize(plates, [], new AtmosphericComposition { N2 = 0.78, O2 = 0.21, CO2 = 0.0004, H2O = 0.01 }, state);
+
+        engine.Tick(100, 0.5);
+
+        var timings = engine.LastAdvectionPhaseTimings;
+        Assert.True(timings.TotalMs >= 0);
+        Assert.True(timings.Phase2ScatterCollisionMs >= 0);
+        Assert.True(timings.TotalMs >= timings.Phase2ScatterCollisionMs);
+
+        var advectLog = log.GetAll().LastOrDefault(e => e.Type == "ADVECT_PHASE_STATS");
+        Assert.NotNull(advectLog);
+        Assert.Contains("scatter=", advectLog!.Description);
+    }
 }

@@ -5,6 +5,18 @@ import {
   createStateBufferLayout,
   GRID_SIZE,
 } from '../src/shared/types';
+import {
+  biomassColor,
+  cloudColor,
+  computeMapStats,
+  computeTopoExtents,
+  precipitationColor,
+  scaleTopoHeight,
+  soilOrderColor,
+  stretchToPhysicalRange,
+  temperatureColor,
+  topoColor,
+} from '../src/layer-color-mapping';
 import { EventBus } from '../src/kernel/event-bus';
 import { EventLog } from '../src/kernel/event-log';
 import { PlanetGenerator } from '../src/proc/planet-generator';
@@ -46,72 +58,6 @@ function generatePlanet(seed: number) {
 
 const CELL_COUNT = GRID_SIZE * GRID_SIZE;
 
-// ── Color mapping functions (mirrored from main.ts for testability) ────────
-
-function temperatureColor(t: number): [number, number, number] {
-  if (t <= -40) return [0, 0, 200];
-  if (t < 0) {
-    const f = (t + 40) / 40;
-    return [Math.round(f * 255), Math.round(f * 255), 200 + Math.round(f * 55)];
-  }
-  const f = Math.min(1, t / 45);
-  return [200 + Math.round(f * 55), Math.round((1 - f) * 200), Math.round((1 - f) * 200)];
-}
-
-function precipitationColor(p: number): [number, number, number] {
-  const f = Math.min(1, p / 2500);
-  return [
-    Math.round(200 - f * 180),
-    Math.round(160 + f * 60),
-    Math.round(60 + f * 180),
-  ];
-}
-
-function cloudColor(p: number): [number, number, number] {
-  const f = Math.min(1, p / 2500);
-  const v = Math.round(60 + f * 195);
-  return [v, v, v];
-}
-
-function biomassColor(b: number): [number, number, number] {
-  const f = Math.min(1, b / 12);
-  return [Math.round(10 + f * 20), Math.round(40 + f * 190), Math.round(10 + f * 20)];
-}
-
-function topoColor(h: number): [number, number, number] {
-  if (h < -5000) return [0, 20, 140];
-  if (h < -200) {
-    const f = (h + 5000) / 4800;
-    return [Math.round(f * 40), Math.round(f * 100 + 60), Math.round(120 + f * 100)];
-  }
-  if (h < 0)   return [100, 200, 240];
-  if (h < 500) return [50,  210,  70];
-  if (h < 1500) return [210, 190, 50];
-  if (h < 3000) return [190, 110, 35];
-  if (h < 5000) return [160, 110, 90];
-  return [255, 255, 255];
-}
-
-function soilOrderColor(order: number): [number, number, number] {
-  switch (order) {
-    case 0:  return [180, 180, 180]; // None
-    case 1:  return [160, 120, 60];  // Alfisols
-    case 2:  return [100, 80,  40];  // Andisols
-    case 3:  return [230, 200, 120]; // Aridisols
-    case 4:  return [200, 180, 140]; // Entisols
-    case 5:  return [220, 240, 255]; // Gelisols
-    case 6:  return [60,  100, 60];  // Histosols
-    case 7:  return [140, 170, 100]; // Inceptisols
-    case 8:  return [180, 140, 80];  // Mollisols
-    case 9:  return [80,  50,  20];  // Oxisols
-    case 10: return [100, 130, 160]; // Spodosols
-    case 11: return [120, 80,  40];  // Ultisols
-    case 12: return [160, 100, 140]; // Vertisols
-    default: return [180, 180, 180];
-  }
-}
-
-/** Convert a lat/lon point to a cell index. */
 function latLonToCell(lat: number, lon: number): number {
   const normLon = (lon + 180) / 360;
   const normLat = (90 - lat) / 180;
@@ -371,13 +317,14 @@ describe('Layer Verification — Random Point Topography', () => {
       const h = views.heightMap[cellIdx];
 
       // Apply the same scaling from fetchLayerRgba for topo
-      let scaled: number;
-      if (h < 0) {
-        const t = Math.max(0, Math.min(1, (h - (-6000)) / ((-100) - (-6000))));
-        scaled = t * (-200 - (-7000)) + (-7000);
-      } else {
-        scaled = Math.min(h, 4000);
-      }
+      const extents = computeTopoExtents(views.heightMap);
+      const scaled = scaleTopoHeight(
+        h,
+        extents.oceanMin,
+        extents.oceanMax,
+        extents.landMin,
+        extents.landMax,
+      );
       const [r, g, b] = topoColor(scaled);
 
       if (h < -200) {
@@ -548,5 +495,41 @@ describe('Layer Verification — All Layers Consistency', () => {
       expect(b).toBeGreaterThanOrEqual(0);
       expect(b).toBeLessThanOrEqual(255);
     }
+  });
+});
+
+describe('Layer Verification — Contrast Normalization', () => {
+  it('stretchToPhysicalRange expands a narrow cluster to the full palette span', () => {
+    const stretchedMin = stretchToPhysicalRange(10, 10, 20, -40, 45, 2);
+    const stretchedMax = stretchToPhysicalRange(20, 10, 20, -40, 45, 2);
+    expect(stretchedMin).toBe(-40);
+    expect(stretchedMax).toBe(45);
+  });
+
+  it('stretchToPhysicalRange keeps raw values when span is below the guard', () => {
+    expect(stretchToPhysicalRange(15, 15, 15.5, -40, 45, 2)).toBe(15);
+  });
+
+  it('computeMapStats reports variance for non-uniform arrays', () => {
+    const stats = computeMapStats([-10, 0, 10, 20]);
+    expect(stats.min).toBe(-10);
+    expect(stats.max).toBe(20);
+    expect(stats.stddev).toBeGreaterThan(0);
+  });
+
+  it('scaleTopoHeight stretches land heights when span exceeds guard', () => {
+    const scaledLow = scaleTopoHeight(1000, -4000, -3000, 1000, 2500);
+    const scaledHigh = scaleTopoHeight(2500, -4000, -3000, 1000, 2500);
+    expect(scaledLow).toBe(0);
+    expect(scaledHigh).toBe(4000);
+  });
+
+  it('produces distinct RGB values for stretched temperature samples', () => {
+    const stats = computeMapStats([5, 10, 15, 20]);
+    const colors = [5, 10, 15, 20].map((v) => {
+      const t = stretchToPhysicalRange(v, stats.min, stats.max, -40, 45, 2);
+      return temperatureColor(t).join(',');
+    });
+    expect(new Set(colors).size).toBeGreaterThan(1);
   });
 });

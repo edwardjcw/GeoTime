@@ -1642,3 +1642,32 @@ test.describe('UI Fixes — Rate slider, Time readout, Event layers, Advanced Vi
     await expect(page.locator('text=Computational Load')).toBeVisible();
   });
 });
+
+// ─── REG: Layer overlay spatial variation screenshots ─────────────────────────
+
+test.describe('REG: Layer overlay spatial variation', () => {
+  test('temperature, biomass, and topo layers render overlays after sim', async ({ page }) => {
+    test.setTimeout(120_000);
+
+    await page.goto('/');
+    await page.waitForSelector('canvas', { timeout: 15_000 });
+    await page.locator('button', { hasText: 'New Planet' }).click();
+    await page.waitForTimeout(3000);
+
+    const pauseBtn = page.locator('button', { hasText: /Pause|Resume/ });
+    await pauseBtn.click();
+    await page.waitForTimeout(60_000);
+
+    for (const layer of ['temperature', 'biomass', 'topo'] as const) {
+      const btn = page.locator(`button[data-layer="${layer}"]`);
+      await btn.click();
+      await page.waitForTimeout(1500);
+      await page.screenshot({
+        path: `e2e/screenshots/layer-${layer}-after-sim.png`,
+        fullPage: false,
+      });
+      await btn.click();
+      await page.waitForTimeout(300);
+    }
+  });
+});

@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -107,6 +108,45 @@ public class BugFixTests(WebApplicationFactory<GeoTime.Api.Program> factory)
         // Both should succeed (even if second one was a no-op due to lock)
         foreach (var r in results)
             Assert.True(r.IsSuccessStatusCode, $"Concurrent advance failed: {r.StatusCode}");
+    }
+
+    [Fact]
+    public async Task AdvanceSimulation_ReturnsSkippedFalseOnExecutedTick()
+    {
+        await EnsurePlanetGenerated();
+        var response = await _client.PostAsJsonAsync("/api/simulation/advance", new { deltaMa = 0.1 });
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.TryGetProperty("skipped", out var skipped), "Response should include 'skipped'");
+        Assert.False(skipped.GetBoolean());
+    }
+
+    [Fact]
+    public async Task AdvanceSimulation_ReturnsSkippedTrueWhenLockHeld()
+    {
+        await EnsurePlanetGenerated();
+        var tasks = Enumerable.Range(0, 5)
+            .Select(_ => _client.PostAsJsonAsync("/api/simulation/advance", new { deltaMa = 0.5 }));
+        var responses = await Task.WhenAll(tasks);
+        var jsons = await Task.WhenAll(responses.Select(r => r.Content.ReadFromJsonAsync<JsonElement>()));
+        Assert.Contains(jsons, j => j.TryGetProperty("skipped", out var s) && s.GetBoolean());
+    }
+
+    [Fact]
+    public async Task SimulationOrchestrator_ConcurrentAdvance_SetsLastAdvanceSkipped()
+    {
+        var sim = new SimulationOrchestrator();
+        sim.GeneratePlanet(99);
+
+        var slowAdvance = sim.AdvanceSimulationAsync(0.1, async _ =>
+        {
+            await Task.Delay(200);
+        });
+        await Task.Delay(20);
+        sim.AdvanceSimulation(0.1);
+        Assert.True(sim.LastAdvanceSkipped);
+        await slowAdvance;
+        sim.Dispose();
     }
 
     // ── Timing Tracks All Engines ─────────────────────────────────────────────

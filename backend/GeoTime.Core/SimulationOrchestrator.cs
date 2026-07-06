@@ -90,8 +90,8 @@ public sealed class SimulationOrchestrator : IDisposable
     private uint _currentSeed;
     private readonly int _gridSize;
 
-    /// <summary>S6: Run feature detection only every N ticks to reduce overhead.</summary>
-    private const int FeatureDetectionInterval = 5;
+    /// <summary>S6/P1-2: Run feature detection only every N ticks to reduce overhead (~500 ms/run at 512²).</summary>
+    private const int FeatureDetectionInterval = 15;
     /// <summary>S6: Counter tracking ticks since last feature detection run.</summary>
     private int _ticksSinceLastDetection;
 

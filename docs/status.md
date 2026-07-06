@@ -446,6 +446,26 @@ cd backend && dotnet run --project GeoTime.Diagnostic
 
 ---
 
+## Performance + Layer Overlay Coordination (2026-07-05)
+
+**Integration branch:** `feature/audit-remediation-performance-logging` (PR #46)  
+**Plan:** `docs/performance-review-2026-07-05.md`
+
+| ID | Task | Owner | Status | Blocker |
+|----|------|-------|--------|---------|
+| P0-3 | InspectCell race fix | — | ✅ done (PR #46) | — |
+| P0-1 | `skipped` in advance + client skip bundle | Leaf-P0-1 | ✅ done | — |
+| P0-2 | Adaptive poll interval | Leaf-P0-2 | ✅ done | — |
+| P1-3 | Throttle `refreshInspectCell` | Leaf-P1-3 | ✅ done | 5 s interval + panel-visible guard; immediate on pin; skipped advances unchanged |
+| P1-2 | FeatureDetectionInterval 5→15 | Leaf-P1-2 | ✅ done | S6 3/3 (Repair-S6 + P1-1 NRE fix) |
+| P1-1 | Advection Phase 2 instrumentation | Leaf-P1-1 | ✅ done | NRE fixed (`LastCollisionResolveTimings` init + null-guard); `dotnet build` + S6 filter 3/3 pass |
+| REG | Layer flat-color regression | Leaf-Layer | ✅ done | Fixed client normalization: per-run stretch with min-span guards, cached bundle for overlay fetches, map stats logging |
+| BASE | Pre-work baseline proof | Leaf-Baseline | ⚠️ partial | 7/22 focused backend tests fail: `SessionPerformanceLogger` `FileMode.CreateNew` collision when parallel `WebApplicationFactory` fixtures share log path (`geotime-session-*-pid*.jsonl`) |
+
+| PROOF | P0 JSONL session (5 min) | Leaf-Proof-P0 | ✅ pass | Isolated run `geotime-session-20260705-190735-pid24684.jsonl` (port 5001, seed 77005, layers off, P0-1+P0-2 client): 107 advances / 107 executed / **0% skipped** (baseline 90.9%); **107 bundle fetches = 107 executed** (ratio 1.0, 0.31 GB vs baseline ~11× bundle waste on skips). Contaminated `:5000` run (`190203`) had concurrent browser client — 95.4% skip, 344 bundles for 36 executed; excluded. |
+
+---
+
 ## FAQ
 
 **Q: What is "Tris" in the HUD?**
