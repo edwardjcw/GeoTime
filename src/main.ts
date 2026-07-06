@@ -10,6 +10,21 @@ import { LabelRenderer } from './render/label-renderer';
 import { renderCrossSection, exportCrossSectionPNG } from './render/cross-section-renderer';
 import { AppShell } from './ui/app-shell';
 import * as api from './api/backend-client';
+import {
+  biomassColor,
+  biomatterColor,
+  cloudColor,
+  computeMapStats,
+  computeTopoExtents,
+  organicCarbonColor,
+  precipitationColor,
+  scaleTopoHeight,
+  soilOrderColor,
+  stretchToPhysicalRange,
+  temperatureColor,
+  topoColor,
+  type MapStats,
+} from './layer-color-mapping';
 import type { CrossSectionProfile as SharedCrossSectionProfile, LatLon } from './shared/types';
 
 // ── Bootstrap ───────────────────────────────────────────────────────────────
@@ -59,6 +74,12 @@ async function doGeneratePlanet(seed: number): Promise<void> {
 
     const heightMap = new Float32Array(heightData);
     const plateMap = new Uint16Array(plateData);
+
+    lastStateBundle = {
+      heightMap,
+      temperatureMap: new Float32Array(tempData),
+      precipitationMap: new Float32Array(precipData),
+    };
 
     renderer.updateHeightMap(heightMap, GRID_SIZE);
     renderer.updatePlateMap(plateMap, GRID_SIZE);
@@ -147,6 +168,12 @@ async function doReconnectPlanet(seed: number, timeMa: number): Promise<void> {
 
     const heightMap = new Float32Array(heightData);
     const plateMap = new Uint16Array(plateData);
+
+    lastStateBundle = {
+      heightMap,
+      temperatureMap: new Float32Array(tempData),
+      precipitationMap: new Float32Array(precipData),
+    };
 
     renderer.updateHeightMap(heightMap, GRID_SIZE);
     renderer.updatePlateMap(plateMap, GRID_SIZE);
@@ -297,95 +324,36 @@ shell.onCrossSectionZoomReset(() => {
 // Track which non-plate data overlay layers are currently active
 const activeDataLayers = new Set<string>();
 
-/** Temperature (°C) → RGB: blue (cold) through white (0°C) to red (hot). */
-function temperatureColor(t: number): [number, number, number] {
-  if (t <= -40) return [0, 0, 200];
-  if (t < 0) {
-    const f = (t + 40) / 40;
-    return [Math.round(f * 255), Math.round(f * 255), 200 + Math.round(f * 55)];
+/** Latest height/temperature/precipitation bundle from the most recent sim advance. */
+let lastStateBundle: api.StateBundle | null = null;
+
+function logLayerMapStats(layer: string, stats: MapStats): void {
+  console.debug(
+    `[layer:${layer}] min=${stats.min.toFixed(3)} max=${stats.max.toFixed(3)} ` +
+    `mean=${stats.mean.toFixed(3)} stddev=${stats.stddev.toFixed(3)}`,
+  );
+}
+
+async function fetchMapFloat32(
+  layer: string,
+  cached: Float32Array | undefined,
+  fetchBinary: () => Promise<ArrayBuffer>,
+  fetchJson: () => Promise<number[]>,
+): Promise<Float32Array> {
+  if (cached) {
+    logLayerMapStats(layer, computeMapStats(cached));
+    return cached;
   }
-  const f = Math.min(1, t / 45);
-  return [200 + Math.round(f * 55), Math.round((1 - f) * 200), Math.round((1 - f) * 200)];
-}
-
-/** Precipitation (mm/yr) → RGB: tan (dry) to deep blue-green (wet). */
-function precipitationColor(p: number): [number, number, number] {
-  const f = Math.min(1, p / 2500);
-  return [
-    Math.round(200 - f * 180),
-    Math.round(160 + f * 60),
-    Math.round(60 + f * 180),
-  ];
-}
-
-/** Cloud proxy — precipitation scaled to white/grey cloud appearance. */
-function cloudColor(p: number): [number, number, number] {
-  const f = Math.min(1, p / 2500);
-  const v = Math.round(60 + f * 195);
-  return [v, v, v];
-}
-
-/** Biomass (kg/m²) → RGB: nearly black (barren) to vivid green (lush). */
-function biomassColor(b: number): [number, number, number] {
-  const f = Math.min(1, b / 12);
-  return [Math.round(10 + f * 20), Math.round(40 + f * 190), Math.round(10 + f * 20)];
-}
-
-/** Biomatter density (kg C/m²) → RGB: sparse dark violet to dense blue-magenta. */
-function biomatterColor(density: number): [number, number, number] {
-  const f = Math.min(1, density / 3);
-  return [
-    Math.round(28 + f * 92),
-    Math.round(18 + f * 102),
-    Math.round(80 + f * 150),
-  ];
-}
-
-/** Organic carbon (kg C/m²) → RGB: lean dark soil to carbon-rich amber-brown. */
-function organicCarbonColor(carbon: number): [number, number, number] {
-  const f = Math.min(1, carbon / 5);
-  return [
-    Math.round(45 + f * 135),
-    Math.round(30 + f * 95),
-    Math.round(12 + f * 38),
-  ];
-}
-
-/** Elevation (m) → RGB: vivid topographic bands (ocean → peaks). */
-function topoColor(h: number): [number, number, number] {
-  if (h < -5000) return [0, 20, 140];
-  if (h < -200) {
-    const f = (h + 5000) / 4800;
-    return [Math.round(f * 40), Math.round(f * 100 + 60), Math.round(120 + f * 100)];
-  }
-  if (h < 0)   return [100, 200, 240];
-  if (h < 500) return [50,  210,  70];
-  if (h < 1500) return [210, 190, 50];
-  if (h < 3000) return [190, 110, 35];
-  if (h < 5000) return [160, 110, 90];
-  return [255, 255, 255];
-}
-
-/**
- * USDA soil order (0-12) → RGB colour for the soil layer overlay.
- * Must match the SoilOrder enum in the backend (Enums.cs).
- */
-function soilOrderColor(order: number): [number, number, number] {
-  switch (order) {
-    case 0:  return [180, 180, 180]; // None (grey)
-    case 1:  return [160, 120, 60];  // Alfisols  – brown
-    case 2:  return [100, 80,  40];  // Andisols  – dark brown (volcanic)
-    case 3:  return [230, 200, 120]; // Aridisols – sandy yellow
-    case 4:  return [200, 180, 140]; // Entisols  – light tan
-    case 5:  return [220, 240, 255]; // Gelisols  – icy pale blue
-    case 6:  return [60,  100, 60];  // Histosols – organic dark green
-    case 7:  return [140, 170, 100]; // Inceptisols – muted olive
-    case 8:  return [180, 140, 80];  // Mollisols – warm tan (grassland)
-    case 9:  return [80,  50,  20];  // Oxisols   – deep red-brown (tropical)
-    case 10: return [100, 130, 160]; // Spodosols – grey-blue (boreal)
-    case 11: return [120, 80,  40];  // Ultisols  – rust (humid sub-tropical)
-    case 12: return [160, 100, 140]; // Vertisols – mauve (clay-rich)
-    default: return [180, 180, 180];
+  try {
+    const buf = await fetchBinary();
+    const arr = new Float32Array(buf, 0, GRID_SIZE * GRID_SIZE);
+    logLayerMapStats(layer, computeMapStats(arr));
+    return arr;
+  } catch {
+    const json = await fetchJson();
+    const arr = Float32Array.from(json);
+    logLayerMapStats(layer, computeMapStats(arr));
+    return arr;
   }
 }
 
@@ -624,100 +592,138 @@ async function fetchLayerRgba(layer: string): Promise<Uint8Array | null> {
   const rgba = new Uint8Array(cellCount * 4);
 
   if (layer === 'temperature') {
-    const data = await api.getTemperatureMap();
+    const data = await fetchMapFloat32(
+      'temperature',
+      lastStateBundle?.temperatureMap,
+      api.getTemperatureMapBinary,
+      api.getTemperatureMap,
+    );
+    const stats = computeMapStats(data);
     for (let i = 0; i < cellCount; i++) {
-      const [r, g, b] = temperatureColor(data[i]);
+      const t = stretchToPhysicalRange(data[i], stats.min, stats.max, -40, 45, 2);
+      const [r, g, b] = temperatureColor(t);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 180;
     }
   } else if (layer === 'precipitation') {
-    const data = await api.getPrecipitationMap();
+    const data = await fetchMapFloat32(
+      'precipitation',
+      lastStateBundle?.precipitationMap,
+      api.getPrecipitationMapBinary,
+      api.getPrecipitationMap,
+    );
+    const stats = computeMapStats(data);
     for (let i = 0; i < cellCount; i++) {
-      const [r, g, b] = precipitationColor(data[i]);
+      const p = stretchToPhysicalRange(data[i], stats.min, stats.max, 0, 2500, 50);
+      const [r, g, b] = precipitationColor(p);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 180;
     }
   } else if (layer === 'clouds') {
-    const data = await api.getPrecipitationMap();
+    const data = await fetchMapFloat32(
+      'clouds',
+      lastStateBundle?.precipitationMap,
+      api.getPrecipitationMapBinary,
+      api.getPrecipitationMap,
+    );
+    const stats = computeMapStats(data);
     for (let i = 0; i < cellCount; i++) {
-      const [r, g, b] = cloudColor(data[i]);
+      const p = stretchToPhysicalRange(data[i], stats.min, stats.max, 0, 2500, 50);
+      const [r, g, b] = cloudColor(p);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 160;
     }
   } else if (layer === 'biomass') {
-    const data = await api.getBiomassMap();
+    const data = await fetchMapFloat32(
+      'biomass',
+      undefined,
+      api.getBiomassMapBinary,
+      api.getBiomassMap,
+    );
+    const stats = computeMapStats(data);
     for (let i = 0; i < cellCount; i++) {
-      const [r, g, b] = biomassColor(data[i]);
+      const biomass = stretchToPhysicalRange(data[i], stats.min, stats.max, 0, 12, 0.25);
+      const [r, g, b] = biomassColor(biomass);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 180;
     }
   } else if (layer === 'biomatter') {
-    const data = await api.getBiomatterMap();
+    const data = await fetchMapFloat32(
+      'biomatter',
+      undefined,
+      api.getBiomatterMapBinary,
+      api.getBiomatterMap,
+    );
+    const stats = computeMapStats(data);
     for (let i = 0; i < cellCount; i++) {
-      const [r, g, b] = biomatterColor(data[i]);
+      const d = stretchToPhysicalRange(data[i], stats.min, stats.max, 0, 3, 0.05);
+      const [r, g, b] = biomatterColor(d);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 185;
     }
   } else if (layer === 'organic-carbon') {
-    const data = await api.getOrganicCarbonMap();
+    const data = await fetchMapFloat32(
+      'organic-carbon',
+      undefined,
+      api.getOrganicCarbonMapBinary,
+      api.getOrganicCarbonMap,
+    );
+    const stats = computeMapStats(data);
     for (let i = 0; i < cellCount; i++) {
-      const [r, g, b] = organicCarbonColor(data[i]);
+      const c = stretchToPhysicalRange(data[i], stats.min, stats.max, 0, 5, 0.1);
+      const [r, g, b] = organicCarbonColor(c);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 185;
     }
   } else if (layer === 'topo') {
-    const data = await api.getHeightMap();
-    // Heights are in real metres. Isostatic equilibrium sets ocean cells near
-    // −3200 m and continental land near +1863 m (±500 m noise).  Dynamic
-    // per-run min/max normalisation compresses all land into 1–2 colour bands
-    // (and can make everything look white when the range is small).
-    // Instead use fixed physical reference points so the colour palette is
-    // always physically meaningful regardless of the current height distribution:
-    //   ocean: actual height mapped against fixed ocean reference [−6000, 0]
-    //   land:  actual height mapped against fixed land reference [0, 4000]
-    //           0 m → lowland green, 1500 m → highland yellow,
-    //           3000 m → mountains, > 4000 m → upper peaks (never all-white).
-    const OCEAN_ELEVATION_MIN = -6000, OCEAN_ELEVATION_MAX = -100;
-    const LAND_ELEVATION_MAX  = 4000;
+    const data = await fetchMapFloat32(
+      'topo',
+      lastStateBundle?.heightMap,
+      api.getHeightMapBinary,
+      api.getHeightMap,
+    );
+    const extents = computeTopoExtents(data);
     for (let i = 0; i < cellCount; i++) {
-      const h = data[i];
-      let scaled: number;
-      if (h < 0) {
-        // Clamp to ocean reference range then map to topoColor ocean palette [−7000, −200].
-        const t = Math.max(0, Math.min(1, (h - OCEAN_ELEVATION_MIN) / (OCEAN_ELEVATION_MAX - OCEAN_ELEVATION_MIN)));
-        scaled = t * (-200 - (-7000)) + (-7000); // maps to [−7000, −200]
-      } else {
-        // Clamp to land reference range then map to topoColor land palette [0, 4000].
-        scaled = Math.min(h, LAND_ELEVATION_MAX);
-      }
+      const scaled = scaleTopoHeight(
+        data[i],
+        extents.oceanMin,
+        extents.oceanMax,
+        extents.landMin,
+        extents.landMax,
+      );
       const [r, g, b] = topoColor(scaled);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 200;
     }
   } else if (layer === 'biome') {
-    // Biome (Whittaker) overlay: use temperature × precipitation classification.
-    // The texture update is handled internally via updateClimateMap; return null.
-    const [tempData, precipData] = await Promise.all([
-      api.getTemperatureMap(),
-      api.getPrecipitationMap(),
-    ]);
-    renderer.updateClimateMap(
-      new Float32Array(tempData),
-      new Float32Array(precipData),
-      GRID_SIZE,
+    const tempData = await fetchMapFloat32(
+      'biome.temperature',
+      lastStateBundle?.temperatureMap,
+      api.getTemperatureMapBinary,
+      api.getTemperatureMap,
     );
+    const precipData = await fetchMapFloat32(
+      'biome.precipitation',
+      lastStateBundle?.precipitationMap,
+      api.getPrecipitationMapBinary,
+      api.getPrecipitationMap,
+    );
+    renderer.updateClimateMap(tempData, precipData, GRID_SIZE);
     return null;
   } else if (layer === 'soil') {
-    // Soil orders (USDA): fetch soil type map from backend.
     const soilData = await api.getSoilMap();
+    logLayerMapStats('soil', computeMapStats(soilData));
     for (let i = 0; i < cellCount; i++) {
       const [r, g, b] = soilOrderColor(soilData[i]);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 200;
     }
   } else {
-    // Unrecognised layer: fall back to biome colours.
-    const [tempData, precipData] = await Promise.all([
-      api.getTemperatureMap(),
-      api.getPrecipitationMap(),
-    ]);
-    renderer.updateClimateMap(
-      new Float32Array(tempData),
-      new Float32Array(precipData),
-      GRID_SIZE,
+    const tempData = await fetchMapFloat32(
+      'fallback.temperature',
+      lastStateBundle?.temperatureMap,
+      api.getTemperatureMapBinary,
+      api.getTemperatureMap,
     );
+    const precipData = await fetchMapFloat32(
+      'fallback.precipitation',
+      lastStateBundle?.precipitationMap,
+      api.getPrecipitationMapBinary,
+      api.getPrecipitationMap,
+    );
+    renderer.updateClimateMap(tempData, precipData, GRID_SIZE);
     return null;
   }
   return rgba;
@@ -876,7 +882,19 @@ shell.onInspectClick((x: number, y: number) => {
   selectedCellLat   = lat;
   selectedCellLon   = lon;
 
-  refreshInspectCell();
+  inspectPanelVisible = true;
+  refreshInspectCell({ force: true });
+});
+
+// Stop auto-refresh when the user closes the inspect panel (✕ in header).
+appEl.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest('button');
+  if (!btn || btn.textContent !== '✕') return;
+  const header = btn.parentElement;
+  const title = header?.querySelector('span');
+  if (title?.textContent === '📍 Cell Info') {
+    inspectPanelVisible = false;
+  }
 });
 
 // ── Wire UI callbacks ───────────────────────────────────────────────────────
@@ -895,12 +913,17 @@ shell.onNewPlanet(() => {
 });
 
 shell.onPauseToggle(() => {
-  const wasPlaying = paused;
+  const wasPaused = paused;
   paused = !paused;
   shell.setPaused(paused);
 
+  // Resume: kick the completion-driven sim loop (paused ticks do not self-reschedule).
+  if (wasPaused && !paused && !pendingSimRequest) {
+    scheduleSimTick(0);
+  }
+
   // Clicking play while weather layer is active → deactivate weather layer
-  if (wasPlaying && !paused && activeDataLayers.has('weather')) {
+  if (wasPaused && !paused && activeDataLayers.has('weather')) {
     // Deactivate the weather layer via the layer toggle callback so it handles
     // hiding the selector, resetting overlay, etc.
     shell.deactivateLayer('weather');
@@ -1024,9 +1047,35 @@ let lastTime = performance.now();
 let frameCount = 0;
 let fpsAccum = 0;
 
-/** Accumulator for backend simulation calls. */
-let simAccum = 0;
-const SIM_UPDATE_INTERVAL = 200; // ms between backend simulation calls
+/** P0-2: Minimum delay between simulation advance attempts (ms). */
+const SIM_MIN_POLL_MS = 200;
+/** Safety margin over last measured backend tick duration. */
+const SIM_POLL_FACTOR = 1.05;
+/** Default poll delay before first tick stats are known. */
+const SIM_DEFAULT_POLL_MS = 500;
+
+/** Compute the next sim poll delay from the last backend tick duration. */
+function computeSimPollDelayMs(lastTotalMs: number | null | undefined): number {
+  if (lastTotalMs == null || lastTotalMs <= 0 || !Number.isFinite(lastTotalMs)) {
+    return SIM_DEFAULT_POLL_MS;
+  }
+  return Math.max(SIM_MIN_POLL_MS, Math.round(lastTotalMs * SIM_POLL_FACTOR));
+}
+
+/** Active completion-driven sim poll timer (independent of rAF). */
+let simPollTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleSimTick(delayMs?: number): void {
+  if (simPollTimer !== null) {
+    clearTimeout(simPollTimer);
+    simPollTimer = null;
+  }
+  const delay = delayMs ?? computeSimPollDelayMs(lastTickStats?.totalMs);
+  simPollTimer = setTimeout(() => {
+    simPollTimer = null;
+    simTick();
+  }, delay);
+}
 
 /** Flag to prevent overlapping backend requests. */
 let pendingSimRequest = false;
@@ -1040,6 +1089,32 @@ let selectedCellIndex = -1;
 let selectedCellLat   = 0;
 let selectedCellLon   = 0;
 
+/** P1-3: Minimum ms between auto-refresh inspect API calls during simulation. */
+const INSPECT_REFRESH_INTERVAL_MS = 5000;
+
+/** Whether the inspect panel is currently shown (false after user closes it). */
+let inspectPanelVisible = false;
+/** Wall-clock time of the last inspect API dispatch. */
+let lastInspectRefreshMs = 0;
+/** In-flight inspect request guard. */
+let inspectRefreshPending = false;
+
+/** P1-3: Whether a throttled auto-refresh should run after a non-skipped advance. */
+function shouldAutoRefreshInspectCell(
+  panelVisible: boolean,
+  cellIndex: number,
+  nowMs: number,
+  lastRefreshMs: number,
+  pending: boolean,
+  intervalMs: number,
+): boolean {
+  if (cellIndex < 0) return false;
+  if (!panelVisible) return false;
+  if (pending) return false;
+  if (nowMs - lastRefreshMs < intervalMs) return false;
+  return true;
+}
+
 /** Last tick timing stats for the log panel. */
 let lastTickStats: api.TickStats | null = null;
 
@@ -1049,13 +1124,33 @@ let totalTickCount = 0;
 let lastMeasuredFps = 0;
 
 /** Re-fetch and display the pinned cell's inspection data. */
-function refreshInspectCell(): void {
+function refreshInspectCell(options?: { force?: boolean }): void {
   if (selectedCellIndex < 0) return;
+
+  const force = options?.force ?? false;
+  if (
+    !force
+    && !shouldAutoRefreshInspectCell(
+      inspectPanelVisible,
+      selectedCellIndex,
+      performance.now(),
+      lastInspectRefreshMs,
+      inspectRefreshPending,
+      INSPECT_REFRESH_INTERVAL_MS,
+    )
+  ) {
+    return;
+  }
+
   const lat = selectedCellLat;
   const lon = selectedCellLon;
   const cellIndex = selectedCellIndex;
+  inspectRefreshPending = true;
+  lastInspectRefreshMs = performance.now();
+
   api.inspectCell(cellIndex)
     .then((info) => {
+      inspectRefreshPending = false;
       shell.showInspectPanel({
         lat,
         lon,
@@ -1075,6 +1170,7 @@ function refreshInspectCell(): void {
       });
     })
     .catch((err) => {
+      inspectRefreshPending = false;
       console.error('Cell inspect failed:', err);
     });
 }
@@ -1316,26 +1412,31 @@ const simSocket = api.createSimulationSocket({
 // Connect with a short retry delay — the backend may not be ready immediately.
 setTimeout(() => simSocket.connect(), 500);
 
-// ── Simulation tick loop (runs via setInterval, independent of rendering) ───
-// This ensures the simulation advances even when the browser tab is hidden,
-// since requestAnimationFrame is paused by browsers for hidden tabs.
+// ── Simulation tick loop (completion-driven setTimeout, independent of rAF) ─
+// Schedules the next advance after each request completes so poll rate tracks
+// backend tick duration (lastTickStats.totalMs). setTimeout keeps sim running
+// when the tab is hidden (rAF is paused by browsers for hidden tabs).
 
-/** Wall-clock timestamp of the most recently dispatched simulation tick. */
-let lastSimTickTimestampMs = performance.now();
+/** Wall-clock timestamp when the previous advance was dispatched. */
+let lastSimDispatchMs = performance.now();
 
 function simTick(): void {
-  if (paused || pendingSimRequest) return;
+  if (pendingSimRequest) return;
+
+  if (paused) {
+    scheduleSimTick(SIM_MIN_POLL_MS);
+    return;
+  }
 
   const nowMs = performance.now();
-  const dtMs = nowMs - lastSimTickTimestampMs;
-  lastSimTickTimestampMs = nowMs;
+  const dtMs = nowMs - lastSimDispatchMs;
+  lastSimDispatchMs = nowMs;
 
-  simAccum += dtMs;
-  if (simAccum < SIM_UPDATE_INTERVAL) return;
-
-  const deltaMa = (simAccum / 1000) * simRate;
-  simAccum = 0;
-  if (deltaMa <= 0) return;
+  const deltaMa = (dtMs / 1000) * simRate;
+  if (deltaMa <= 0) {
+    scheduleSimTick(SIM_MIN_POLL_MS);
+    return;
+  }
 
   pendingSimRequest = true;
   simRequestStartMs = performance.now();
@@ -1350,6 +1451,21 @@ function simTick(): void {
   api.advanceSimulation(deltaMa, simRequestController.signal)
     .then(async (result) => {
       const advanceWallMs = Math.round(performance.now() - simRequestStartMs);
+
+      // P0-1: No new tick from this request — skip bundle + perf telemetry, but still
+      // sync time/tick from the response (concurrent tick may have advanced state).
+      if (result.skipped) {
+        simTimeMa = result.timeMa;
+        shell.setSimTime(simTimeMa);
+        shell.setTimelineCursor(4500 + simTimeMa);
+        if (result.tickCount !== undefined) {
+          totalTickCount = result.tickCount;
+        }
+        shell.setProgressText('');
+        resetAgentStatuses();
+        return;
+      }
+
       simTimeMa = result.timeMa;
       shell.setSimTime(simTimeMa);
       shell.setTimelineCursor(4500 + simTimeMa);
@@ -1379,10 +1495,11 @@ function simTick(): void {
       const bundleStart = performance.now();
       const bundle = await api.getStateBundle(GRID_SIZE * GRID_SIZE);
       const bundleWallMs = Math.round(performance.now() - bundleStart);
+      lastStateBundle = bundle;
       const heightMap = bundle.heightMap;
       renderer.updateHeightMap(heightMap, GRID_SIZE);
 
-      // Auto-refresh the cell info panel if a cell is pinned.
+      // P1-3: Throttled auto-refresh — panel visible + pinned cell + interval elapsed.
       refreshInspectCell();
 
       // Keep the biome base texture in sync for the default view.
@@ -1436,11 +1553,14 @@ function simTick(): void {
     .finally(() => {
       pendingSimRequest = false;
       simRequestController = null;
+      if (!paused) {
+        scheduleSimTick();
+      }
     });
 }
 
-// Run simulation tick every SIM_UPDATE_INTERVAL ms, regardless of tab visibility.
-setInterval(simTick, SIM_UPDATE_INTERVAL);
+// Start the completion-driven sim loop (independent of tab visibility).
+scheduleSimTick(SIM_DEFAULT_POLL_MS);
 
 function loop(now: number): void {
   requestAnimationFrame(loop);

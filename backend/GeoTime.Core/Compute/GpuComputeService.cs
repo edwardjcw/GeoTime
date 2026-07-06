@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ILGPU;
 using ILGPU.Algorithms;
 using ILGPU.Runtime;
@@ -6,6 +7,16 @@ using ILGPU.Runtime.Cuda;
 using ILGPU.Runtime.OpenCL;
 
 namespace GeoTime.Core.Compute;
+
+/// <summary>Millisecond breakdown from the most recent GPU collision resolution call.</summary>
+public sealed record CollisionResolveTimings
+{
+    public long UploadMs { get; init; }
+    public long ScatterKernelMs { get; init; }
+    public long ApplyKernelMs { get; init; }
+    public long DownloadMs { get; init; }
+    public long TotalMs { get; init; }
+}
 
 /// <summary>
 /// Manages GPU/CPU compute backend selection and kernel dispatch.
@@ -138,6 +149,12 @@ public sealed class GpuComputeService : IDisposable
 
     /// <summary>Human-readable compute device description for the UI.</summary>
     public ComputeInfo Info { get; }
+
+    /// <summary>Timing breakdown from the most recent <see cref="ResolveCollisionsGpu"/> call.</summary>
+    public CollisionResolveTimings LastCollisionResolveTimings { get; private set; } = new();
+
+    /// <summary>Wall time of the most recent <see cref="ComputeAdvectDestinations"/> call.</summary>
+    public long LastAdvectDestMapMs { get; private set; }
 
     /// <summary>True when an actual GPU accelerator (not CPU emulation) is active.</summary>
     public bool IsGpuActive => Info.Mode == ComputeMode.GPU;
@@ -525,6 +542,7 @@ public sealed class GpuComputeService : IDisposable
         double[] cosTheta, double[] sinTheta,
         int gridSize)
     {
+        var totalSw = Stopwatch.StartNew();
         var cc = plateMap.Length;
         var numPlates = kx.Length;
         var destMap = new int[cc];
@@ -563,6 +581,7 @@ public sealed class GpuComputeService : IDisposable
                 ex);
         }
 
+        LastAdvectDestMapMs = totalSw.ElapsedMilliseconds;
         return destMap;
     }
 
@@ -762,6 +781,8 @@ public sealed class GpuComputeService : IDisposable
         float[] srcRockAge, ushort[] srcPlateMap,
         List<Models.PlateInfo> plates, float deltaMa)
     {
+        var totalSw = Stopwatch.StartNew();
+        var phaseSw = new Stopwatch();
         var cc = destMap.Length;
         var numPlates = plates.Count;
 
@@ -799,9 +820,11 @@ public sealed class GpuComputeService : IDisposable
         using var nraBuf     = _accelerator.Allocate1D<float>(cc);
         using var npmBuf     = _accelerator.Allocate1D<ushort>(cc);
 
+        long uploadMs = 0, scatterMs = 0, applyMs = 0, downloadMs = 0;
         try
         {
             // Upload pass 1 inputs
+            phaseSw.Restart();
             destBuf.CopyFromCPU(destMap);
             shBuf.CopyFromCPU(srcHeight);
             spmBuf.CopyFromCPU(srcPlateMap);
@@ -809,33 +832,42 @@ public sealed class GpuComputeService : IDisposable
             hcBuf.CopyFromCPU(hitCount);
             wpBuf.CopyFromCPU(winnerPriority);
             wsBuf.CopyFromCPU(winnerSource);
+            uploadMs = phaseSw.ElapsedMilliseconds;
 
             // Pass 1: scatter
+            phaseSw.Restart();
             _collisionScatterKernel(cc,
                 destBuf.View, shBuf.View, spmBuf.View, ioBuf.View,
                 hcBuf.View, wpBuf.View, wsBuf.View);
             _accelerator.Synchronize();
+            scatterMs = phaseSw.ElapsedMilliseconds;
 
             // Upload remaining source arrays for pass 2
+            phaseSw.Restart();
             scBuf.CopyFromCPU(srcCrust);
             srtBuf.CopyFromCPU(srcRockType);
             sraBuf.CopyFromCPU(srcRockAge);
+            uploadMs += phaseSw.ElapsedMilliseconds;
 
             // Pass 2: apply
+            phaseSw.Restart();
             _collisionApplyKernel(cc,
                 hcBuf.View, wsBuf.View,
                 shBuf.View, scBuf.View, srtBuf.View, sraBuf.View, spmBuf.View,
                 nhBuf.View, ncBuf.View, nrtBuf.View, nraBuf.View, npmBuf.View,
                 ioBuf.View, deltaMa);
             _accelerator.Synchronize();
+            applyMs = phaseSw.ElapsedMilliseconds;
 
             // Copy results back
+            phaseSw.Restart();
             hcBuf.CopyToCPU(hitCount);
             nhBuf.CopyToCPU(newHeight);
             ncBuf.CopyToCPU(newCrust);
             nrtBuf.CopyToCPU(newRockType);
             nraBuf.CopyToCPU(newRockAge);
             npmBuf.CopyToCPU(newPlateMap);
+            downloadMs = phaseSw.ElapsedMilliseconds;
         }
         catch (Exception ex)
         {
@@ -845,6 +877,15 @@ public sealed class GpuComputeService : IDisposable
                 "This may indicate a GPU driver issue or incompatible accelerator state.",
                 ex);
         }
+
+        LastCollisionResolveTimings = new CollisionResolveTimings
+        {
+            UploadMs = uploadMs,
+            ScatterKernelMs = scatterMs,
+            ApplyKernelMs = applyMs,
+            DownloadMs = downloadMs,
+            TotalMs = totalSw.ElapsedMilliseconds,
+        };
 
         return (newHeight, newCrust, newRockType, newRockAge, newPlateMap, hitCount);
     }

@@ -501,7 +501,7 @@ public class SplitPhaseTests
     public void S6_FeatureDetection_SkipsIntermediateTicks()
     {
         // Feature detection should not run on every tick.
-        // With FeatureDetectionInterval=5, detection runs on ticks 1, 6, 11, ...
+        // With FeatureDetectionInterval=15, detection runs on ticks 1, 16, 31, ...
         var sim = new SimulationOrchestrator(16);
         sim.GeneratePlanet(42);
 
@@ -509,16 +509,16 @@ public class SplitPhaseTests
         sim.AdvanceSimulation(0.5);
         var tickAfterFirst = sim.State.FeatureRegistry.LastUpdatedTick;
 
-        // Advance 4 more ticks (ticks 2-5): detection should NOT run
-        for (var i = 0; i < 4; i++)
+        // Advance 14 more ticks (ticks 2-15): detection should NOT run
+        for (var i = 0; i < 14; i++)
             sim.AdvanceSimulation(0.5);
-        var tickAfterFive = sim.State.FeatureRegistry.LastUpdatedTick;
-        Assert.Equal(tickAfterFirst, tickAfterFive);
+        var tickAfterFifteen = sim.State.FeatureRegistry.LastUpdatedTick;
+        Assert.Equal(tickAfterFirst, tickAfterFifteen);
 
-        // 6th tick: detection runs again (interval = 5 ticks since last detection)
+        // 16th tick: detection runs again (interval = 15 ticks since last detection)
         sim.AdvanceSimulation(0.5);
-        var tickAfterSix = sim.State.FeatureRegistry.LastUpdatedTick;
-        Assert.True(tickAfterSix > tickAfterFive,
+        var tickAfterSixteen = sim.State.FeatureRegistry.LastUpdatedTick;
+        Assert.True(tickAfterSixteen > tickAfterFifteen,
             "Detection should run again after FeatureDetectionInterval ticks");
 
         sim.Dispose();
@@ -535,12 +535,12 @@ public class SplitPhaseTests
         await sim.AdvanceSimulationAsync(0.5);
         var tickAfterFirst = sim.State.FeatureRegistry.LastUpdatedTick;
 
-        // Ticks 2-5: detection skipped
-        for (var i = 0; i < 4; i++)
+        // Ticks 2-15: detection skipped
+        for (var i = 0; i < 14; i++)
             await sim.AdvanceSimulationAsync(0.5);
         Assert.Equal(tickAfterFirst, sim.State.FeatureRegistry.LastUpdatedTick);
 
-        // Tick 6: detection runs
+        // Tick 16: detection runs
         await sim.AdvanceSimulationAsync(0.5);
         Assert.True(sim.State.FeatureRegistry.LastUpdatedTick > tickAfterFirst);
 

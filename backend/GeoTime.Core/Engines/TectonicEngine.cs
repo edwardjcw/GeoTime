@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using GeoTime.Core.Compute;
 using GeoTime.Core.Models;
 using GeoTime.Core.Kernel;
@@ -5,6 +6,26 @@ using GeoTime.Core.Proc;
 using System.Numerics;
 
 namespace GeoTime.Core.Engines;
+
+/// <summary>Per-phase millisecond breakdown from the most recent <see cref="TectonicEngine.AdvectPlates"/> call.</summary>
+public sealed record AdvectionPhaseTimings
+{
+    public long PrecomputeMs { get; init; }
+    public long Phase1DestMapMs { get; init; }
+    public long Phase2ScatterCollisionMs { get; init; }
+    public long Phase3GapFillMs { get; init; }
+    public long GapPlateAssignMs { get; init; }
+    public long CommitMs { get; init; }
+    public long StratigraphyRemapMs { get; init; }
+    public long TotalMs { get; init; }
+    public bool Phase1UsedGpu { get; init; }
+    public bool Phase2UsedGpu { get; init; }
+    public bool Phase3UsedGpu { get; init; }
+    /// <summary>GPU collision scatter kernel time when Phase 2 used GPU; otherwise 0.</summary>
+    public long GpuCollisionScatterMs { get; init; }
+    /// <summary>GPU collision apply kernel time when Phase 2 used GPU; otherwise 0.</summary>
+    public long GpuCollisionApplyMs { get; init; }
+}
 
 /// <summary>
 /// Main tectonic engine: plate motion, boundary processes, isostasy, volcanism.
@@ -55,6 +76,9 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
 
     /// <summary>S1: Cached boundary cells reused across sub-ticks within a single Tick.</summary>
     private List<BoundaryCell>? _cachedBoundaries;
+
+    /// <summary>Timing breakdown from the most recent plate advection pass.</summary>
+    public AdvectionPhaseTimings LastAdvectionPhaseTimings { get; private set; } = new();
 
     public void Initialize(List<PlateInfo> plates, List<HotspotInfo> hotspots,
         AtmosphericComposition atmosphere, SimulationState state)
@@ -311,10 +335,14 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
     /// </summary>
     internal void AdvectPlates(SimulationState state, double deltaMa, double timeMa)
     {
+        var totalSw = Stopwatch.StartNew();
+        var phaseSw = new Stopwatch();
+
         var gs = state.GridSize;
         var cc = state.CellCount;
 
         // Precompute per-plate rotation parameters (Euler pole unit vector + angle).
+        phaseSw.Restart();
         var numPlates = _plates.Count;
         var kx = new double[numPlates];
         var ky = new double[numPlates];
@@ -335,6 +363,7 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
             cosTheta[p] = Math.Cos(theta);
             sinTheta[p] = Math.Sin(theta);
         }
+        var precomputeMs = phaseSw.ElapsedMilliseconds;
 
         // Allocate destination buffers.
         var newHeight    = new float[cc];
@@ -353,6 +382,7 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         // ── Phase 1: Compute destination indices ─────────────────────────────
         // GPU: Rodrigues' rotation kernel computes destMap[srcIdx] = destIdx.
         // CPU fallback: inline rotation loop.
+        phaseSw.Restart();
         int[] destMap;
         bool gpuAdvectDone = false;
         if (gpu != null)
@@ -421,10 +451,12 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
                 destMap[i] = newRow * gs + newCol;
             }
         }
+        var phase1Ms = phaseSw.ElapsedMilliseconds;
 
         // ── Phase 2: Scatter + collision resolution ─────────────────────────────
         // GPU path uses atomic operations for parallel collision resolution;
         // CPU fallback uses the sequential loop with plate-type branching.
+        phaseSw.Restart();
         bool gpuCollisionDone = false;
         if (gpu != null)
         {
@@ -507,10 +539,15 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
                 }
             }
         }
+        var phase2Ms = phaseSw.ElapsedMilliseconds;
+        var gpuCollisionTimings = gpuCollisionDone ? gpu!.LastCollisionResolveTimings : null;
+        var gpuCollisionScatterMs = gpuCollisionTimings?.ScatterKernelMs ?? 0L;
+        var gpuCollisionApplyMs = gpuCollisionTimings?.ApplyKernelMs ?? 0L;
 
         // ── Phase 3: Gap fill ────────────────────────────────────────────────
         // GPU fills the simple per-cell properties; CPU handles plate assignment
         // via neighbor search which is irregular and not suited for GPU.
+        phaseSw.Restart();
         bool gpuGapFillDone = false;
         if (gpu != null)
         {
@@ -538,23 +575,60 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
                 newRockAge[i]  = (float)timeMa;
             }
         }
+        var phase3Ms = phaseSw.ElapsedMilliseconds;
 
         // Plate assignment for gaps always on CPU (irregular neighbor search).
+        phaseSw.Restart();
         for (var i = 0; i < cc; i++)
         {
             if (hitCount[i] > 0) continue;
             newPlateMap[i] = FindNearestPlate(i, newPlateMap, hitCount, gs);
         }
+        var gapAssignMs = phaseSw.ElapsedMilliseconds;
 
         // ── Commit new buffers to state ──────────────────────────────────────
+        phaseSw.Restart();
         Array.Copy(newHeight,   state.HeightMap,          cc);
         Array.Copy(newCrust,    state.CrustThicknessMap,  cc);
         Array.Copy(newRockType, state.RockTypeMap,        cc);
         Array.Copy(newRockAge,  state.RockAgeMap,         cc);
         Array.Copy(newPlateMap, state.PlateMap,            cc);
+        var commitMs = phaseSw.ElapsedMilliseconds;
 
         // ── Remap stratigraphy columns ───────────────────────────────────────
+        phaseSw.Restart();
         Stratigraphy.RemapColumns(stratigraphyMapping, cc, hitCount, timeMa);
+        var stratRemapMs = phaseSw.ElapsedMilliseconds;
+
+        var totalMs = totalSw.ElapsedMilliseconds;
+        LastAdvectionPhaseTimings = new AdvectionPhaseTimings
+        {
+            PrecomputeMs = precomputeMs,
+            Phase1DestMapMs = phase1Ms,
+            Phase2ScatterCollisionMs = phase2Ms,
+            Phase3GapFillMs = phase3Ms,
+            GapPlateAssignMs = gapAssignMs,
+            CommitMs = commitMs,
+            StratigraphyRemapMs = stratRemapMs,
+            TotalMs = totalMs,
+            Phase1UsedGpu = gpuAdvectDone,
+            Phase2UsedGpu = gpuCollisionDone,
+            Phase3UsedGpu = gpuGapFillDone,
+            GpuCollisionScatterMs = gpuCollisionScatterMs,
+            GpuCollisionApplyMs = gpuCollisionApplyMs,
+        };
+
+        if (totalMs > 0)
+        {
+            var compute = (gpuAdvectDone || gpuCollisionDone || gpuGapFillDone) ? "GPU" : "CPU";
+            eventLog.Record(new GeoLogEntry
+            {
+                TimeMa = timeMa,
+                Type = "ADVECT_PHASE_STATS",
+                Description =
+                    $"[{compute}] Advect={totalMs}ms | dest={phase1Ms}ms | scatter={phase2Ms}ms | gap={phase3Ms}ms | assign={gapAssignMs}ms | strat={stratRemapMs}ms",
+            });
+        }
     }
 
     /// <summary>

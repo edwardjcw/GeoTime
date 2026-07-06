@@ -41,6 +41,8 @@ export interface TickStats {
 export interface AdvanceResult {
   timeMa: number;
   tickCount?: number;
+  /** True when the advance was a no-op because a previous tick is still running. */
+  skipped?: boolean;
   stats?: TickStats;
 }
 
