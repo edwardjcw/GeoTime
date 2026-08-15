@@ -346,19 +346,19 @@ test.describe('Phase 5: Cross-Section Viewer', () => {
   });
 
   test('should have a Draw Cross-Section button in the sidebar', async ({ page }) => {
-    const drawBtn = page.locator('button', { hasText: /Draw Cross-Section|Click Globe/ });
+    const drawBtn = page.locator('button', { hasText: /Draw Cross-Section|Click.*Point/ });
     await expect(drawBtn).toBeVisible();
   });
 
   test('should toggle draw mode on button click', async ({ page }) => {
-    const drawBtn = page.locator('button', { hasText: /Draw Cross-Section|Click Globe/ });
+    const drawBtn = page.locator('button', { hasText: /Draw Cross-Section|Click.*Point/ });
     await expect(drawBtn).toBeVisible();
 
     // Click to activate draw mode
     await drawBtn.click();
 
     // Button text should change to indicate draw mode is active
-    await expect(page.locator('button', { hasText: /Click Globe/ })).toBeVisible();
+    await expect(page.locator('button', { hasText: /Click 1st Point/ })).toBeVisible();
 
     // Click again to deactivate
     await drawBtn.click();
@@ -376,7 +376,7 @@ test.describe('Phase 5: Cross-Section Viewer', () => {
     const errors: string[] = [];
     page.on('pageerror', (err) => errors.push(err.message));
 
-    const drawBtn = page.locator('button', { hasText: /Draw Cross-Section|Click Globe/ });
+    const drawBtn = page.locator('button', { hasText: /Draw Cross-Section|Click.*Point/ });
 
     // Toggle draw mode several times
     for (let i = 0; i < 5; i++) {
@@ -390,9 +390,9 @@ test.describe('Phase 5: Cross-Section Viewer', () => {
 
   test('draw mode should reset on new planet generation', async ({ page }) => {
     // Activate draw mode
-    const drawBtn = page.locator('button', { hasText: /Draw Cross-Section|Click Globe/ });
+    const drawBtn = page.locator('button', { hasText: /Draw Cross-Section|Click.*Point/ });
     await drawBtn.click();
-    await expect(page.locator('button', { hasText: /Click Globe/ })).toBeVisible();
+    await expect(page.locator('button', { hasText: /Click 1st Point/ })).toBeVisible();
 
     // Generate new planet
     const newPlanetBtn = page.locator('button', { hasText: 'New Planet' });
@@ -412,7 +412,7 @@ test.describe('Phase 5: Cross-Section Viewer', () => {
     });
 
     // Toggle draw mode on and off
-    const drawBtn = page.locator('button', { hasText: /Draw Cross-Section|Click Globe/ });
+    const drawBtn = page.locator('button', { hasText: /Draw Cross-Section|Click.*Point/ });
     await drawBtn.click();
     await page.waitForTimeout(500);
     await drawBtn.click();
@@ -1643,31 +1643,5 @@ test.describe('UI Fixes — Rate slider, Time readout, Event layers, Advanced Vi
   });
 });
 
-// ─── REG: Layer overlay spatial variation screenshots ─────────────────────────
-
-test.describe('REG: Layer overlay spatial variation', () => {
-  test('temperature, biomass, and topo layers render overlays after sim', async ({ page }) => {
-    test.setTimeout(120_000);
-
-    await page.goto('/');
-    await page.waitForSelector('canvas', { timeout: 15_000 });
-    await page.locator('button', { hasText: 'New Planet' }).click();
-    await page.waitForTimeout(3000);
-
-    const pauseBtn = page.locator('button', { hasText: /Pause|Resume/ });
-    await pauseBtn.click();
-    await page.waitForTimeout(60_000);
-
-    for (const layer of ['temperature', 'biomass', 'topo'] as const) {
-      const btn = page.locator(`button[data-layer="${layer}"]`);
-      await btn.click();
-      await page.waitForTimeout(1500);
-      await page.screenshot({
-        path: `e2e/screenshots/layer-${layer}-after-sim.png`,
-        fullPage: false,
-      });
-      await btn.click();
-      await page.waitForTimeout(300);
-    }
-  });
-});
+// Layer overlay spatial-variation regression tests live in e2e/layer-overlay.spec.ts
+// (PNG pixel variance analysis + screenshots on failure).

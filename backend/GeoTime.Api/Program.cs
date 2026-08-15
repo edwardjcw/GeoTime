@@ -86,6 +86,8 @@ app.MapGet("/api/planet/status", (SimulationOrchestrator sim) =>
         exists,
         seed = sim.GetCurrentSeed(),
         timeMa = sim.GetCurrentTime(),
+        plateTectonicsOnsetMa = sim.GetPlateTectonicsOnsetMa(),
+        plateTectonicsActive = sim.IsPlateTectonicsActive(),
     });
 }).WithName("GetPlanetStatus");
 
@@ -93,7 +95,10 @@ app.MapPost("/api/planet/generate", (GenerateRequest req, SimulationOrchestrator
 {
     var sw = Stopwatch.StartNew();
     var seed = req.Seed > 0 ? req.Seed : (uint)Random.Shared.Next(1, int.MaxValue);
-    var result = sim.GeneratePlanet(seed);
+    var config = new SimulationPlanetConfig();
+    if (req.PlateTectonicsOnsetGa is > 0)
+        config.PlateTectonicsOnsetMa = -req.PlateTectonicsOnsetGa.Value * 1000;
+    var result = sim.GeneratePlanet(seed, config);
     sw.Stop();
 
     perfLog.Write("planet_generate", "backend", new
@@ -115,6 +120,8 @@ app.MapPost("/api/planet/generate", (GenerateRequest req, SimulationOrchestrator
         plateCount = result.Plates.Count,
         hotspotCount = result.Hotspots.Count,
         timeMa = sim.GetCurrentTime(),
+        plateTectonicsOnsetMa = sim.GetPlateTectonicsOnsetMa(),
+        plateTectonicsActive = sim.IsPlateTectonicsActive(),
     });
 }).WithName("GeneratePlanet");
 
@@ -224,7 +231,13 @@ app.MapGet("/api/simulation/stats", (SimulationOrchestrator sim) =>
 }).WithName("GetSimulationStats");
 
 app.MapGet("/api/simulation/time", (SimulationOrchestrator sim) =>
-    Results.Ok(new { timeMa = sim.GetCurrentTime(), seed = sim.GetCurrentSeed() })
+    Results.Ok(new
+    {
+        timeMa = sim.GetCurrentTime(),
+        seed = sim.GetCurrentSeed(),
+        plateTectonicsOnsetMa = sim.GetPlateTectonicsOnsetMa(),
+        plateTectonicsActive = sim.IsPlateTectonicsActive(),
+    })
 ).WithName("GetSimulationTime");
 
 // ── Compute Backend Info (Recommendation 5-6: GPU/CPU indicator) ─────────────
@@ -274,6 +287,10 @@ app.MapGet("/api/state/heightmap", (SimulationOrchestrator sim) =>
 app.MapGet("/api/state/platemap", (SimulationOrchestrator sim) =>
     Results.Ok(sim.State.PlateMap)
 ).WithName("GetPlateMap");
+
+app.MapGet("/api/state/suturemap", (SimulationOrchestrator sim) =>
+    Results.Ok(sim.State.SutureMap.Select(b => (int)b).ToArray())
+).WithName("GetSutureMap");
 
 app.MapGet("/api/state/temperaturemap", (SimulationOrchestrator sim) =>
     Results.Ok(sim.State.TemperatureMap)
@@ -884,23 +901,18 @@ app.MapGet("/api/state/eventlayermap", (
 }).WithName("GetEventLayerMap");
 
 // GET /api/state/eventlayermap/types
-// Returns LayerEventType enum values that have at least one layer anywhere on the planet
+// Returns all extraordinary LayerEventType values (excluding Normal) so the UI
+// dropdown is always populated; maps for types with no deposited layers are all zero.
 app.MapGet("/api/state/eventlayermap/types", (SimulationOrchestrator sim) =>
 {
-    var strat = sim.GetStratigraphicColumns();
-    if (strat == null) return Results.Ok(Array.Empty<string>());
+    if (sim.State.CellCount == 0) return Results.BadRequest("Planet not generated.");
 
-    var present = new HashSet<string>();
-    foreach (var col in strat)
-    {
-        if (col == null) continue;
-        foreach (var layer in col.Layers)
-        {
-            if (layer.EventType != LayerEventType.Normal)
-                present.Add(layer.EventType.ToString());
-        }
-    }
-    return Results.Ok(present.OrderBy(x => x));
+    var types = Enum.GetValues<LayerEventType>()
+        .Where(t => t != LayerEventType.Normal)
+        .Select(t => t.ToString())
+        .OrderBy(x => x, StringComparer.Ordinal)
+        .ToArray();
+    return Results.Ok(types);
 }).WithName("GetEventLayerTypes");
 
 app.Run();
@@ -917,7 +929,7 @@ static async IAsyncEnumerable<string> StringsToAsyncEnumerable(IEnumerable<strin
 
 // ── Request DTOs ──────────────────────────────────────────────────────────────
 
-record GenerateRequest(uint Seed = 0);
+record GenerateRequest(uint Seed = 0, double? PlateTectonicsOnsetGa = null);
 record AdvanceRequest(double DeltaMa);
 record ClientPerfEventRequest(string? Event, JsonElement? Data);
 record PointDto(double Lat, double Lon);

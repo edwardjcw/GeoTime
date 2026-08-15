@@ -506,8 +506,13 @@ describe('Layer Verification — Contrast Normalization', () => {
     expect(stretchedMax).toBe(45);
   });
 
-  it('stretchToPhysicalRange keeps raw values when span is below the guard', () => {
-    expect(stretchToPhysicalRange(15, 15, 15.5, -40, 45, 2)).toBe(15);
+  it('stretchToPhysicalRange returns palette midpoint when span is zero', () => {
+    expect(stretchToPhysicalRange(15, 15, 15, -40, 45, 2)).toBe(2.5);
+  });
+
+  it('stretchToPhysicalRange still stretches narrow non-zero spans', () => {
+    expect(stretchToPhysicalRange(15, 15, 15.5, -40, 45, 2)).toBe(-40);
+    expect(stretchToPhysicalRange(15.5, 15, 15.5, -40, 45, 2)).toBe(45);
   });
 
   it('computeMapStats reports variance for non-uniform arrays', () => {

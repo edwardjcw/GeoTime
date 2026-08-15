@@ -13,18 +13,17 @@ import * as api from './api/backend-client';
 import {
   biomassColor,
   biomatterColor,
+  buildScalarLayerRgba,
+  buildTopoLayerRgba,
   cloudColor,
   computeMapStats,
-  computeTopoExtents,
   organicCarbonColor,
   precipitationColor,
-  scaleTopoHeight,
   soilOrderColor,
-  stretchToPhysicalRange,
   temperatureColor,
-  topoColor,
   type MapStats,
 } from './layer-color-mapping';
+import { plateLayerLegendTitle } from './plate-tectonics-labels';
 import type { CrossSectionProfile as SharedCrossSectionProfile, LatLon } from './shared/types';
 
 // ── Bootstrap ───────────────────────────────────────────────────────────────
@@ -43,6 +42,8 @@ const labelRenderer = new LabelRenderer(shell.getLabelLayer());
 
 /** Current simulation time (Ma), updated from backend. */
 let simTimeMa = -4500;
+/** Plate-tectonics onset (Ma); lateral motion begins at/after this time. */
+let plateTectonicsOnsetMa = -3800;
 /** Whether the simulation is paused locally. */
 let paused = false;
 /** Simulation rate (Ma per second of real time). Default matches the slider default (0.010 Ma/s). */
@@ -50,6 +51,7 @@ let simRate = 0.01;
 
 // Initialise the HUD time display immediately so it never shows "--"
 shell.setSimTime(simTimeMa);
+shell.setPlateTectonicsRegime(plateTectonicsOnsetMa, simTimeMa);
 shell.setTimelineCursor(0);
 
 // ── Planet generation via backend ───────────────────────────────────────────
@@ -58,10 +60,28 @@ function randomSeed(): number {
   return (Math.random() * 0xffff_fffe + 1) >>> 0;
 }
 
+function applyPlateTectonicsRegime(onsetMa: number, currentTimeMa: number): void {
+  plateTectonicsOnsetMa = onsetMa;
+  shell.setPlateTectonicsRegime(onsetMa, currentTimeMa);
+  renderer.setPlateOverlayMuted(currentTimeMa < onsetMa);
+}
+
+function setSimTimeFromBackend(timeMa: number): void {
+  simTimeMa = timeMa;
+  shell.setSimTime(timeMa);
+  renderer.setPlateOverlayMuted(timeMa < plateTectonicsOnsetMa);
+}
+
 async function doGeneratePlanet(seed: number): Promise<void> {
   try {
-    const result = await api.generatePlanet(seed);
+    const onsetGa = shell.getPlateTectonicsOnsetGa();
+    const result = await api.generatePlanet(seed, onsetGa);
     simTimeMa = result.timeMa;
+    if (result.plateTectonicsOnsetMa !== undefined) {
+      applyPlateTectonicsRegime(result.plateTectonicsOnsetMa, simTimeMa);
+    } else {
+      applyPlateTectonicsRegime(-onsetGa * 1000, simTimeMa);
+    }
     totalTickCount = 0;
 
     // Fetch initial display data from backend
@@ -95,7 +115,7 @@ async function doGeneratePlanet(seed: number): Promise<void> {
 
     shell.setSeed(result.seed);
     shell.setTriangleCount(renderer.getTriangleCount());
-    shell.setSimTime(simTimeMa);
+    setSimTimeFromBackend(simTimeMa);
     shell.setTimelineCursor(4500 + simTimeMa);
 
     // Update load-state button availability (snapshots exist if we ever saved)
@@ -110,9 +130,9 @@ async function doGeneratePlanet(seed: number): Promise<void> {
 
     // Close any open cross-section panel on new planet
     shell.hideCrossSection();
-    shell.setDrawMode(false);
     drawModeActive = false;
     drawPoints = [];
+    syncDrawModeUi();
 
     // Fetch feature labels from backend and pass to label renderer (Phase L5).
     api.fetchFeatureLabels()
@@ -120,9 +140,7 @@ async function doGeneratePlanet(seed: number): Promise<void> {
       .catch(() => {/* labels are non-critical */});
 
     // Fetch available event layer types and populate dropdown (Phase D6).
-    api.fetchEventLayerTypes()
-      .then((types) => shell.setEventLayerTypes(types))
-      .catch(() => {/* event layer types are non-critical */});
+    void refreshEventLayerTypes();
 
     // Encode seed in URL fragment for sharing
     window.location.hash = `seed=${result.seed}`;
@@ -154,9 +172,13 @@ function seedFromURL(): number | null {
  * Reconnect to an existing planet running on the backend without regenerating.
  * Fetches and displays all current state.
  */
-async function doReconnectPlanet(seed: number, timeMa: number): Promise<void> {
+async function doReconnectPlanet(seed: number, timeMa: number, onsetMa?: number): Promise<void> {
   try {
-    simTimeMa = timeMa;
+    if (onsetMa !== undefined) {
+      applyPlateTectonicsRegime(onsetMa, timeMa);
+    } else {
+      simTimeMa = timeMa;
+    }
 
     // Fetch current display data from backend
     const [heightData, plateData, tempData, precipData] = await Promise.all([
@@ -187,7 +209,7 @@ async function doReconnectPlanet(seed: number, timeMa: number): Promise<void> {
 
     shell.setSeed(seed);
     shell.setTriangleCount(renderer.getTriangleCount());
-    shell.setSimTime(simTimeMa);
+    setSimTimeFromBackend(simTimeMa);
     shell.setTimelineCursor(4500 + simTimeMa);
 
     api.listSnapshots().then((info) => {
@@ -202,9 +224,7 @@ async function doReconnectPlanet(seed: number, timeMa: number): Promise<void> {
       .then((labels) => labelRenderer.setLabels(labels))
       .catch(() => {/* labels are non-critical */});
 
-    api.fetchEventLayerTypes()
-      .then((types) => shell.setEventLayerTypes(types))
-      .catch(() => {/* event layer types are non-critical */});
+    void refreshEventLayerTypes();
 
     window.location.hash = `seed=${seed}`;
   } catch (err) {
@@ -220,7 +240,7 @@ async function doReconnectPlanet(seed: number, timeMa: number): Promise<void> {
   try {
     const status = await api.getPlanetStatus();
     if (status.exists) {
-      await doReconnectPlanet(status.seed, status.timeMa);
+      await doReconnectPlanet(status.seed, status.timeMa, status.plateTectonicsOnsetMa);
     } else {
       await doGeneratePlanet(seedFromURL() ?? randomSeed());
     }
@@ -247,6 +267,13 @@ let drawModeActive = false;
 let drawPoints: LatLon[] = [];
 let lastCrossSectionProfile: api.CrossSectionProfile | null = null;
 
+/** Sync draw-mode UI and disable globe rotation while placing cross-section points. */
+function syncDrawModeUi(): void {
+  shell.setDrawMode(drawModeActive, drawPoints.length);
+  renderer.setOrbitControlsEnabled(!drawModeActive);
+  renderer.getDomElement().style.cursor = drawModeActive ? 'crosshair' : '';
+}
+
 // Cross-section zoom level (1 = 100%, range 0.5 – 4×)
 let crossSectionZoom = 1;
 
@@ -268,10 +295,10 @@ function renderCrossSectionToPanel(profile: api.CrossSectionProfile, showLabels:
 
 shell.onDrawMode(() => {
   drawModeActive = !drawModeActive;
-  shell.setDrawMode(drawModeActive);
   if (drawModeActive) {
     drawPoints = [];
   }
+  syncDrawModeUi();
 });
 
 shell.onLabelToggle((visible) => {
@@ -293,9 +320,9 @@ shell.onExportPng(() => {
 shell.onCloseCrossSection(() => {
   lastCrossSectionProfile = null;
   drawModeActive = false;
-  shell.setDrawMode(false);
   drawPoints = [];
   crossSectionZoom = 1;
+  syncDrawModeUi();
 });
 
 shell.onCrossSectionZoomIn(() => {
@@ -337,24 +364,19 @@ function logLayerMapStats(layer: string, stats: MapStats): void {
 async function fetchMapFloat32(
   layer: string,
   cached: Float32Array | undefined,
-  fetchBinary: () => Promise<ArrayBuffer>,
+  _fetchBinary: () => Promise<ArrayBuffer>,
   fetchJson: () => Promise<number[]>,
 ): Promise<Float32Array> {
   if (cached) {
     logLayerMapStats(layer, computeMapStats(cached));
     return cached;
   }
-  try {
-    const buf = await fetchBinary();
-    const arr = new Float32Array(buf, 0, GRID_SIZE * GRID_SIZE);
-    logLayerMapStats(layer, computeMapStats(arr));
-    return arr;
-  } catch {
-    const json = await fetchJson();
-    const arr = Float32Array.from(json);
-    logLayerMapStats(layer, computeMapStats(arr));
-    return arr;
-  }
+  // Individual /binary endpoints return MessagePack, not raw float32 bytes.
+  // Only /api/state/bundle/binary uses a raw layout — decode maps via JSON here.
+  const json = await fetchJson();
+  const arr = Float32Array.from(json);
+  logLayerMapStats(layer, computeMapStats(arr));
+  return arr;
 }
 
 // ── Rock type / soil order enum maps (must match backend Enums.cs) ─────────
@@ -475,7 +497,8 @@ const LAYER_LEGENDS: Record<string, { title: string; items: Array<{ color: strin
     title: 'Tectonic Plates',
     items: [
       { color: 'rgba(128,200,100,0.5)', label: 'Plate (random colour)' },
-      { color: 'rgba(200,100,128,0.5)', label: 'Plate boundary' },
+      { color: 'rgba(217,89,115,0.55)', label: 'Active plate boundary' },
+      { color: 'rgba(140,115,90,0.22)', label: 'Suture (welded terrane)' },
     ],
   },
   weather: {
@@ -587,10 +610,16 @@ function renderWeatherPattern(result: api.WeatherPatternResult): Uint8Array {
  * Fetch map data for a specific non-plate layer and convert to a displayable RGBA texture.
  * Returns `null` for layers whose texture update is handled internally (e.g. 'biome').
  */
-async function fetchLayerRgba(layer: string): Promise<Uint8Array | null> {
-  const cellCount = GRID_SIZE * GRID_SIZE;
-  const rgba = new Uint8Array(cellCount * 4);
+async function refreshEventLayerTypes(): Promise<void> {
+  try {
+    const types = await api.fetchEventLayerTypes();
+    shell.setEventLayerTypes(types);
+  } catch {
+    /* event layer types are non-critical */
+  }
+}
 
+async function fetchLayerRgba(layer: string): Promise<Uint8Array | null> {
   if (layer === 'temperature') {
     const data = await fetchMapFloat32(
       'temperature',
@@ -598,97 +627,63 @@ async function fetchLayerRgba(layer: string): Promise<Uint8Array | null> {
       api.getTemperatureMapBinary,
       api.getTemperatureMap,
     );
-    const stats = computeMapStats(data);
-    for (let i = 0; i < cellCount; i++) {
-      const t = stretchToPhysicalRange(data[i], stats.min, stats.max, -40, 45, 2);
-      const [r, g, b] = temperatureColor(t);
-      rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 180;
-    }
-  } else if (layer === 'precipitation') {
+    return buildScalarLayerRgba(data, temperatureColor, -40, 45, 180);
+  }
+  if (layer === 'precipitation') {
     const data = await fetchMapFloat32(
       'precipitation',
       lastStateBundle?.precipitationMap,
       api.getPrecipitationMapBinary,
       api.getPrecipitationMap,
     );
-    const stats = computeMapStats(data);
-    for (let i = 0; i < cellCount; i++) {
-      const p = stretchToPhysicalRange(data[i], stats.min, stats.max, 0, 2500, 50);
-      const [r, g, b] = precipitationColor(p);
-      rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 180;
-    }
-  } else if (layer === 'clouds') {
+    return buildScalarLayerRgba(data, precipitationColor, 0, 2500, 180);
+  }
+  if (layer === 'clouds') {
     const data = await fetchMapFloat32(
       'clouds',
       lastStateBundle?.precipitationMap,
       api.getPrecipitationMapBinary,
       api.getPrecipitationMap,
     );
-    const stats = computeMapStats(data);
-    for (let i = 0; i < cellCount; i++) {
-      const p = stretchToPhysicalRange(data[i], stats.min, stats.max, 0, 2500, 50);
-      const [r, g, b] = cloudColor(p);
-      rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 160;
-    }
-  } else if (layer === 'biomass') {
+    return buildScalarLayerRgba(data, cloudColor, 0, 2500, 160);
+  }
+  if (layer === 'biomass') {
     const data = await fetchMapFloat32(
       'biomass',
       undefined,
       api.getBiomassMapBinary,
       api.getBiomassMap,
     );
-    const stats = computeMapStats(data);
-    for (let i = 0; i < cellCount; i++) {
-      const biomass = stretchToPhysicalRange(data[i], stats.min, stats.max, 0, 12, 0.25);
-      const [r, g, b] = biomassColor(biomass);
-      rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 180;
-    }
-  } else if (layer === 'biomatter') {
+    return buildScalarLayerRgba(data, biomassColor, 0, 12, 180);
+  }
+  if (layer === 'biomatter') {
     const data = await fetchMapFloat32(
       'biomatter',
       undefined,
       api.getBiomatterMapBinary,
       api.getBiomatterMap,
     );
-    const stats = computeMapStats(data);
-    for (let i = 0; i < cellCount; i++) {
-      const d = stretchToPhysicalRange(data[i], stats.min, stats.max, 0, 3, 0.05);
-      const [r, g, b] = biomatterColor(d);
-      rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 185;
-    }
-  } else if (layer === 'organic-carbon') {
+    return buildScalarLayerRgba(data, biomatterColor, 0, 3, 185);
+  }
+  if (layer === 'organic-carbon') {
     const data = await fetchMapFloat32(
       'organic-carbon',
       undefined,
       api.getOrganicCarbonMapBinary,
       api.getOrganicCarbonMap,
     );
-    const stats = computeMapStats(data);
-    for (let i = 0; i < cellCount; i++) {
-      const c = stretchToPhysicalRange(data[i], stats.min, stats.max, 0, 5, 0.1);
-      const [r, g, b] = organicCarbonColor(c);
-      rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 185;
-    }
-  } else if (layer === 'topo') {
+    return buildScalarLayerRgba(data, organicCarbonColor, 0, 5, 185);
+  }
+  if (layer === 'topo') {
     const data = await fetchMapFloat32(
       'topo',
       lastStateBundle?.heightMap,
       api.getHeightMapBinary,
       api.getHeightMap,
     );
-    const extents = computeTopoExtents(data);
-    for (let i = 0; i < cellCount; i++) {
-      const scaled = scaleTopoHeight(
-        data[i],
-        extents.oceanMin,
-        extents.oceanMax,
-        extents.landMin,
-        extents.landMax,
-      );
-      const [r, g, b] = topoColor(scaled);
-      rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 200;
-    }
-  } else if (layer === 'biome') {
+    return buildTopoLayerRgba(data);
+  }
+  if (layer === 'biome') {
     const tempData = await fetchMapFloat32(
       'biome.temperature',
       lastStateBundle?.temperatureMap,
@@ -703,105 +698,141 @@ async function fetchLayerRgba(layer: string): Promise<Uint8Array | null> {
     );
     renderer.updateClimateMap(tempData, precipData, GRID_SIZE);
     return null;
-  } else if (layer === 'soil') {
+  }
+  if (layer === 'soil') {
     const soilData = await api.getSoilMap();
     logLayerMapStats('soil', computeMapStats(soilData));
-    for (let i = 0; i < cellCount; i++) {
+    const rgba = new Uint8Array(GRID_SIZE * GRID_SIZE * 4);
+    for (let i = 0; i < soilData.length; i++) {
       const [r, g, b] = soilOrderColor(soilData[i]);
       rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 200;
     }
-  } else {
-    const tempData = await fetchMapFloat32(
-      'fallback.temperature',
-      lastStateBundle?.temperatureMap,
-      api.getTemperatureMapBinary,
-      api.getTemperatureMap,
-    );
-    const precipData = await fetchMapFloat32(
-      'fallback.precipitation',
-      lastStateBundle?.precipitationMap,
-      api.getPrecipitationMapBinary,
-      api.getPrecipitationMap,
-    );
-    renderer.updateClimateMap(tempData, precipData, GRID_SIZE);
-    return null;
+    return rgba;
   }
-  return rgba;
+
+  const tempData = await fetchMapFloat32(
+    'fallback.temperature',
+    lastStateBundle?.temperatureMap,
+    api.getTemperatureMapBinary,
+    api.getTemperatureMap,
+  );
+  const precipData = await fetchMapFloat32(
+    'fallback.precipitation',
+    lastStateBundle?.precipitationMap,
+    api.getPrecipitationMapBinary,
+    api.getPrecipitationMap,
+  );
+  renderer.updateClimateMap(tempData, precipData, GRID_SIZE);
+  return null;
+}
+
+// Layers that replace each other when activated (only one visible at a time).
+const MUTUALLY_EXCLUSIVE_LAYERS = [
+  'plates', 'temperature', 'precipitation', 'biome', 'soil', 'clouds',
+  'biomass', 'biomatter', 'organic-carbon', 'topo', 'weather',
+] as const;
+
+async function applyLayerToggle(layer: string, active: boolean): Promise<void> {
+  if (layer === 'labels') {
+    labelRenderer.setVisible(active);
+    return;
+  }
+
+  if (layer === 'plates') {
+    if (active) {
+      const [plateData, sutureData] = await Promise.all([
+        api.getPlateMap(),
+        api.getSutureMap(),
+      ]);
+      renderer.updatePlateMap(new Uint16Array(plateData), GRID_SIZE);
+      renderer.updateSutureMap(new Uint8Array(sutureData), GRID_SIZE);
+    }
+    renderer.setPlateOverlayMuted(simTimeMa < plateTectonicsOnsetMa);
+    renderer.setPlateOverlayVisible(active);
+  } else if (layer === 'weather') {
+    if (active) {
+      activeDataLayers.add(layer);
+      if (!paused) {
+        paused = true;
+        shell.setPaused(true);
+        weatherLayerPausedSim = true;
+      }
+      shell.showWeatherMonthSelector(weatherMonth);
+      const result = await api.getWeatherPattern(weatherMonth);
+      lastWeatherResult = result;
+      const rgba = renderWeatherPattern(result);
+      renderer.updateColorMap(rgba, GRID_SIZE);
+      renderer.setBiomeOverlayVisible(true);
+    } else {
+      activeDataLayers.delete(layer);
+      shell.hideWeatherMonthSelector();
+      renderer.stopWindAnimation();
+      lastWeatherResult = null;
+      if (weatherLayerPausedSim) {
+        paused = false;
+        shell.setPaused(false);
+        weatherLayerPausedSim = false;
+      }
+      if (activeDataLayers.size === 0) {
+        renderer.setBiomeOverlayVisible(false);
+      }
+    }
+  } else {
+    if (active) {
+      activeDataLayers.add(layer);
+      const rgba = await fetchLayerRgba(layer);
+      if (rgba !== null) {
+        renderer.updateColorMap(rgba, GRID_SIZE);
+      }
+      renderer.setBiomeOverlayVisible(true);
+    } else {
+      activeDataLayers.delete(layer);
+      if (activeDataLayers.size === 0) {
+        renderer.setBiomeOverlayVisible(false);
+      }
+    }
+  }
+
+  if (active) {
+    const legend = LAYER_LEGENDS[layer];
+    if (legend) {
+      if (layer === 'plates' && simTimeMa < plateTectonicsOnsetMa) {
+        shell.showLayerLegend(
+          plateLayerLegendTitle(plateTectonicsOnsetMa),
+          legend.items,
+        );
+      } else {
+        shell.showLayerLegend(legend.title, legend.items);
+      }
+    }
+  } else {
+    const otherActive = [...activeDataLayers].find(l => LAYER_LEGENDS[l]);
+    if (otherActive) {
+      const legend = LAYER_LEGENDS[otherActive];
+      shell.showLayerLegend(legend.title, legend.items);
+    } else if (shell.isLayerActive('plates')) {
+      const legend = LAYER_LEGENDS.plates;
+      shell.showLayerLegend(legend.title, legend.items);
+    } else {
+      shell.hideLayerLegend();
+    }
+  }
 }
 
 shell.onLayerToggle(async (layer: string, active: boolean) => {
   try {
-    if (layer === 'labels') {
-      // Phase L5: geographic feature label overlay.
-      labelRenderer.setVisible(active);
-      return; // No globe texture change needed for labels.
-    } else if (layer === 'plates') {
-      if (active) {
-        const plateData = await api.getPlateMap();
-        renderer.updatePlateMap(new Uint16Array(plateData), GRID_SIZE);
-      }
-      renderer.setPlateOverlayVisible(active);
-    } else if (layer === 'weather') {
-      if (active) {
-        activeDataLayers.add(layer);
-        // Pause simulation while browsing weather patterns
-        if (!paused) {
-          paused = true;
-          shell.setPaused(true);
-          weatherLayerPausedSim = true;
-        }
-        shell.showWeatherMonthSelector(weatherMonth);
-        const result = await api.getWeatherPattern(weatherMonth);
-        lastWeatherResult = result;
-        const rgba = renderWeatherPattern(result);
-        renderer.updateColorMap(rgba, GRID_SIZE);
-        renderer.setBiomeOverlayVisible(true);
-      } else {
-        activeDataLayers.delete(layer);
-        shell.hideWeatherMonthSelector(); // also fires windToggleCb(false) if wind was on
-        renderer.stopWindAnimation();
-        lastWeatherResult = null;
-        if (weatherLayerPausedSim) {
-          paused = false;
-          shell.setPaused(false);
-          weatherLayerPausedSim = false;
-        }
-        if (activeDataLayers.size === 0) {
-          renderer.setBiomeOverlayVisible(false);
-        }
-      }
-    } else {
-      if (active) {
-        activeDataLayers.add(layer);
-        const rgba = await fetchLayerRgba(layer);
-        if (rgba !== null) {
-          renderer.updateColorMap(rgba, GRID_SIZE);
-        }
-        renderer.setBiomeOverlayVisible(true);
-      } else {
-        activeDataLayers.delete(layer);
-        if (activeDataLayers.size === 0) {
-          renderer.setBiomeOverlayVisible(false);
+    if (
+      active
+      && (MUTUALLY_EXCLUSIVE_LAYERS as readonly string[]).includes(layer)
+    ) {
+      for (const other of MUTUALLY_EXCLUSIVE_LAYERS) {
+        if (other !== layer && shell.isLayerActive(other)) {
+          shell.setLayerActive(other, false);
+          await applyLayerToggle(other, false);
         }
       }
     }
-
-    // Show or hide the legend for the active layer
-    if (active) {
-      const legend = LAYER_LEGENDS[layer];
-      if (legend) {
-        shell.showLayerLegend(legend.title, legend.items);
-      }
-    } else {
-      // Show legend for any other still-active non-plate layer
-      const otherActive = [...activeDataLayers].find(l => LAYER_LEGENDS[l]);
-      if (otherActive) {
-        const legend = LAYER_LEGENDS[otherActive];
-        shell.showLayerLegend(legend.title, legend.items);
-      } else {
-        shell.hideLayerLegend();
-      }
-    }
+    await applyLayerToggle(layer, active);
   } catch (err) {
     console.error(`Failed to toggle layer ${layer}:`, err);
   }
@@ -836,10 +867,10 @@ shell.onWindToggle((active: boolean) => {
 });
 
 // ── Globe click handling ──────────────────────────────────────────────────────
-// In draw mode: collect points for a cross-section path.
+// In draw mode: collect points for a cross-section path (pointerdown on canvas).
 // Otherwise: inspect the clicked cell and show an info popup.
 
-shell.onInspectClick((x: number, y: number) => {
+function handleGlobePick(x: number, y: number): void {
   const viewportEl = shell.getViewportElement();
   const latLon = renderer.screenToLatLon(
     x,
@@ -860,11 +891,14 @@ shell.onInspectClick((x: number, y: number) => {
           shell.showCrossSection();
           renderCrossSectionToPanel(profile, shell.areLabelsVisible());
           drawModeActive = false;
-          shell.setDrawMode(false);
+          drawPoints = [];
+          syncDrawModeUi();
         })
         .catch((err) => {
           console.error('Cross-section request failed:', err);
         });
+    } else {
+      syncDrawModeUi();
     }
     return;
   }
@@ -884,6 +918,19 @@ shell.onInspectClick((x: number, y: number) => {
 
   inspectPanelVisible = true;
   refreshInspectCell({ force: true });
+}
+
+// pointerdown on the WebGL canvas — reliable in draw mode (orbit drag suppresses click).
+renderer.getDomElement().addEventListener('pointerdown', (e: PointerEvent) => {
+  if (!drawModeActive) return;
+  e.preventDefault();
+  const rect = shell.getViewportElement().getBoundingClientRect();
+  handleGlobePick(e.clientX - rect.left, e.clientY - rect.top);
+});
+
+shell.onInspectClick((x: number, y: number) => {
+  if (drawModeActive) return;
+  handleGlobePick(x, y);
 });
 
 // Stop auto-refresh when the user closes the inspect panel (✕ in header).
@@ -951,7 +998,7 @@ shell.onLoadState(async () => {
     const latestTime = Math.max(...info.times);
     const result = await api.restoreSnapshot(latestTime);
     simTimeMa = result.restoredTimeMa;
-    shell.setSimTime(simTimeMa);
+    setSimTimeFromBackend(simTimeMa);
     shell.setTimelineCursor(4500 + simTimeMa);
 
     // Refresh display data after restore
@@ -1363,6 +1410,9 @@ const PHASE_LABELS: Record<string, string> = {
 
 const simSocket = api.createSimulationSocket({
   onConnected: (event) => {
+    if (event.plateTectonicsOnsetMa !== undefined) {
+      applyPlateTectonicsRegime(event.plateTectonicsOnsetMa, event.timeMa);
+    }
     // When the hub sends compute info on connection, update the toolbar indicator.
     if (event.computeMode !== undefined && event.computeDevice !== undefined) {
       shell.setComputeMode(event.computeMode === 'GPU', event.computeDevice, event.computeMemoryMb ?? 0, renderer.getWebGLRendererInfo());
@@ -1378,9 +1428,7 @@ const simSocket = api.createSimulationSocket({
     updateAgentStatuses(event.phase);
   },
   onTick: (event) => {
-    // Update time display on SignalR ticks too (when SignalR advance is used).
-    simTimeMa = event.timeMa;
-    shell.setSimTime(simTimeMa);
+    setSimTimeFromBackend(event.timeMa);
   },
   onFeaturesUpdated: (event) => {
     // Phase L6: merge changed labels into the renderer's cache.
@@ -1455,8 +1503,7 @@ function simTick(): void {
       // P0-1: No new tick from this request — skip bundle + perf telemetry, but still
       // sync time/tick from the response (concurrent tick may have advanced state).
       if (result.skipped) {
-        simTimeMa = result.timeMa;
-        shell.setSimTime(simTimeMa);
+        setSimTimeFromBackend(result.timeMa);
         shell.setTimelineCursor(4500 + simTimeMa);
         if (result.tickCount !== undefined) {
           totalTickCount = result.tickCount;
@@ -1466,8 +1513,7 @@ function simTick(): void {
         return;
       }
 
-      simTimeMa = result.timeMa;
-      shell.setSimTime(simTimeMa);
+      setSimTimeFromBackend(result.timeMa);
       shell.setTimelineCursor(4500 + simTimeMa);
       shell.setProgressText('');
 
@@ -1528,6 +1574,18 @@ function simTick(): void {
         }
         overlayWallMs = Math.round(performance.now() - overlayStart);
       }
+
+      if (shell.isLayerActive('plates')) {
+        const [plateData, sutureData] = await Promise.all([
+          api.getPlateMap(),
+          api.getSutureMap(),
+        ]);
+        renderer.updatePlateMap(new Uint16Array(plateData), GRID_SIZE);
+        renderer.updateSutureMap(new Uint8Array(sutureData), GRID_SIZE);
+      }
+
+      // Refresh event-layer type list (new deposits may appear after ticks).
+      void refreshEventLayerTypes();
 
       api.reportClientPerf('client_advance_cycle', {
         deltaMa,

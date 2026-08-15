@@ -115,6 +115,12 @@ public sealed class GeologicalContext
     /// <summary>Origin type of the mountain range: "fold-belt", "volcanic arc", or "hotspot shield".</summary>
     public string? MountainOriginType { get; init; }
 
+    /// <summary>True when the cell lies in a detected craton core (old shield, plate interior).</summary>
+    public bool IsCratonCore { get; init; }
+
+    /// <summary>True when the cell lies on an elevated plate-margin orogen belt.</summary>
+    public bool IsOrogenMargin { get; init; }
+
     // === Climate context ===
 
     /// <summary>Biome classification string inferred from temperature + precipitation + elevation.</summary>

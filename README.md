@@ -35,6 +35,10 @@ GeoTime uses a client-server architecture where all computation-heavy simulation
 - **Performance**: Adaptive tick rate, deterministic seeded PRNG, CPU/GPU compute paths
 - **UI**: Globe viewport, collapsible sidebar, layer overlays, geological timeline, inspect panel, URL seed sharing
 
+## Research
+
+- [Landmasses and plate boundaries](docs/research-landmass-plate-boundaries.md) — geological background for epoch-aware plate tectonics, proto-lithosphere labeling, and landmass–plate coupling (Plate–Landmass Realism P1–P8).
+
 ## Getting Started
 
 ### Backend (C# .NET)

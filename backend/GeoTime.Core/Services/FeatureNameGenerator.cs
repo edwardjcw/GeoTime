@@ -146,7 +146,8 @@ public static class FeatureNameGenerator
                 or FeatureType.TectonicPlate =>
                 (ContinentOnsets, ContinentNuclei, ContinentCodas, ContinentDescriptors),
             FeatureType.MountainRange or FeatureType.MountainPeak or FeatureType.Rift
-                or FeatureType.SubductionZone or FeatureType.ImpactBasin =>
+                or FeatureType.SubductionZone or FeatureType.Suture or FeatureType.ImpactBasin
+                or FeatureType.Craton or FeatureType.Orogen =>
                 (MountainOnsets, MountainNuclei, MountainCodas, MountainDescriptors),
             FeatureType.River or FeatureType.RiverDelta or FeatureType.Lake =>
                 (RiverOnsets, RiverNuclei, RiverCodas, RiverDescriptors),

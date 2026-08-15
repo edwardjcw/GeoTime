@@ -156,17 +156,23 @@ void main() {
 `;
 
 const plateVertexShader = /* glsl */ `
+uniform sampler2D uHeightMap;
+uniform float uDisplacementScale;
 varying vec2 vUv;
 void main() {
   vUv = uv;
-  // Slight offset outward to avoid z-fighting with the terrain mesh
-  vec3 pos = position * 1.0005;
+  float height = texture2D(uHeightMap, uv).r;
+  // Match terrain displacement so plates sit on the surface, not inside it.
+  vec3 pos = position + normal * (height * uDisplacementScale + 0.0025);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 }
 `;
 
 const plateFragmentShader = /* glsl */ `
 uniform sampler2D uPlateMap;
+uniform sampler2D uSutureMap;
+uniform float uMuted;
+uniform float uGridSize;
 varying vec2 vUv;
 
 // Hash a float into a pseudo-random colour
@@ -177,11 +183,42 @@ vec3 plateColor(float id) {
   return vec3(r, g, b);
 }
 
+float plateIdAt(vec2 uv) {
+  return texture2D(uPlateMap, uv).r * 65535.0;
+}
+
+bool isActiveBoundary(vec2 uv) {
+  float id = plateIdAt(uv);
+  if (id < 0.5) return false;
+  vec2 step = vec2(1.0 / uGridSize, 1.0 / uGridSize);
+  float idL = plateIdAt(uv + vec2(-step.x, 0.0));
+  float idR = plateIdAt(uv + vec2( step.x, 0.0));
+  float idU = plateIdAt(uv + vec2(0.0,  step.y));
+  float idD = plateIdAt(uv + vec2(0.0, -step.y));
+  return (idL > 0.5 && abs(idL - id) > 0.5)
+      || (idR > 0.5 && abs(idR - id) > 0.5)
+      || (idU > 0.5 && abs(idU - id) > 0.5)
+      || (idD > 0.5 && abs(idD - id) > 0.5);
+}
+
 void main() {
-  float id = texture2D(uPlateMap, vUv).r * 65535.0;
-  if (id < 0.5) discard; // No plate
+  float id = plateIdAt(vUv);
+  if (id < 0.5) discard;
   vec3 col = plateColor(id);
-  gl_FragColor = vec4(col, 0.35);
+  float alpha = mix(0.35, 0.12, uMuted);
+
+  float suture = texture2D(uSutureMap, vUv).r;
+  if (suture > 0.5) {
+  // Muted dashed suture (welded terrane boundary)
+    float dash = step(0.5, fract((vUv.x + vUv.y) * uGridSize * 0.25));
+    col = mix(col, vec3(0.55, 0.45, 0.35), 0.65);
+    alpha = mix(0.22, 0.10, uMuted) * dash;
+  } else if (isActiveBoundary(vUv)) {
+    col = mix(col, vec3(0.85, 0.35, 0.45), 0.55);
+    alpha = mix(0.55, 0.28, uMuted);
+  }
+
+  gl_FragColor = vec4(col, alpha);
 }
 `;
 
@@ -230,6 +267,7 @@ export class GlobeRenderer {
   private plateMesh: THREE.Mesh | null = null;
   private plateMaterial: THREE.ShaderMaterial | null = null;
   private plateTexture: THREE.DataTexture | null = null;
+  private sutureTexture: THREE.DataTexture | null = null;
 
   private biomeMesh: THREE.Mesh | null = null;
   private biomeMaterial: THREE.ShaderMaterial | null = null;
@@ -279,7 +317,12 @@ export class GlobeRenderer {
 
   constructor(container: HTMLElement) {
     // ── Renderer ──────────────────────────────────────────────────────────
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: 'high-performance',
+      preserveDrawingBuffer: true,
+    });
+    this.renderer.domElement.dataset.testid = 'globe-canvas';
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     container.appendChild(this.renderer.domElement);
@@ -402,9 +445,12 @@ export class GlobeRenderer {
 
     this.globeMaterial.uniforms.uHeightMap.value = this.heightTexture;
 
-    // Keep the biome overlay in sync with the terrain displacement.
+    // Keep overlays in sync with the terrain displacement.
     if (this.biomeMaterial) {
       this.biomeMaterial.uniforms.uHeightMap.value = this.heightTexture;
+    }
+    if (this.plateMaterial) {
+      this.plateMaterial.uniforms.uHeightMap.value = this.heightTexture;
     }
 
     // Save a CPU-side reference for first-person terrain height sampling.
@@ -441,9 +487,28 @@ export class GlobeRenderer {
     this.plateTexture.needsUpdate = true;
 
     if (!this.plateMesh) {
+      const emptySuture = new Float32Array(plateData.length);
+      this.sutureTexture = new THREE.DataTexture(
+        emptySuture,
+        gridSize,
+        gridSize,
+        THREE.RedFormat,
+        THREE.FloatType,
+      );
+      this.sutureTexture.magFilter = THREE.NearestFilter;
+      this.sutureTexture.minFilter = THREE.NearestFilter;
+      this.sutureTexture.wrapS = THREE.RepeatWrapping;
+      this.sutureTexture.flipY = true;
+      this.sutureTexture.needsUpdate = true;
+
       this.plateMaterial = new THREE.ShaderMaterial({
         uniforms: {
           uPlateMap: { value: this.plateTexture },
+          uSutureMap: { value: this.sutureTexture },
+          uHeightMap: { value: this.heightTexture },
+          uDisplacementScale: { value: DISPLACEMENT_SCALE },
+          uMuted: { value: 0.0 },
+          uGridSize: { value: gridSize },
         },
         vertexShader: plateVertexShader,
         fragmentShader: plateFragmentShader,
@@ -459,6 +524,36 @@ export class GlobeRenderer {
       this.plateMesh.visible = false;
     } else {
       this.plateMaterial!.uniforms.uPlateMap.value = this.plateTexture;
+      this.plateMaterial!.uniforms.uGridSize.value = gridSize;
+    }
+  }
+
+  /**
+   * Upload suture-cell mask for muted/dashed overlay rendering on the plate layer.
+   */
+  updateSutureMap(sutureData: Uint8Array, gridSize: number): void {
+    const floatData = new Float32Array(sutureData.length);
+    for (let i = 0; i < sutureData.length; i++) {
+      floatData[i] = sutureData[i] > 0 ? 1 : 0;
+    }
+
+    if (this.sutureTexture) this.sutureTexture.dispose();
+
+    this.sutureTexture = new THREE.DataTexture(
+      floatData,
+      gridSize,
+      gridSize,
+      THREE.RedFormat,
+      THREE.FloatType,
+    );
+    this.sutureTexture.magFilter = THREE.NearestFilter;
+    this.sutureTexture.minFilter = THREE.NearestFilter;
+    this.sutureTexture.wrapS = THREE.RepeatWrapping;
+    this.sutureTexture.flipY = true;
+    this.sutureTexture.needsUpdate = true;
+
+    if (this.plateMaterial) {
+      this.plateMaterial.uniforms.uSutureMap.value = this.sutureTexture;
     }
   }
 
@@ -540,6 +635,18 @@ export class GlobeRenderer {
   /** Returns the Three.js perspective camera for external projection use (e.g. label renderer). */
   getCamera(): THREE.PerspectiveCamera {
     return this.camera;
+  }
+
+  /** WebGL canvas used for rendering and orbit-control input. */
+  getDomElement(): HTMLCanvasElement {
+    return this.renderer.domElement;
+  }
+
+  /** Enable or disable orbit (drag-to-rotate) controls. */
+  setOrbitControlsEnabled(enabled: boolean): void {
+    if (!this._isFirstPerson) {
+      this.controls.enabled = enabled;
+    }
   }
 
   /**
@@ -690,9 +797,17 @@ export class GlobeRenderer {
   setPlateOverlayVisible(visible: boolean): void {
     if (this.plateMesh) {
       this.plateMesh.visible = visible;
-      if (visible && !this.plateMesh.parent) {
-        this.scene.add(this.plateMesh);
+      if (visible) {
+        this._ensureOverlayInScene(this.plateMesh);
+        this.plateMesh.renderOrder = 2;
       }
+    }
+  }
+
+  /** Dim plate overlay before plate-tectonics onset (proto-lithosphere era). */
+  setPlateOverlayMuted(muted: boolean): void {
+    if (this.plateMaterial) {
+      this.plateMaterial.uniforms.uMuted.value = muted ? 1.0 : 0.0;
     }
   }
 
@@ -700,10 +815,19 @@ export class GlobeRenderer {
   setBiomeOverlayVisible(visible: boolean): void {
     if (this.biomeMesh) {
       this.biomeMesh.visible = visible;
-      if (visible && !this.biomeMesh.parent) {
-        this.scene.add(this.biomeMesh);
+      if (visible) {
+        this._ensureOverlayInScene(this.biomeMesh);
+        this.biomeMesh.renderOrder = 1;
       }
     }
+  }
+
+  /** Add an overlay mesh to the scene and move it to the top of the draw list. */
+  private _ensureOverlayInScene(mesh: THREE.Mesh): void {
+    if (mesh.parent) {
+      mesh.parent.remove(mesh);
+    }
+    this.scene.add(mesh);
   }
 
   /**

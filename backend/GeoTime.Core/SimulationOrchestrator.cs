@@ -65,6 +65,9 @@ public sealed class SimulationOrchestrator : IDisposable
     /// <summary>Active simulation grid dimension (cells per edge).</summary>
     public int GridSize => _gridSize;
 
+    /// <summary>User-tunable planet configuration (plate-tectonics onset, etc.).</summary>
+    public SimulationPlanetConfig PlanetConfig { get; } = new();
+
     /// <summary>Prevents concurrent AdvanceSimulation calls from corrupting shared state.</summary>
     private readonly SemaphoreSlim _advanceLock = new(1, 1);
 
@@ -110,13 +113,16 @@ public sealed class SimulationOrchestrator : IDisposable
     public ComputeInfo GetComputeInfo() => _gpu.Info;
 
     /// <summary>Generate a new planet with the given seed.</summary>
-    public PlanetGeneratorResult GeneratePlanet(uint seed)
+    public PlanetGeneratorResult GeneratePlanet(uint seed, SimulationPlanetConfig? config = null)
     {
         _currentSeed = seed;
+        if (config != null)
+            PlanetConfig.PlateTectonicsOnsetMa = config.PlateTectonicsOnsetMa;
+
         State = new SimulationState(_gridSize);
 
         var gen = new PlanetGenerator(seed);
-        var result = gen.Generate(State);
+        var result = gen.Generate(State, PlanetConfig);
         _planetResult = result;
 
         EventLog.Clear();
@@ -125,6 +131,7 @@ public sealed class SimulationOrchestrator : IDisposable
         _ticksSinceLastDetection = FeatureDetectionInterval - 1; // S6: first increment reaches threshold → detection runs on tick 1
 
         _tectonic = new TectonicEngine(Bus, EventLog, seed, 0.1, _gpu);
+        _tectonic.PlateTectonicsOnsetMa = PlanetConfig.PlateTectonicsOnsetMa;
         _tectonic.Initialize(result.Plates, result.Hotspots, result.Atmosphere, State);
 
         _surface = new SurfaceEngine(Bus, EventLog, seed, _gridSize, 0.5, _gpu);
@@ -148,8 +155,26 @@ public sealed class SimulationOrchestrator : IDisposable
         _featureDetector.Detect(State, result.Plates, result.Hotspots,
             EventLog.GetAll(), seed, 0L);
 
+        // Populate climate / surface / vegetation maps for layer overlays immediately
+        // (without advancing sim time or tick count).
+        BootstrapDerivedMaps();
+
         Bus.Emit("PLANET_GENERATED", new { seed, timeMa = Clock.T });
         return result;
+    }
+
+    /// <summary>
+    /// Run one engine-tick of surface, atmosphere, and vegetation processing so
+    /// temperature, precipitation, and biomass maps are non-trivial before the
+    /// first simulation advance.  Does not change <see cref="SimClock.T"/> or
+    /// <see cref="TickCount"/>.
+    /// </summary>
+    private void BootstrapDerivedMaps()
+    {
+        const double dt = 1.0; // matches engine minTick thresholds
+        _surface?.Tick(Clock.T, dt);
+        _atmosphere?.Tick(Clock.T, dt);
+        _vegetation?.Tick(Clock.T, dt);
     }
 
     /// <summary>Advance the simulation by deltaMa million years.</summary>
@@ -195,7 +220,9 @@ public sealed class SimulationOrchestrator : IDisposable
         Clock.T += deltaMa;
         TickCount++;
 
-        // Tectonic must run first (it updates boundaries, heights, plate map)
+        // Tectonic must run first (it updates boundaries, heights, plate map).
+        // BF-2: when time first crosses PlateTectonicsOnsetMa, TectonicEngine applies a
+        // one-time plate-coupled crust transition before advection.
         onProgress?.Invoke("tectonic");
         sw.Restart();
         _tectonic!.Tick(Clock.T, deltaMa);
@@ -498,6 +525,12 @@ public sealed class SimulationOrchestrator : IDisposable
     /// <summary>Get current simulation time.</summary>
     public double GetCurrentTime() => Clock.T;
 
+    /// <summary>Plate-tectonics onset time (Ma). Lateral advection begins at/after this time.</summary>
+    public double GetPlateTectonicsOnsetMa() => PlanetConfig.PlateTectonicsOnsetMa;
+
+    /// <summary>Whether lateral plate motion is active at the current simulation time.</summary>
+    public bool IsPlateTectonicsActive() => PlanetConfig.IsPlateTectonicsActive(Clock.T);
+
     /// <summary>Get the current seed.</summary>
     public uint GetCurrentSeed() => _currentSeed;
 
@@ -665,10 +698,11 @@ public sealed class SimulationOrchestrator : IDisposable
         //   SoilDepth, Temperature, Precipitation, WindU, WindV, CloudCover, Biomass,
         //   BiomatterMap, OrganicCarbonMap)
         //   + byte arrays (RockType, SoilType, CloudType)
-        //   + ushort array (PlateMap)
+        //   + ushort arrays (PlateMap, TerraneMap)
+        //   + byte array (SutureMap)
         const int floatArrays = 12; // HeightMap, CrustThickness, RockAge, SoilDepth, Temperature, Precipitation, WindU, WindV, CloudCover, Biomass, BiomatterMap, OrganicCarbonMap
-        const int byteArrays = 3;   // RockType, SoilType, CloudType
-        const int ushortArrays = 1; // PlateMap
+        const int byteArrays = 4;   // RockType, SoilType, CloudType, SutureMap
+        const int ushortArrays = 2; // PlateMap, TerraneMap
         var totalSize = 8 + floatArrays * cellCount * 4 + byteArrays * cellCount + ushortArrays * cellCount * 2;
 
         var data = new byte[totalSize];
@@ -700,8 +734,14 @@ public sealed class SimulationOrchestrator : IDisposable
         Buffer.BlockCopy(State.CloudTypeMap, 0, data, offset, cellCount);
         offset += cellCount;
 
-        // Ushort array (PlateMap)
+        // Ushort arrays (PlateMap, TerraneMap)
         Buffer.BlockCopy(State.PlateMap, 0, data, offset, cellCount * 2);
+        offset += cellCount * 2;
+        Buffer.BlockCopy(State.TerraneMap, 0, data, offset, cellCount * 2);
+        offset += cellCount * 2;
+
+        // SutureMap (P4)
+        Buffer.BlockCopy(State.SutureMap, 0, data, offset, cellCount);
 
         // ── Phase L6: append FeatureRegistry as JSON after the binary block ──
         // Layout: [existing binary][4 bytes: JSON length][JSON bytes]
@@ -751,6 +791,64 @@ public sealed class SimulationOrchestrator : IDisposable
         // Ushort array (PlateMap)
         Buffer.BlockCopy(data, offset, State.PlateMap, 0, cellCount * 2);
         offset += cellCount * 2;
+
+        // TerraneMap + SutureMap (optional — added P3/P4; absent in older snapshots)
+        var binaryWithoutTerrane = 8
+            + 12 * cellCount * 4
+            + 3 * cellCount
+            + cellCount * 2;
+        var binaryWithTerrane = binaryWithoutTerrane + cellCount * 2;
+        var binaryWithSuture = binaryWithTerrane + cellCount;
+        if (data.Length >= binaryWithSuture + 4)
+        {
+            var jsonLenAtSuture = BitConverter.ToInt32(data, binaryWithSuture);
+            if (jsonLenAtSuture >= 0 && binaryWithSuture + 4 + jsonLenAtSuture == data.Length)
+            {
+                Buffer.BlockCopy(data, offset, State.TerraneMap, 0, cellCount * 2);
+                offset += cellCount * 2;
+                Buffer.BlockCopy(data, offset, State.SutureMap, 0, cellCount);
+                offset = binaryWithSuture;
+            }
+            else
+            {
+                Array.Clear(State.TerraneMap);
+                Array.Clear(State.SutureMap);
+            }
+        }
+        else if (data.Length >= binaryWithTerrane + 4)
+        {
+            var jsonLenAtNew = BitConverter.ToInt32(data, binaryWithTerrane);
+            if (jsonLenAtNew >= 0 && binaryWithTerrane + 4 + jsonLenAtNew == data.Length)
+            {
+                Buffer.BlockCopy(data, offset, State.TerraneMap, 0, cellCount * 2);
+                offset = binaryWithTerrane;
+                Array.Clear(State.SutureMap);
+            }
+            else
+            {
+                Array.Clear(State.TerraneMap);
+                Array.Clear(State.SutureMap);
+            }
+        }
+        else if (data.Length >= binaryWithoutTerrane + 4)
+        {
+            var jsonLenAtOld = BitConverter.ToInt32(data, binaryWithoutTerrane);
+            if (jsonLenAtOld >= 0 && binaryWithoutTerrane + 4 + jsonLenAtOld == data.Length)
+            {
+                Array.Clear(State.TerraneMap);
+                Array.Clear(State.SutureMap);
+            }
+            else
+            {
+                Array.Clear(State.TerraneMap);
+                Array.Clear(State.SutureMap);
+            }
+        }
+        else
+        {
+            Array.Clear(State.TerraneMap);
+            Array.Clear(State.SutureMap);
+        }
 
         // ── Phase L6: optional FeatureRegistry JSON appended after binary block ──
         if (offset + 4 <= data.Length)

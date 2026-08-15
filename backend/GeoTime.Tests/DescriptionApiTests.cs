@@ -162,8 +162,9 @@ public class DescriptionApiTests(WebApplicationFactory<GeoTime.Api.Program> fact
 
         var types = await response.Content.ReadFromJsonAsync<string[]>();
         Assert.NotNull(types);
-        // May be empty if no extraordinary events have been deposited yet
-        // but the array itself must exist
+        Assert.NotEmpty(types);
+        Assert.Contains("ImpactEjecta", types);
+        Assert.Contains("VolcanicAsh", types);
         foreach (var t in types)
         {
             Assert.False(string.IsNullOrWhiteSpace(t));

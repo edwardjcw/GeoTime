@@ -466,7 +466,104 @@ cd backend && dotnet run --project GeoTime.Diagnostic
 
 ---
 
+## Plate–Landmass Realism (2026-07-08)
+
+**Epic:** Epoch-aware tectonics, plate-coupled crust generation, terrane/suture modeling, and UI labeling to fix landmasses crossing plate boundaries at simulation start.
+
+**Plan source:** [`docs/research-landmass-plate-boundaries.md`](research-landmass-plate-boundaries.md) § Potential Application Changes (P1–P8).
+
+**Sequence:** P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8. P5 is a lower-cost alternative to parts of P2 (post-gen coherence pass vs full generator coupling); implement P2 first per priority; P5 may partially substitute if P2 scope is deferred.
+
+**Integration branch:** `feature/plate-landmass-realism` (wave 1 coordinator).
+
+| ID | Task | Depends | Acceptance criteria | Status |
+|----|------|---------|---------------------|--------|
+| P1 | Epoch-aware tectonic regime | — | Configurable plate-tectonics onset (default ~3.8 Ga, user-tunable). Before onset: no lateral `AdvectPlates`; stagnant-lid / vertical tectonics only; plate overlay dimmed or disabled; optional proto-lithosphere visualization. After onset: enable advection and boundary classification. Backend tests prove pre-onset skips advection and post-onset runs it. | ✅ done |
+| P2 | Plate-coupled continental crust generation | P1 | For plate-tectonic-era starts: continental seeds placed within plate interiors (e.g. plate-center flood-fill constrained by plate ID); boundaries start oceanic, not cutting through elevated continental noise. Tests verify no connected landmass spans >1 plate at t=0 when onset ≤ start time. | ✅ done |
+| P3 | Terrane ID / crust provenance tracking | P2 | Separate `terrane ID` from plate ID; continental seeds get terrane IDs at generation; accretion preserves terrane IDs; feature detector reports suture where terrane IDs meet within a continent. Tests for terrane assignment and suture detection. | ✅ done |
+| P4 | Suture formation on continental collision | P3 | `applyContinentalCollision` records suture cells (map or event log); optional plate ID merge after prolonged collision; sutures render distinct from active boundaries (dashed/muted). Tests for suture metadata on collision. | ✅ done |
+| P5 | Post-generation coherence pass | P1 (alt. P2) | After `ClassifyPlatesAndCrust`, for each elevation-connected land component: if >X% cells share one plate, reassign outliers to dominant plate (or coastal transition). Mirrors `ConsolidatePlateFragments` keyed on land components. Tests for outlier reassignment. | ✅ done |
+| P6 | Craton placement heuristic | P1, P3 (soft) | `FeatureDetectorService` flags plate-interior old-rock cells as craton candidates; boundary∩elevated crust as orogen/margin; feeds description templates. Tests for craton vs margin classification. | ✅ done |
+| P7 | Time-varying plate rigidity / mobility | P1 | Scale `AngularVelocity.Rate` by simulation age (low Hadean → ramp Archean); optional boundary localization ramp. Tests prove reduced motion before onset and scaled rates after. | ✅ done |
+| P8 | Documentation and UI labeling | P1 | Plate overlay labeled "Lithospheric plates (active after X Ga)" before onset; tooltip on Hadean crust; README link to research doc. Vitest/E2E or doc tests as applicable. | ✅ done |
+
+**Proof gates (effort complete):** focused tests per item; then coordinator-granted broad gates per `docs/instructions.md` (`dotnet build`, `dotnet test`, `npm run build`, `npm run test`).
+
+### Effort proof (2026-07-08, branch `feature/plate-landmass-realism`)
+
+| Gate | Result | Counts / duration |
+|------|--------|-------------------|
+| `cd backend && dotnet build` | **PASS** | 0 errors, 0 warnings, 1.55s |
+| `cd backend && dotnet test "GeoTime.Tests/GeoTime.Tests.csproj"` | **FAIL** | 377 passed, **79 failed**, 0 skipped, 456 total, 30s |
+| `dotnet test --filter "FullyQualifiedName~PlateLandmassRealism"` | **PASS** (after P3 test fix) | **38/38** passed, 6s |
+| `npm run build` | **PASS** | 2.17s (tsc + vite) |
+| `npm run test` | **PASS** | **462/462** passed (35 files), 24.2s |
+
+**Backend full-suite failures (not plate-landmass):** 78/79 are `SessionPerformanceLogger` `FileMode.CreateNew` collisions when parallel `WebApplicationFactory` fixtures share the same `geotime-session-*-pid*.jsonl` log path (`backend/GeoTime.Api/logs/`). One additional failure (`PlateAdvectionTests.P1_1_AdvectionPhaseTimings_PopulatedAfterTick`) is sub-millisecond timing flakiness (`ADVECT_PHASE_STATS` log gated on `totalMs > 0`).
+
+**Plate-landmass repair:** `P3_TerraneMap_AdvectsWithCells` failed on first broad run because `deltaMa=5` at `Rate=80` produced ~360° rotation on the 16×16 periodic grid, landing terrane markers on the same indices. Fixed test to use 10× `Tick(100 + i*0.5, 0.5)` (matches `PlateAdvectionTests` pattern). Focused filter now 38/38.
+
+**Residual risk:** Full backend suite remains red until `SessionPerformanceLogger` collision is resolved (pre-existing infra issue, documented in Performance + Layer Overlay Baseline).
+
+---
+
+## Branch Finish Blockers (2026-07-20)
+
+**Epic:** User-reported blockers preventing finish of `feature/plate-landmass-realism`.
+**Integration branch:** `feature/plate-landmass-realism`
+**Visual evidence:** User screenshot shows sharp vertical (longitudinal/meridian) color/data seam (cool left / hot right) and many small landmasses — primary for BF-1, supporting for BF-2. User called it "latitudinal" but the visible line is vertical (meridian seam).
+
+**Context:** Plate–Landmass P1–P8 are ✅ done on this branch; items below are finish blockers remaining before branch completion.
+
+| ID | Task | Depends | Acceptance criteria | Status |
+|----|------|---------|---------------------|--------|
+| BF-1 | Globe meridian seam/wall | — | No hard vertical color/data barrier across a meridian; features/data wrap correctly across lon=±180 and UV seam. Root cause classified (renderer UV wrap vs sim grid wrap vs texture packing). Focused tests + residual risk recorded. | ✅ |
+| BF-2 | Continent coalescence after tectonics onset | — | After plate tectonics onset, landmasses can grow/coalesce toward continent scale (not stuck as island archipelago only). Root cause classified (generation scale, collision/merge, coherence, terrane). Focused tests + residual risk. | ✅ |
+| BF-3 | Early-planet molten / surface water onset | — | Clear answer in status: whether sim starts post-molten with oceans, or should begin molten with little surface water — grounded in research doc + PlanetGenerator / epoch behavior. Doc answer OR implementation of early molten + delayed hydrosphere if in scope. | ✅ done (documented) |
+
+**Evidence:**
+- BF-1: root cause `sim_grid_wrap` (HeightMap col0 vs col gs-1 cliff ~5 km → climate wall). Fix: `GridSeamSync` — same-plate average / prefer-land; different plates left alone (subduction). Hooks: post-`PlanetGenerator.Generate`, post-`AdvectPlates` commit, end of `TectonicEngine.Tick`/`TickAsync`. Proof: `dotnet build` PASS; `dotnet test --filter "FullyQualifiedName~AntimeridianSeamBF1|FullyQualifiedName~PlateLandmassRealism"` **45/45 PASS**. Residual: real plate boundaries on antimeridian keep cliffs; soil/biome/precip not seam-synced (follow later ticks). No frontend shader change (RepeatWrapping OK). Unreal: same HeightMap, no API change.
+- BF-2: root cause **mixed** (P2 skipped on default Hadean start → advection shreds noise crust; collision uplift boundary-only / plate merge ≠ elevation weld; modest terrane scale). Fix: **A** one-time onset crust transition + **B** larger terranes + **C** continental margin welding. Proof below. Residual: erosion still removes land over Gyr; 512-grid magnitudes may differ.
+- BF-3: document_only — current t=0 is solid crust + ~70% ocean; no molten/hydrosphere flags; molten epic deferred. FAQ answer added.
+
+### BF-1 — Antimeridian seam/wall ✅
+
+**Root cause (confirmed):** `sim_grid_wrap` — discontinuous HeightMap at lon wrap (col 0 vs gs-1); climate follows height. Renderer UV zipper already OK.
+
+**Sync strategy:** same plate + same domain → average height/crust/age; same plate + land/ocean → copy land onto ocean; different plates → unchanged.
+
+**Files:** `Proc/GridSeamSync.cs` (new), `PlanetGenerator.cs`, `TectonicEngine.cs`, `AntimeridianSeamBF1Tests.cs`.
+
+### BF-2 — Continent coalescence after tectonics onset ✅
+
+**Root cause (confirmed):** mixed — (1) default `INITIAL_TIME=-4500` / `PlateTectonicsOnsetMa=-3800` never runs P2 at gen; (2) cont-cont collision uplifts boundary strips only; plate-ID merge after 30 Ma does not weld elevation; (3) P2 terrane scale was modest (30% skip, areaFraction 0.10–0.38).
+
+**Fix (A+B+C):**
+- **A** One-time `ApplyPlateTectonicsOnsetTransition` when advection first activates (preserves P1 stagnant-lid pre-onset noise; repartitions into plate-interior terranes before shredding). Hook in `TectonicEngine.Tick`/`TickAsync`; skipped if P2 already ran at gen.
+- **B** Terrane scale: skip 0.30→0.12, areaFraction 0.20–0.48, second seed on plates with area ≥8%.
+- **C** `WeldConvergentContinentalMargins`: stronger cont-cont uplift, fill ocean cells pinched between continental land of contacting plates, weld gaps after plate-ID merge.
+
+**Files:** `PlanetGenerator.cs`, `TectonicEngine.cs`, `SimulationOrchestrator.cs` (onset comment), `PlateLandmassRealismBF2Tests.cs`.
+
+**Thresholds / proof:**
+| Metric | Pre-fix diag (128-grid, seed 42, ~−3000) | Post-fix (64-grid, seed 42, t=−3300 = 500 Ma post-onset) |
+|--------|-------------------------------------------|----------------------------------------------------------|
+| Components ≥1M km² | 1 (then 0 by −2500) | **9** |
+| Largest component | ~1.9M km² | **~48M km²** |
+| Total land | ~20M km² (collapsing) | **~106M km²** |
+
+Acceptance gate in tests: ≥2 components ≥1M km² **or** largest ≥2M km² after 500 Ma post-onset on 64-grid.
+
+**Proof:** `dotnet build` PASS; focused filter BF2 + PlateLandmassRealism + AntimeridianSeamBF1 **50/50 PASS**.
+
+**Residual risk:** erosion/isostasy still atrits land over longer runs (not redesigned); full 512-grid magnitudes may differ; welding helps coalescence but does not create unbounded supercontinents; BF-1 seam sync preserved.
+
+---
+
 ## FAQ
+
+**Q: Does the simulation start molten, or with oceans already?**
+A: **It starts post-molten with surface oceans.** At t = −4500 Ma the generator builds solid crust (oceanic/continental thicknesses), normalizes topography to ~70% ocean, and bootstraps climate—there is no magma-ocean phase and no delayed hydrosphere onset. Plate-tectonics onset (default −3800 Ma) only gates lateral plate motion, not water or melting. Geologically, a true formation-time Earth would be largely molten with little stable liquid surface water until after crust solidification; GeoTime intentionally skips that and begins as a cooled, ocean-bearing world. A molten start + delayed oceans remains a future epic, not part of the plate–landmass realism work.
 
 **Q: What is "Tris" in the HUD?**
 A: "Tris" = Triangles. The number of triangles the 3D globe renderer submits to the WebGL GPU each frame. Useful for monitoring rendering performance.

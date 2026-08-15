@@ -3,6 +3,14 @@
 // cross-section panel, and a semi-transparent HUD bar.  All DOM is created
 // programmatically.
 
+import {
+  formatPlateTectonicsOnsetGa,
+  isPrePlateTectonicsOnset,
+  plateLayerButtonLabel,
+  plateLayerButtonTooltip,
+  plateTectonicsOnsetHelpText,
+} from '../plate-tectonics-labels';
+
 export interface InspectInfo {
   lat: number;
   lon: number;
@@ -41,6 +49,8 @@ export class AppShell {
   private newPlanetBtn: HTMLButtonElement;
   private rateSlider: HTMLInputElement;
   private rateLabel: HTMLSpanElement;
+  private plateOnsetInput: HTMLInputElement;
+  private _plateTectonicsOnsetMa = -3800;
 
   // ── Cross-Section elements ──────────────────────────────────────────────
   private drawBtn: HTMLButtonElement;
@@ -765,6 +775,44 @@ export class AppShell {
     this.newPlanetBtn.addEventListener('click', () => this.newPlanetCb?.());
     this.sidebar.appendChild(this.newPlanetBtn);
 
+    // -- Plate-tectonics onset (Ga ago; used on next planet generation)
+    const onsetGroup = el('div', {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '4px',
+      marginTop: '4px',
+    });
+    const onsetLabel = document.createElement('span');
+    onsetLabel.textContent = 'Plate tectonics onset (Ga ago)';
+    onsetLabel.title = plateTectonicsOnsetHelpText();
+    onsetLabel.style.opacity = '0.6';
+    onsetLabel.style.fontSize = '11px';
+    const onsetHelp = document.createElement('span');
+    onsetHelp.textContent = 'Hadean: no modern plates — see docs/research-landmass-plate-boundaries.md';
+    onsetHelp.title = plateTectonicsOnsetHelpText();
+    Object.assign(onsetHelp.style, {
+      fontSize: '10px',
+      opacity: '0.5',
+      lineHeight: '1.3',
+    });
+    this.plateOnsetInput = document.createElement('input');
+    this.plateOnsetInput.type = 'number';
+    this.plateOnsetInput.min = '0.5';
+    this.plateOnsetInput.max = '4.5';
+    this.plateOnsetInput.step = '0.1';
+    this.plateOnsetInput.value = '3.8';
+    Object.assign(this.plateOnsetInput.style, {
+      width: '100%',
+      background: 'rgba(255,255,255,0.06)',
+      color: '#ddd',
+      border: '1px solid rgba(255,255,255,0.15)',
+      borderRadius: '4px',
+      padding: '4px 6px',
+      fontSize: '12px',
+    });
+    onsetGroup.append(onsetLabel, this.plateOnsetInput, onsetHelp);
+    this.sidebar.appendChild(onsetGroup);
+
     // -- Save / Load state buttons
     const saveLoadRow = el('div', { display: 'flex', gap: '6px' });
     this.saveStateBtn = document.createElement('button');
@@ -881,8 +929,7 @@ export class AppShell {
     this._eventLayerToggleBtn.addEventListener('click', () => {
       this._eventLayerActive = !this._eventLayerActive;
       this._eventLayerToggleBtn.style.background = this._eventLayerActive ? '#a62' : 'rgba(255,255,255,0.08)';
-      // Show the dropdown whenever event layers is active (even if no types yet).
-      this._eventLayerSelect.style.display = this._eventLayerActive && this._eventLayerSelect.options.length > 0 ? 'block' : 'none';
+      this._eventLayerSelect.style.display = this._eventLayerActive ? 'block' : 'none';
       const type = this._eventLayerActive ? (this._eventLayerSelect.value || null) : null;
       this._eventLayerChangeCb?.(type);
     });
@@ -1109,6 +1156,34 @@ export class AppShell {
     } else {
       this.timeEl.textContent = `Time: ${timeMa.toFixed(3)} Ma`;
     }
+    this.setPlateTectonicsRegime(this._plateTectonicsOnsetMa, timeMa);
+  }
+
+  /** Plate-tectonics onset in Ga ago (positive), for planet generation. */
+  getPlateTectonicsOnsetGa(): number {
+    const val = Number(this.plateOnsetInput.value);
+    return Number.isFinite(val) && val > 0 ? val : 3.8;
+  }
+
+  /** Update plate layer toggle label/dimming for pre-onset (proto-lithosphere) era. */
+  setPlateTectonicsRegime(onsetMa: number, currentTimeMa: number): void {
+    const onsetChanged = onsetMa !== this._plateTectonicsOnsetMa;
+    this._plateTectonicsOnsetMa = onsetMa;
+    const onsetGa = formatPlateTectonicsOnsetGa(onsetMa);
+    const preOnset = isPrePlateTectonicsOnset(currentTimeMa, onsetMa);
+    const platesBtn = this.layerToggles.get('plates');
+    if (platesBtn) {
+      platesBtn.textContent = plateLayerButtonLabel(onsetMa, currentTimeMa);
+      platesBtn.style.opacity = preOnset ? '0.45' : '1';
+      platesBtn.title = plateLayerButtonTooltip(onsetMa, currentTimeMa);
+    }
+    if (onsetChanged) {
+      this.plateOnsetInput.value = onsetGa;
+    }
+  }
+
+  isPlateTectonicsPreOnset(currentTimeMa: number): boolean {
+    return isPrePlateTectonicsOnset(currentTimeMa, this._plateTectonicsOnsetMa);
   }
 
   setPaused(paused: boolean): void {
@@ -1211,6 +1286,25 @@ export class AppShell {
     }
   }
 
+  /** Whether a layer overlay toggle is currently active. */
+  isLayerActive(name: string): boolean {
+    return this.activeLayers.has(name);
+  }
+
+  /**
+   * Update a layer button's active state without firing the toggle callback.
+   * Used when switching between mutually exclusive overlays.
+   */
+  setLayerActive(name: string, active: boolean): void {
+    if (active) {
+      this.activeLayers.add(name);
+    } else {
+      this.activeLayers.delete(name);
+    }
+    const btn = this.layerToggles.get(name);
+    if (btn) btn.style.background = active ? '#2a6' : 'rgba(255,255,255,0.08)';
+  }
+
   /**
    * Programmatically deactivate a layer (e.g., when play is clicked).
    * Updates the button visual state and fires the toggle callback.
@@ -1286,9 +1380,15 @@ export class AppShell {
   }
 
   /** Set the draw button state (active mode). */
-  setDrawMode(active: boolean): void {
+  setDrawMode(active: boolean, pointCount = 0): void {
     this.drawBtn.style.background = active ? '#c84' : 'rgba(255,255,255,0.08)';
-    this.drawBtn.textContent = active ? '✏️ Click Globe to Draw' : '✏️ Draw Cross-Section';
+    if (!active) {
+      this.drawBtn.textContent = '✏️ Draw Cross-Section';
+    } else if (pointCount >= 1) {
+      this.drawBtn.textContent = `✏️ Click 2nd Point (${pointCount}/2)`;
+    } else {
+      this.drawBtn.textContent = '✏️ Click 1st Point on Globe';
+    }
   }
 
   // ── Inspect Panel API ──────────────────────────────────────────────────
@@ -1548,7 +1648,9 @@ export class AppShell {
     this._eventLayerSelect.innerHTML = '';
     const placeholder = document.createElement('option');
     placeholder.value = '';
-    placeholder.textContent = types.length === 0 ? '— no event types yet —' : '— select type —';
+    placeholder.textContent = types.length === 0 ? '— no event types —' : '— select type —';
+    placeholder.disabled = true;
+    placeholder.selected = true;
     this._eventLayerSelect.appendChild(placeholder);
     for (const t of types) {
       const opt = document.createElement('option');
@@ -1556,7 +1658,6 @@ export class AppShell {
       opt.textContent = t;
       this._eventLayerSelect.appendChild(opt);
     }
-    // Dropdown is visible whenever the event layers toggle is active.
     this._eventLayerSelect.style.display = this._eventLayerActive ? 'block' : 'none';
   }
 
@@ -1797,10 +1898,13 @@ export class AppShell {
     this._advancedViewContainer.style.display = this._advancedViewOpen ? 'flex' : 'none';
     this._advancedViewBtn.textContent = this._advancedViewOpen ? '▼ Advanced View' : '▶ Advanced View';
     if (this._advancedViewOpen) {
-      // Enlarge log panel for graphs
       this.logPanel.style.minWidth = '360px';
       this.logPanel.style.maxHeight = '700px';
-      this._renderAdvancedGraphs();
+      // Defer chart draw until the panel has laid out (canvas clientWidth is 0 while hidden).
+      requestAnimationFrame(() => {
+        this._renderAdvancedGraphs();
+        this._updateAdvancedLog();
+      });
     } else {
       this.logPanel.style.minWidth = '280px';
       this.logPanel.style.maxHeight = '420px';
@@ -1906,7 +2010,7 @@ export class AppShell {
     ctx.clearRect(0, 0, w, h);
 
     const data = this._tickHistory;
-    if (data.length < 2) {
+    if (data.length < 1) {
       ctx.fillStyle = '#666';
       ctx.font = '10px monospace';
       ctx.fillText('Waiting for tick data…', 10, h / 2);
@@ -1915,7 +2019,7 @@ export class AppShell {
 
     // Find max total for Y-axis scaling
     const maxTotal = Math.max(1, ...data.map(d => d.totalMs));
-    const barW = Math.max(2, (w - 30) / data.length);
+    const barW = Math.max(2, (w - 30) / Math.max(1, data.length));
 
     const agents: Array<{ key: keyof typeof data[0]; color: string; label: string }> = [
       { key: 'biomatterMs', color: '#8b5cf6', label: 'Biomatter' },
@@ -1971,7 +2075,7 @@ export class AppShell {
     ctx.clearRect(0, 0, w, h);
 
     const data = this._tickHistory;
-    if (data.length < 2) {
+    if (data.length < 1) {
       ctx.fillStyle = '#666';
       ctx.font = '10px monospace';
       ctx.fillText('Waiting for tick data…', 10, h / 2);
@@ -1979,7 +2083,7 @@ export class AppShell {
     }
 
     const maxMs = Math.max(1, ...data.map(d => d.totalMs));
-    const stepX = (w - 30) / (data.length - 1);
+    const stepX = data.length > 1 ? (w - 30) / (data.length - 1) : 0;
 
     // Threshold zones
     const thresholds = [

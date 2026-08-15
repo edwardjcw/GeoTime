@@ -275,19 +275,48 @@ public static class DescriptionTemplateEngine
     {
         var paras = new List<string>();
 
-        paras.Add(
-            $"{name} is an ancient crustal fragment that cratonised approximately {ctx.Cell.RockAge:F0} Ma. " +
-            $"Its stable shield nucleus, underlain by thick ({ctx.Cell.CrustThickness:F1} km) " +
-            $"lithospheric keel, has survived multiple supercontinent assemblies and dispersals " +
-            $"over {ctx.SimAgeDescription}. Active orogenic belts along its margins record " +
-            $"ongoing plate convergence at {ctx.ConvergenceRateCmPerYear:F1} cm/yr."
-        );
+        if (ctx.IsCratonCore)
+        {
+            paras.Add(
+                $"{name} exposes a cratonic shield nucleus with {ctx.Cell.RockAge:F0}-Ma basement " +
+                $"underlain by thick ({ctx.Cell.CrustThickness:F1} km) lithospheric keel. " +
+                $"This plate-interior core lies far from active margins and has remained " +
+                $"tectonically stable over {ctx.SimAgeDescription}."
+            );
+        }
+        else if (ctx.IsOrogenMargin)
+        {
+            paras.Add(
+                $"{name} lies along an active orogenic margin where elevated crust " +
+                $"({ctx.Cell.Height:F0} m) records collisional thickening at the plate boundary, " +
+                $"approximately {ctx.DistanceToPlateMarginKm:F0} km from the nearest margin. " +
+                $"Convergence proceeds at {ctx.ConvergenceRateCmPerYear:F1} cm/yr."
+            );
+        }
+        else
+        {
+            paras.Add(
+                $"{name} is an ancient crustal fragment that cratonised approximately {ctx.Cell.RockAge:F0} Ma. " +
+                $"Its stable shield nucleus, underlain by thick ({ctx.Cell.CrustThickness:F1} km) " +
+                $"lithospheric keel, has survived multiple supercontinent assemblies and dispersals " +
+                $"over {ctx.SimAgeDescription}. Active orogenic belts along its margins record " +
+                $"ongoing plate convergence at {ctx.ConvergenceRateCmPerYear:F1} cm/yr."
+            );
+        }
 
         paras.Add(
-            $"Exposed basement rocks at this sampling point are {RockTypeLabel((int)ctx.Cell.RockType)}, " +
-            $"representative of the {ctx.Cell.RockAge:F0}-Ma continental crust. " +
-            $"Multiple generations of deformation fabrics overprint the shield, recording " +
-            $"successive collisional orogenies that welded terranes onto the cratonic margin."
+            ctx.IsCratonCore
+                ? $"Exposed basement rocks are {RockTypeLabel((int)ctx.Cell.RockType)}, typical of " +
+                  $"a deeply eroded craton where deformation localized in surrounding mobile belts " +
+                  $"rather than the shield interior."
+                : ctx.IsOrogenMargin
+                    ? $"Deformation fabrics at this margin sample {RockTypeLabel((int)ctx.Cell.RockType)} " +
+                      $"from {ctx.Cell.RockAge:F0}-Ma crust, overprinted by fold-and-thrust structures " +
+                      $"and metamorphic recrystallization during plate convergence."
+                    : $"Exposed basement rocks at this sampling point are {RockTypeLabel((int)ctx.Cell.RockType)}, " +
+                      $"representative of the {ctx.Cell.RockAge:F0}-Ma continental crust. " +
+                      $"Multiple generations of deformation fabrics overprint the shield, recording " +
+                      $"successive collisional orogenies that welded terranes onto the cratonic margin."
         );
 
         paras.Add(

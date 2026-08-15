@@ -62,6 +62,18 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
     /// <summary>Maximum number of plates allowed to prevent unbounded growth.</summary>
     private const int MAX_PLATES = 30;
 
+    /// <summary>Accumulated continental-collision Ma before merging two converging plates.</summary>
+    private const double COLLISION_MERGE_THRESHOLD_MA = 30.0;
+
+    /// <summary>BF-2: Extra collision uplift (m/Ma) applied on cont-cont boundary cells.</summary>
+    private const double COLLISION_WELD_UPLIFT_PER_MA = 120.0;
+
+    /// <summary>BF-2: Height (m) assigned when filling an ocean gap between colliding continents.</summary>
+    private const float COLLISION_WELD_BRIDGE_HEIGHT_M = 120f;
+
+    /// <summary>BF-2: Minimum crust (km) for welded bridge cells.</summary>
+    private const float COLLISION_WELD_BRIDGE_CRUST_KM = 28f;
+
     public StratigraphyStack Stratigraphy { get; } = new();
     private readonly BoundaryClassifier _classifier = new();
     private readonly VolcanismEngine _volcanism = new();
@@ -74,11 +86,33 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
 
     private double _accumulator;
 
+    /// <summary>
+    /// True after plate-coupled crust has been established (either via P2 generation when
+    /// onset ≤ start, or via the one-time BF-2 onset transition).
+    /// </summary>
+    private bool _onsetCrustTransitionApplied;
+
     /// <summary>S1: Cached boundary cells reused across sub-ticks within a single Tick.</summary>
     private List<BoundaryCell>? _cachedBoundaries;
 
+    /// <summary>Accumulated continental-collision duration per plate pair (normalized key).</summary>
+    private readonly Dictionary<long, double> _collisionDurations = new();
+
     /// <summary>Timing breakdown from the most recent plate advection pass.</summary>
     public AdvectionPhaseTimings LastAdvectionPhaseTimings { get; private set; } = new();
+
+    /// <summary>Simulation time (Ma) when lateral plate motion begins. Default −3800 (3.8 Ga).</summary>
+    public double PlateTectonicsOnsetMa { get; set; } = SimulationPlanetConfig.DefaultPlateTectonicsOnsetMa;
+
+    /// <summary>Simulation time (Ma) when plate mobility reaches full strength. Default −2500.</summary>
+    public double PlateMobilityRampEndMa { get; set; } = SimulationPlanetConfig.DefaultPlateMobilityRampEndMa;
+
+    /// <summary>Whether lateral plate advection and boundary classification run at <paramref name="timeMa"/>.</summary>
+    public bool IsPlateTectonicsActive(double timeMa) => timeMa >= PlateTectonicsOnsetMa;
+
+    /// <summary>Mobility factor [0, 1] scaling <see cref="AngularVelocity.Rate"/> at <paramref name="timeMa"/>.</summary>
+    public double GetPlateMobilityFactor(double timeMa) =>
+        SimulationPlanetConfig.ComputePlateMobilityFactor(timeMa, PlateTectonicsOnsetMa, PlateMobilityRampEndMa);
 
     public void Initialize(List<PlateInfo> plates, List<HotspotInfo> hotspots,
         AtmosphericComposition atmosphere, SimulationState state)
@@ -93,6 +127,10 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
             var plate = plates[state.PlateMap[i]];
             Stratigraphy.InitializeBasement(i, plate.IsOceanic, state.RockAgeMap[i]);
         }
+
+        // P2 already ran at gen when onset ≤ INITIAL_TIME; otherwise BF-2 transition waits for onset.
+        _onsetCrustTransitionApplied = IsPlateTectonicsActive(SimClock.INITIAL_TIME);
+        _collisionDurations.Clear();
     }
 
     public List<EruptionRecord> Tick(double timeMa, double deltaMa)
@@ -109,20 +147,21 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         // ── Plate advection: apply once per Tick with the full deltaMa so that
         //    rotation angles are large enough to produce meaningful grid-cell
         //    movement.  Sub-tick boundary processes then operate on the updated
-        //    plate configuration.
-        AdvectPlates(_state, deltaMa, timeMa);
-
-        // Consolidate plate fragments: reassign isolated cells to neighboring plates
-        // so that boundaries remain clean and plate territories stay spatially coherent.
-        ConsolidatePlateFragments(_state);
-
-        // Manage plate lifecycle: absorb tiny plates, nucleate new plates at rifts.
-        ManagePlateLifecycle(_state, timeMa);
-
-        UpdatePlateCenters(_state);
-
-        // S1: Cache boundaries once after advection (S3: GPU when available)
-        _cachedBoundaries = ClassifyBoundaries(_state.PlateMap, _plates, _state.GridSize);
+        //    plate configuration.  Before plate-tectonics onset, skip lateral
+        //    motion and boundary classification (stagnant-lid / vertical only).
+        if (IsPlateTectonicsActive(timeMa))
+        {
+            MaybeApplyOnsetCrustTransition(_state, timeMa);
+            AdvectPlates(_state, deltaMa, timeMa);
+            ConsolidatePlateFragments(_state);
+            ManagePlateLifecycle(_state, timeMa);
+            UpdatePlateCenters(_state);
+            _cachedBoundaries = ClassifyBoundaries(_state.PlateMap, _plates, _state.GridSize, timeMa);
+        }
+        else
+        {
+            _cachedBoundaries = [];
+        }
 
         while (_accumulator >= minTickInterval)
         {
@@ -132,6 +171,9 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         }
 
         _cachedBoundaries = null;
+
+        // Boundary/isostasy sub-ticks can reopen wrap cliffs after AdvectPlates sync.
+        GridSeamSync.SyncAntimeridian(_state);
 
         // Update dirty mask: cells where height changed by > 0.5 m need reprocessing.
         var heightMap = _state.HeightMap;
@@ -153,17 +195,24 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         var prevHeight = new float[cc];
         Array.Copy(_state.HeightMap, prevHeight, cc);
 
-        AdvectPlates(_state, deltaMa, timeMa);
-        if (onSubPhase != null) await onSubPhase("tectonic:advection");
+        if (IsPlateTectonicsActive(timeMa))
+        {
+            MaybeApplyOnsetCrustTransition(_state, timeMa);
+            AdvectPlates(_state, deltaMa, timeMa);
+            if (onSubPhase != null) await onSubPhase("tectonic:advection");
 
-        // Consolidate plate fragments and manage lifecycle after advection.
-        ConsolidatePlateFragments(_state);
-        ManagePlateLifecycle(_state, timeMa);
+            ConsolidatePlateFragments(_state);
+            ManagePlateLifecycle(_state, timeMa);
+            UpdatePlateCenters(_state);
 
-        UpdatePlateCenters(_state);
+            _cachedBoundaries = ClassifyBoundaries(_state.PlateMap, _plates, _state.GridSize, timeMa);
+        }
+        else
+        {
+            _cachedBoundaries = [];
+            if (onSubPhase != null) await onSubPhase("tectonic:advection");
+        }
 
-        // Cache boundaries once after advection (S1 + S3: GPU when available)
-        _cachedBoundaries = ClassifyBoundaries(_state.PlateMap, _plates, _state.GridSize);
         if (onSubPhase != null) await onSubPhase("tectonic:collision");
 
         while (_accumulator >= minTickInterval)
@@ -179,6 +228,9 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         }
 
         _cachedBoundaries = null;
+
+        // Boundary/isostasy sub-ticks can reopen wrap cliffs after AdvectPlates sync.
+        GridSeamSync.SyncAntimeridian(_state);
 
         // Update dirty mask
         var heightMap = _state.HeightMap;
@@ -197,8 +249,9 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         var state = _state!;
         var gs = state.GridSize;
 
-        var boundaries = _cachedBoundaries ?? ClassifyBoundaries(state.PlateMap, _plates, gs);
+        var boundaries = _cachedBoundaries ?? ClassifyBoundaries(state.PlateMap, _plates, gs, timeMa);
         ProcessBoundaryDynamics(boundaries, deltaMa, timeMa, state);
+        WeldConvergentContinentalMargins(boundaries, deltaMa, state);
         ApplyIsostasy(state, deltaMa);
 
         var eruptions = VolcanismEngine.Tick(timeMa, deltaMa, boundaries, _hotspots, _plates, state, Stratigraphy, _rng);
@@ -287,6 +340,8 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
                 Stratigraphy.ApplyDeformation(ci, 2 * deltaMa, 0, DeformationType.FOLDED);
 
                 var b = filtered[i];
+                RecordContinentalCollision(b, deltaMa, timeMa, state);
+
                 if (b.RelativeSpeed > 2.0)
                 {
                     bus.Emit("PLATE_COLLISION", new { plate1 = b.Plate1, plate2 = b.Plate2 });
@@ -306,20 +361,33 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
     /// Classify plate boundaries using GPU acceleration when available,
     /// falling back to CPU-based <see cref="BoundaryClassifier.Classify"/>.
     /// </summary>
-    private List<BoundaryCell> ClassifyBoundaries(ushort[] plateMap, List<PlateInfo> plates, int gridSize)
+    private List<BoundaryCell> ClassifyBoundaries(ushort[] plateMap, List<PlateInfo> plates, int gridSize, double timeMa)
     {
+        List<BoundaryCell> boundaries;
         if (gpu != null)
         {
             try
             {
-                return gpu.ClassifyBoundariesGpu(plateMap, plates, gridSize);
+                boundaries = gpu.ClassifyBoundariesGpu(plateMap, plates, gridSize);
             }
             catch
             {
-                // GPU classification failed — fall back to CPU
+                boundaries = BoundaryClassifier.Classify(plateMap, plates, gridSize);
             }
         }
-        return BoundaryClassifier.Classify(plateMap, plates, gridSize);
+        else
+        {
+            boundaries = BoundaryClassifier.Classify(plateMap, plates, gridSize);
+        }
+
+        var mobility = GetPlateMobilityFactor(timeMa);
+        if (mobility < 1.0 - 1e-9)
+        {
+            foreach (var b in boundaries)
+                b.RelativeSpeed *= mobility;
+        }
+
+        return boundaries;
     }
 
     // ── Plate advection ─────────────────────────────────────────────────────────
@@ -350,6 +418,8 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         var cosTheta = new double[numPlates];
         var sinTheta = new double[numPlates];
 
+        var mobility = GetPlateMobilityFactor(timeMa);
+
         for (var p = 0; p < numPlates; p++)
         {
             var av = _plates[p].AngularVelocity;
@@ -359,7 +429,7 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
             kx[p] = cosPoleLat * Math.Cos(poleLon);
             ky[p] = cosPoleLat * Math.Sin(poleLon);
             kz[p] = Math.Sin(poleLat);
-            var theta = av.Rate * DEG2RAD * deltaMa;
+            var theta = av.Rate * mobility * DEG2RAD * deltaMa;
             cosTheta[p] = Math.Cos(theta);
             sinTheta[p] = Math.Sin(theta);
         }
@@ -371,6 +441,7 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         var newRockType  = new byte[cc];
         var newRockAge   = new float[cc];
         var newPlateMap  = new ushort[cc];
+        var newTerraneMap = new ushort[cc];
         var hitCount     = new int[cc]; // number of source cells that landed here
         // Track source → destination mapping for stratigraphy remapping.
         var stratigraphyMapping = new int[cc]; // sourceIdx → destIdx
@@ -544,6 +615,11 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         var gpuCollisionScatterMs = gpuCollisionTimings?.ScatterKernelMs ?? 0L;
         var gpuCollisionApplyMs = gpuCollisionTimings?.ApplyKernelMs ?? 0L;
 
+        // Terrane provenance advects with the collision winner (same priority as plate scatter).
+        ScatterTerraneFromWinners(
+            state.TerraneMap, destMap, hitCount, newTerraneMap,
+            state.HeightMap, state.PlateMap, _plates);
+
         // ── Phase 3: Gap fill ────────────────────────────────────────────────
         // GPU fills the simple per-cell properties; CPU handles plate assignment
         // via neighbor search which is irregular and not suited for GPU.
@@ -593,6 +669,9 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
         Array.Copy(newRockType, state.RockTypeMap,        cc);
         Array.Copy(newRockAge,  state.RockAgeMap,         cc);
         Array.Copy(newPlateMap, state.PlateMap,            cc);
+        Array.Copy(newTerraneMap, state.TerraneMap,        cc);
+        // Advection scatter can reopen antimeridian cliffs; re-sync wrap columns.
+        GridSeamSync.SyncAntimeridian(state);
         var commitMs = phaseSw.ElapsedMilliseconds;
 
         // ── Remap stratigraphy columns ───────────────────────────────────────
@@ -628,6 +707,40 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
                 Description =
                     $"[{compute}] Advect={totalMs}ms | dest={phase1Ms}ms | scatter={phase2Ms}ms | gap={phase3Ms}ms | assign={gapAssignMs}ms | strat={stratRemapMs}ms",
             });
+        }
+    }
+
+    /// <summary>
+    /// Scatter terrane IDs to destination cells using the same collision-winner
+    /// priority as GPU/CPU plate advection (continental over oceanic, then height).
+    /// Gap cells retain terrane 0.
+    /// </summary>
+    private static void ScatterTerraneFromWinners(
+        ushort[] srcTerrane, int[] destMap, int[] hitCount, ushort[] newTerrane,
+        float[] srcHeight, ushort[] srcPlateMap, List<PlateInfo> plates)
+    {
+        var cc = srcTerrane.Length;
+        Array.Clear(newTerrane);
+        var winnerPriority = new long[cc];
+        Array.Fill(winnerPriority, long.MinValue);
+
+        for (var i = 0; i < cc; i++)
+        {
+            var destIdx = destMap[i];
+            if (hitCount[destIdx] == 0) continue;
+
+            var plateIdx = srcPlateMap[i];
+            var isContinental = plateIdx < plates.Count && !plates[plateIdx].IsOceanic ? 1 : 0;
+            var heightBits = BitConverter.SingleToInt32Bits(srcHeight[i]);
+            if (heightBits < 0) heightBits = ~heightBits;
+            heightBits &= 0x7FFFFFFF;
+
+            var priority = ((long)isContinental << 62) | ((long)heightBits << 31) | (uint)i;
+            if (priority > winnerPriority[destIdx])
+            {
+                winnerPriority[destIdx] = priority;
+                newTerrane[destIdx] = srcTerrane[i];
+            }
         }
     }
 
@@ -748,8 +861,10 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
     {
         var ci = b.CellIndex;
         state.CrustThicknessMap[ci] += (float)(2 * deltaMa * b.RelativeSpeed);
-        state.HeightMap[ci] += (float)(100 * deltaMa * b.RelativeSpeed);
+        // BF-2: stronger boundary uplift so colliding margins rise above sea level faster.
+        state.HeightMap[ci] += (float)(160 * deltaMa * b.RelativeSpeed);
         Stratigraphy.ApplyDeformation(ci, 2 * deltaMa, 0, DeformationType.FOLDED);
+        RecordContinentalCollision(b, deltaMa, timeMa, state);
 
         if (!(b.RelativeSpeed > 2.0)) return;
         bus.Emit("PLATE_COLLISION", new { plate1 = b.Plate1, plate2 = b.Plate2 });
@@ -758,6 +873,255 @@ public sealed class TectonicEngine(EventBus bus, EventLog eventLog, uint seed, d
             TimeMa = timeMa, Type = "PLATE_COLLISION",
             Description = $"Collision between plates {b.Plate1} and {b.Plate2}",
         });
+    }
+
+    /// <summary>
+    /// BF-2: one-time repartition of pre-onset noise crust into plate-coupled terranes
+    /// the first time lateral tectonics becomes active.
+    /// </summary>
+    private void MaybeApplyOnsetCrustTransition(SimulationState state, double timeMa)
+    {
+        if (_onsetCrustTransitionApplied) return;
+        PlanetGenerator.ApplyPlateTectonicsOnsetTransition(state, _plates, seed);
+        _onsetCrustTransitionApplied = true;
+        eventLog.Record(new GeoLogEntry
+        {
+            TimeMa = timeMa,
+            Type = "PLATE_TECTONICS_ONSET",
+            Description = "Plate tectonics onset: repartitioned crust into plate-interior continental terranes",
+        });
+        bus.Emit("PLATE_TECTONICS_ONSET", new { timeMa });
+    }
+
+    /// <summary>
+    /// BF-2: widen cont-cont collision uplift and fill thin ocean gaps so elevation
+    /// flood-fill can merge colliding continental blocks (plate-ID merge alone does not).
+    /// </summary>
+    private void WeldConvergentContinentalMargins(
+        List<BoundaryCell> boundaries, double deltaMa, SimulationState state)
+    {
+        if (boundaries.Count == 0 || deltaMa <= 0) return;
+
+        var gs = state.GridSize;
+        var height = state.HeightMap;
+        var crust = state.CrustThicknessMap;
+        var continentalPairs = new HashSet<long>();
+
+        foreach (var b in boundaries)
+        {
+            if (b.Plate1 >= _plates.Count || b.Plate2 >= _plates.Count) continue;
+            if (_plates[b.Plate1].IsOceanic || _plates[b.Plate2].IsOceanic) continue;
+
+            continentalPairs.Add(MakePlatePairKey(b.Plate1, b.Plate2));
+
+            if (b.Type != BoundaryType.CONVERGENT) continue;
+
+            var ci = b.CellIndex;
+            height[ci] += (float)(COLLISION_WELD_UPLIFT_PER_MA * deltaMa * Math.Max(0.5, b.RelativeSpeed));
+            crust[ci] = Math.Max(crust[ci], COLLISION_WELD_BRIDGE_CRUST_KM);
+            if (height[ci] < COLLISION_WELD_BRIDGE_HEIGHT_M)
+                height[ci] = COLLISION_WELD_BRIDGE_HEIGHT_M;
+            state.RockTypeMap[ci] = (byte)RockType.IGN_GRANITE;
+            state.SutureMap[ci] = 1;
+
+            RaiseOceanNeighborsIfPinched(ci, b.Plate1, b.Plate2, state);
+        }
+
+        // Fill ocean cells pinched between land of any contacting continental plate pair,
+        // including transform contacts that still juxtapose two continents.
+        if (continentalPairs.Count == 0) return;
+        for (var i = 0; i < state.CellCount; i++)
+        {
+            if (height[i] > 0) continue;
+            var row = i / gs;
+            var col = i % gs;
+            int? landPlateA = null;
+            int? landPlateB = null;
+            foreach (var ni in EnumerateNeighbors(row, col, gs))
+            {
+                if (height[ni] <= 0) continue;
+                var p = state.PlateMap[ni];
+                if (_plates[p].IsOceanic) continue;
+                if (landPlateA is null) landPlateA = p;
+                else if (p != landPlateA) { landPlateB = p; break; }
+            }
+            if (landPlateA is null || landPlateB is null) continue;
+            if (!continentalPairs.Contains(MakePlatePairKey(landPlateA.Value, landPlateB.Value)))
+                continue;
+
+            height[i] = Math.Max(height[i], COLLISION_WELD_BRIDGE_HEIGHT_M);
+            crust[i] = Math.Max(crust[i], COLLISION_WELD_BRIDGE_CRUST_KM);
+            state.RockTypeMap[i] = (byte)RockType.IGN_GRANITE;
+            state.SutureMap[i] = 1;
+        }
+    }
+
+    private void RaiseOceanNeighborsIfPinched(int cell, int plate1, int plate2, SimulationState state)
+    {
+        var gs = state.GridSize;
+        var row = cell / gs;
+        var col = cell % gs;
+        foreach (var ni in EnumerateNeighbors(row, col, gs))
+        {
+            if (state.HeightMap[ni] > 0) continue;
+            if (!OceanGapTouchesBothPlates(ni, plate1, plate2, state)) continue;
+
+            state.HeightMap[ni] = Math.Max(state.HeightMap[ni], COLLISION_WELD_BRIDGE_HEIGHT_M);
+            state.CrustThicknessMap[ni] = Math.Max(state.CrustThicknessMap[ni], COLLISION_WELD_BRIDGE_CRUST_KM);
+            state.RockTypeMap[ni] = (byte)RockType.IGN_GRANITE;
+            state.SutureMap[ni] = 1;
+
+            if (state.TerraneMap[ni] != 0) continue;
+            var nRow = ni / gs;
+            var nCol = ni % gs;
+            foreach (var n2 in EnumerateNeighbors(nRow, nCol, gs))
+            {
+                if (state.TerraneMap[n2] == 0 || state.HeightMap[n2] <= 0) continue;
+                state.TerraneMap[ni] = state.TerraneMap[n2];
+                break;
+            }
+        }
+    }
+
+    private static bool OceanGapTouchesBothPlates(
+        int oceanCell, int plate1, int plate2, SimulationState state)
+    {
+        var gs = state.GridSize;
+        var row = oceanCell / gs;
+        var col = oceanCell % gs;
+        var touchesP1Land = false;
+        var touchesP2Land = false;
+
+        foreach (var ni in EnumerateNeighbors(row, col, gs))
+        {
+            if (state.HeightMap[ni] <= 0) continue;
+            var p = state.PlateMap[ni];
+            if (p == plate1) touchesP1Land = true;
+            if (p == plate2) touchesP2Land = true;
+        }
+
+        return touchesP1Land && touchesP2Land;
+    }
+
+    private static IEnumerable<int> EnumerateNeighbors(int row, int col, int gs)
+    {
+        if (row > 0) yield return (row - 1) * gs + col;
+        if (row < gs - 1) yield return (row + 1) * gs + col;
+        yield return row * gs + (col - 1 + gs) % gs;
+        yield return row * gs + (col + 1) % gs;
+    }
+
+    /// <summary>
+    /// Mark suture cells at a continental collision boundary, log formation, and
+    /// optionally merge plate IDs after prolonged collision. Terrane provenance is preserved.
+    /// </summary>
+    private void RecordContinentalCollision(BoundaryCell b, double deltaMa, double timeMa, SimulationState state)
+    {
+        state.SutureMap[b.CellIndex] = 1;
+
+        var (lat, lon) = CellToLatLon(b.CellIndex, state.GridSize);
+        eventLog.Record(new GeoLogEntry
+        {
+            TimeMa = timeMa,
+            Type = "SUTURE_FORMATION",
+            Description = $"Suture forming at cell {b.CellIndex} between plates {b.Plate1} and {b.Plate2}",
+            Location = new LatLon(lat, lon),
+        });
+
+        var key = MakePlatePairKey(b.Plate1, b.Plate2);
+        _collisionDurations.TryGetValue(key, out var duration);
+        duration += deltaMa;
+        _collisionDurations[key] = duration;
+
+        if (duration >= COLLISION_MERGE_THRESHOLD_MA)
+            TryMergeCollidingPlates(b.Plate1, b.Plate2, state, timeMa);
+    }
+
+    private static long MakePlatePairKey(int plate1, int plate2)
+    {
+        var lo = Math.Min(plate1, plate2);
+        var hi = Math.Max(plate1, plate2);
+        return ((long)lo << 32) | (uint)hi;
+    }
+
+    private void TryMergeCollidingPlates(int plate1, int plate2, SimulationState state, double timeMa)
+    {
+        if (plate1 == plate2) return;
+        if (plate1 >= _plates.Count || plate2 >= _plates.Count) return;
+
+        var cc = state.CellCount;
+        var plateMap = state.PlateMap;
+        var count1 = 0;
+        var count2 = 0;
+        for (var i = 0; i < cc; i++)
+        {
+            if (plateMap[i] == plate1) count1++;
+            else if (plateMap[i] == plate2) count2++;
+        }
+
+        if (count1 == 0 || count2 == 0) return;
+
+        var winner = count1 >= count2 ? plate1 : plate2;
+        var loser = winner == plate1 ? plate2 : plate1;
+
+        for (var i = 0; i < cc; i++)
+        {
+            if (plateMap[i] == loser)
+                plateMap[i] = (ushort)winner;
+        }
+
+        _plates[loser].Area = 0;
+        _collisionDurations.Remove(MakePlatePairKey(plate1, plate2));
+        WeldMergedPlateContinentalGaps(winner, state);
+
+        eventLog.Record(new GeoLogEntry
+        {
+            TimeMa = timeMa,
+            Type = "PLATE_MERGE",
+            Description = $"Plate {loser} merged into plate {winner} after sustained continental collision",
+        });
+        bus.Emit("PLATE_MERGE", new { winnerPlate = winner, absorbedPlate = loser });
+    }
+
+    /// <summary>
+    /// After plate-ID merge, fill ocean cells on the winner plate that are pinched
+    /// between two land neighbors so the merged continents become one elevation component.
+    /// </summary>
+    private static void WeldMergedPlateContinentalGaps(int winnerPlate, SimulationState state)
+    {
+        var gs = state.GridSize;
+        var height = state.HeightMap;
+        var plateMap = state.PlateMap;
+
+        for (var i = 0; i < state.CellCount; i++)
+        {
+            if (plateMap[i] != winnerPlate || height[i] > 0) continue;
+
+            var row = i / gs;
+            var col = i % gs;
+            var landNeighbors = 0;
+            foreach (var ni in EnumerateNeighbors(row, col, gs))
+            {
+                if (plateMap[ni] == winnerPlate && height[ni] > 0)
+                    landNeighbors++;
+            }
+
+            if (landNeighbors < 2) continue;
+
+            height[i] = COLLISION_WELD_BRIDGE_HEIGHT_M;
+            state.CrustThicknessMap[i] = Math.Max(state.CrustThicknessMap[i], COLLISION_WELD_BRIDGE_CRUST_KM);
+            state.RockTypeMap[i] = (byte)RockType.IGN_GRANITE;
+            state.SutureMap[i] = 1;
+        }
+    }
+
+    private static (double lat, double lon) CellToLatLon(int ci, int gs)
+    {
+        var row = ci / gs;
+        var col = ci % gs;
+        var lat = 90.0 - (double)row / gs * 180.0;
+        var lon = (double)col / gs * 360.0 - 180.0;
+        return (lat, lon);
     }
 
     private static void ProcessDivergent(List<BoundaryCell> boundaries, double deltaMa, double timeMa, SimulationState state)

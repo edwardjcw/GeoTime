@@ -25,6 +25,15 @@ public sealed class SimulationState
     public byte[] RockTypeMap { get; }
     public float[] RockAgeMap { get; }
     public ushort[] PlateMap { get; }
+    /// <summary>
+    /// Crustal provenance block per cell (0 = oceanic / no terrane).
+    /// Distinct from <see cref="PlateMap"/> (kinematic lithospheric unit).
+    /// </summary>
+    public ushort[] TerraneMap { get; }
+    /// <summary>
+    /// Persistent suture cells from continental collision (0 = none, non-zero = welded terrane boundary).
+    /// </summary>
+    public byte[] SutureMap { get; }
     public byte[] SoilTypeMap { get; }
     public float[] SoilDepthMap { get; }
     public float[] TemperatureMap { get; }
@@ -66,6 +75,8 @@ public sealed class SimulationState
         RockTypeMap = new byte[CellCount];
         RockAgeMap = new float[CellCount];
         PlateMap = new ushort[CellCount];
+        TerraneMap = new ushort[CellCount];
+        SutureMap = new byte[CellCount];
         SoilTypeMap = new byte[CellCount];
         SoilDepthMap = new float[CellCount];
         TemperatureMap = new float[CellCount];
@@ -196,6 +207,49 @@ public sealed class EruptionRecord
     public RockType RockType { get; set; }
     public double CO2Degassed { get; set; }
     public double SO2Degassed { get; set; }
+}
+
+/// <summary>User-tunable planet / simulation configuration.</summary>
+public sealed class SimulationPlanetConfig
+{
+    /// <summary>Default plate-tectonics onset: 3.8 Ga ago (−3800 Ma in simulation time).</summary>
+    public const double DefaultPlateTectonicsOnsetMa = -3800;
+
+    /// <summary>Default time when plate mobility reaches full strength (−2500 Ma, late Archean).</summary>
+    public const double DefaultPlateMobilityRampEndMa = -2500;
+
+    /// <summary>
+    /// Simulation time (Ma) when lateral plate advection and boundary processes begin.
+    /// Times more negative than this are pre-tectonic (stagnant-lid / vertical processes only).
+    /// </summary>
+    public double PlateTectonicsOnsetMa { get; set; } = DefaultPlateTectonicsOnsetMa;
+
+    /// <summary>
+    /// Simulation time (Ma) when plate mobility factor reaches 1.0 after the Archean ramp.
+    /// Must be greater than <see cref="PlateTectonicsOnsetMa"/>.
+    /// </summary>
+    public double PlateMobilityRampEndMa { get; set; } = DefaultPlateMobilityRampEndMa;
+
+    /// <summary>True when <paramref name="timeMa"/> is at or after plate-tectonics onset.</summary>
+    public bool IsPlateTectonicsActive(double timeMa) => timeMa >= PlateTectonicsOnsetMa;
+
+    /// <summary>Mobility factor [0, 1] for lateral plate motion at <paramref name="timeMa"/>.</summary>
+    public double GetPlateMobilityFactor(double timeMa) =>
+        ComputePlateMobilityFactor(timeMa, PlateTectonicsOnsetMa, PlateMobilityRampEndMa);
+
+    /// <summary>
+    /// Smoothstep ramp from 0 at <paramref name="onsetMa"/> to 1 at <paramref name="rampEndMa"/>.
+    /// Before onset returns 0; after ramp end returns 1.
+    /// </summary>
+    public static double ComputePlateMobilityFactor(double timeMa, double onsetMa, double rampEndMa)
+    {
+        if (timeMa < onsetMa) return 0;
+        if (rampEndMa <= onsetMa) return 1;
+        if (timeMa >= rampEndMa) return 1;
+
+        var t = (timeMa - onsetMa) / (rampEndMa - onsetMa);
+        return t * t * (3.0 - 2.0 * t);
+    }
 }
 
 /// <summary>Result of planet generation.</summary>

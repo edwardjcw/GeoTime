@@ -13,6 +13,12 @@ public enum FeatureType
     MountainPeak,
     Rift,
     SubductionZone,
+    /// <summary>Welded boundary between distinct crustal terranes within a continent.</summary>
+    Suture,
+    /// <summary>Ancient stable shield nucleus in a plate interior (old rock, far from margins).</summary>
+    Craton,
+    /// <summary>Elevated crust at a plate margin (collision/subduction belt).</summary>
+    Orogen,
     HotspotChain,
     ImpactBasin,
     River,

@@ -39,12 +39,66 @@ export function stretchToPhysicalRange(
   dataMax: number,
   physicalMin: number,
   physicalMax: number,
-  minSpan: number,
+  _minSpan: number,
 ): number {
   const span = dataMax - dataMin;
-  if (span < minSpan) return value;
+  if (span <= 0) {
+    return (physicalMin + physicalMax) / 2;
+  }
   const t = (value - dataMin) / span;
   return physicalMin + t * (physicalMax - physicalMin);
+}
+
+/** Count distinct opaque RGB values in an RGBA row-major texture. */
+export function countDistinctRgbInRgba(rgba: Uint8Array, minAlpha = 10): number {
+  const seen = new Set<number>();
+  for (let i = 0; i < rgba.length; i += 4) {
+    if (rgba[i + 3] < minAlpha) continue;
+    seen.add((rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2]);
+  }
+  return seen.size;
+}
+
+/** Build an RGBA overlay texture from a scalar field using stretch + palette. */
+export function buildScalarLayerRgba(
+  data: Float32Array,
+  colorFn: (v: number) => [number, number, number],
+  physicalMin: number,
+  physicalMax: number,
+  alpha: number,
+): Uint8Array {
+  const rgba = new Uint8Array(data.length * 4);
+  const stats = computeMapStats(data);
+  for (let i = 0; i < data.length; i++) {
+    const v = stretchToPhysicalRange(data[i], stats.min, stats.max, physicalMin, physicalMax, 0);
+    const [r, g, b] = colorFn(v);
+    rgba[i * 4] = r;
+    rgba[i * 4 + 1] = g;
+    rgba[i * 4 + 2] = b;
+    rgba[i * 4 + 3] = alpha;
+  }
+  return rgba;
+}
+
+/** Build a topography overlay RGBA texture from a height field (metres). */
+export function buildTopoLayerRgba(data: Float32Array): Uint8Array {
+  const rgba = new Uint8Array(data.length * 4);
+  const extents = computeTopoExtents(data);
+  for (let i = 0; i < data.length; i++) {
+    const scaled = scaleTopoHeight(
+      data[i],
+      extents.oceanMin,
+      extents.oceanMax,
+      extents.landMin,
+      extents.landMax,
+    );
+    const [r, g, b] = topoColor(scaled);
+    rgba[i * 4] = r;
+    rgba[i * 4 + 1] = g;
+    rgba[i * 4 + 2] = b;
+    rgba[i * 4 + 3] = 200;
+  }
+  return rgba;
 }
 
 /** Temperature (°C) → RGB: blue (cold) through white (0°C) to red (hot). */

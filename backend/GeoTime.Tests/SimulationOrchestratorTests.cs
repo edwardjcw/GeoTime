@@ -17,6 +17,18 @@ public class SimulationOrchestratorTests
     }
 
     [Fact]
+    public void GeneratePlanet_BootstrapsClimateMaps()
+    {
+        var sim = new SimulationOrchestrator(64);
+        sim.GeneratePlanet(42);
+
+        var temps = sim.State.TemperatureMap;
+        var min = temps.Min();
+        var max = temps.Max();
+        Assert.True(max - min > 1f, $"Expected temperature span after bootstrap, got min={min} max={max}");
+    }
+
+    [Fact]
     public void AdvanceSimulation_MovesTimeForward()
     {
         var sim = new SimulationOrchestrator(64);

@@ -112,6 +112,9 @@ public sealed class GeologicalContextAssembler
         // Step 9 — Nearby features (up to 6, within 3 000 km, not containing this cell).
         var nearbyFeatures = FindNearbyFeatures(lat, lon, cellIndex, registry);
 
+        bool isCratonCore  = containingFeatures.Any(f => f.Type == FeatureType.Craton);
+        bool isOrogenMargin = containingFeatures.Any(f => f.Type == FeatureType.Orogen);
+
         // Step 10 — Assemble and return.
         return new GeologicalContext
         {
@@ -143,6 +146,8 @@ public sealed class GeologicalContextAssembler
             IsOnWindwardSide     = isWindward,
             HasRainShadow        = hasRainShadow,
             MountainOriginType   = mountainOriginType,
+            IsCratonCore         = isCratonCore,
+            IsOrogenMargin       = isOrogenMargin,
             BiomeType            = biomeType,
             MeanTempC            = state.TemperatureMap[cellIndex],
             MeanPrecipMm         = state.PrecipitationMap[cellIndex],
@@ -408,7 +413,8 @@ public sealed class GeologicalContextAssembler
         FeatureType.Sea or FeatureType.IslandChain                 => 2,
         FeatureType.MountainRange or FeatureType.Rift
             or FeatureType.SubductionZone or FeatureType.HotspotChain
-            or FeatureType.ImpactBasin                             => 3,
+            or FeatureType.ImpactBasin or FeatureType.Craton
+            or FeatureType.Orogen                                     => 3,
         FeatureType.Island                                         => 4,
         FeatureType.River or FeatureType.Lake
             or FeatureType.InlandSea or FeatureType.RiverDelta     => 5,
@@ -422,6 +428,7 @@ public sealed class GeologicalContextAssembler
     {
         FeatureType.Continent or FeatureType.Island or FeatureType.IslandChain
             or FeatureType.MountainRange or FeatureType.MountainPeak
+            or FeatureType.Craton or FeatureType.Orogen
             or FeatureType.Desert or FeatureType.Rainforest or FeatureType.Savanna
             or FeatureType.Tundra or FeatureType.PolarIceCap => true,
         _ => false,

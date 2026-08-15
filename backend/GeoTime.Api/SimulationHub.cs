@@ -195,6 +195,8 @@ public sealed class SimulationHub(SimulationOrchestrator sim) : Hub
         {
             timeMa = sim.GetCurrentTime(),
             seed = sim.GetCurrentSeed(),
+            plateTectonicsOnsetMa = sim.GetPlateTectonicsOnsetMa(),
+            plateTectonicsActive = sim.IsPlateTectonicsActive(),
             computeMode = computeInfo.Mode.ToString(),
             computeDevice = computeInfo.DeviceName,
             computeMemoryMb = computeInfo.MemoryMb,

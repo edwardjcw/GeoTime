@@ -25,6 +25,13 @@ public sealed class FeatureDetectorService
     // Minimum mountain range area to register (filters single-cell spikes)
     private const float MountainMinKm2   = 5_000f;
 
+    // Craton / orogen heuristics (P6)
+    private const int   CratonInteriorMinCells = 3;    // BFS steps from plate margin
+    private const float CratonMinRockAgeMa     = 2500f; // Archean-style shield age
+    private const float OrogenElevatedHeightM  = 500f;  // elevated crust at margin
+    private const float CratonMinKm2           = 1_000f;
+    private const float OrogenMinKm2           = 500f;
+
     // Hotspot chain grouping: hotspots within this distance (degrees) are chained
     private const double HotspotChainThresholdDeg = 20.0;
 
@@ -48,6 +55,8 @@ public sealed class FeatureDetectorService
 
         DetectTectonicPlates(state, plates, registry, currentTick);
         DetectLandAndOcean(state, registry, currentTick);
+        DetectSutures(state, registry, currentTick);
+        DetectCratonsAndOrogens(state, plates, registry, currentTick);
         DetectMountainRanges(state, registry, currentTick);
         DetectBoundaryFeatures(state, plates, registry, currentTick);
         DetectHotspotChains(hotspots, registry, currentTick);
@@ -161,6 +170,217 @@ public sealed class FeatureDetectorService
                 feature.Metrics["mean_elevation_m"] = cells.Average(i => state.HeightMap[i]);
 
             registry.Features[id] = feature;
+        }
+    }
+
+    // ── Sutures (terrane boundaries within continents) ───────────────────────
+
+    private void DetectSutures(SimulationState state, FeatureRegistry registry, long tick)
+    {
+        var gs = state.GridSize;
+        var landFeatures = registry.Features.Values
+            .Where(f => f.Type is FeatureType.Continent or FeatureType.Island)
+            .ToList();
+
+        var sutureIdx = 0;
+        foreach (var land in landFeatures)
+        {
+            var terraneIds = land.CellIndices
+                .Select(i => state.TerraneMap[i])
+                .Where(t => t > 0)
+                .Distinct()
+                .ToList();
+            if (terraneIds.Count < 2) continue;
+
+            var landSet = new HashSet<int>(land.CellIndices);
+            var sutureCells = new List<int>();
+            foreach (var ci in land.CellIndices)
+            {
+                var terrane = state.TerraneMap[ci];
+                if (terrane == 0) continue;
+                if (HasDifferentTerraneNeighbor(ci, terrane, state, gs, landSet))
+                    sutureCells.Add(ci);
+            }
+
+            if (sutureCells.Count == 0) continue;
+
+            var (cLat, cLon) = ComputeCentroid(sutureCells, gs);
+            var areaKm2 = ComputeAreaKm2(sutureCells, gs);
+            var id = MakeId(FeatureType.Suture, sutureIdx);
+            var name = FeatureNameGenerator.Generate(_planetSeed, FeatureType.Suture, sutureIdx);
+            var snap = new FeatureSnapshot(tick, long.MaxValue, name, cLat, cLon, areaKm2,
+                FeatureStatus.Active, null, null, null);
+            var feature = new DetectedFeature
+            {
+                Id = id,
+                Type = FeatureType.Suture,
+                CellIndices = [.. sutureCells],
+            };
+            feature.History.Add(snap);
+            feature.Metrics["cell_count"] = sutureCells.Count;
+            feature.Metrics["terrane_count"] = terraneIds.Count;
+            feature.Metrics["area_km2"] = areaKm2;
+            registry.Features[id] = feature;
+            sutureIdx++;
+        }
+    }
+
+    private static bool HasDifferentTerraneNeighbor(
+        int ci, ushort terrane, SimulationState state, int gs, HashSet<int> landSet)
+    {
+        var row = ci / gs;
+        var col = ci % gs;
+
+        if (row > 0 && CheckNeighbor(row - 1, col)) return true;
+        if (row < gs - 1 && CheckNeighbor(row + 1, col)) return true;
+        if (CheckNeighbor(row, (col - 1 + gs) % gs)) return true;
+        if (CheckNeighbor(row, (col + 1) % gs)) return true;
+        return false;
+
+        bool CheckNeighbor(int r, int c)
+        {
+            var ni = r * gs + c;
+            if (!landSet.Contains(ni)) return false;
+            var nt = state.TerraneMap[ni];
+            return nt > 0 && nt != terrane;
+        }
+    }
+
+    // ── Cratons and Orogen margins (P6) ─────────────────────────────────────
+
+    private void DetectCratonsAndOrogens(
+        SimulationState state,
+        IReadOnlyList<PlateInfo> plates,
+        FeatureRegistry registry,
+        long tick)
+    {
+        if (plates.Count == 0) return;
+
+        var gs = state.GridSize;
+        var marginDistCells = ComputePlateInteriorDistances(state, gs);
+
+        var cratonCandidates = new bool[state.CellCount];
+        var orogenCandidates = new bool[state.CellCount];
+
+        for (var i = 0; i < state.CellCount; i++)
+        {
+            if (state.HeightMap[i] < LandThresholdM) continue;
+
+            var distCells = marginDistCells[i];
+            if (distCells > CratonInteriorMinCells && state.RockAgeMap[i] >= CratonMinRockAgeMa)
+                cratonCandidates[i] = true;
+
+            if (distCells == 0 && state.HeightMap[i] >= OrogenElevatedHeightM)
+                orogenCandidates[i] = true;
+        }
+
+        RegisterClassifiedRegions(cratonCandidates, FeatureType.Craton, marginDistCells, state, gs, registry, tick);
+        RegisterClassifiedRegions(orogenCandidates, FeatureType.Orogen, marginDistCells, state, gs, registry, tick);
+    }
+
+    /// <summary>
+    /// Per-cell BFS distance (in grid steps) to the nearest plate margin, staying within the same plate.
+    /// Boundary cells have distance 0; interior cells have distance &gt; 0.
+    /// </summary>
+    private static int[] ComputePlateInteriorDistances(SimulationState state, int gs)
+    {
+        var dist = Enumerable.Repeat(int.MaxValue, state.CellCount).ToArray();
+        var queue = new Queue<int>();
+
+        for (var i = 0; i < state.CellCount; i++)
+        {
+            if (!IsPlateBoundaryCell(i, state, gs)) continue;
+            dist[i] = 0;
+            queue.Enqueue(i);
+        }
+
+        while (queue.Count > 0)
+        {
+            var ci = queue.Dequeue();
+            var plateId = state.PlateMap[ci];
+            var nextDist = dist[ci] + 1;
+
+            foreach (var ni in Neighbors4(ci, gs))
+            {
+                if (state.PlateMap[ni] != plateId) continue;
+                if (dist[ni] <= nextDist) continue;
+                dist[ni] = nextDist;
+                queue.Enqueue(ni);
+            }
+        }
+
+        return dist;
+    }
+
+    private static bool IsPlateBoundaryCell(int ci, SimulationState state, int gs)
+    {
+        var plateId = state.PlateMap[ci];
+        foreach (var ni in Neighbors4(ci, gs))
+            if (state.PlateMap[ni] != plateId) return true;
+        return false;
+    }
+
+    private static IEnumerable<int> Neighbors4(int ci, int gs)
+    {
+        var row = ci / gs;
+        var col = ci % gs;
+        if (row > 0) yield return ci - gs;
+        if (row < gs - 1) yield return ci + gs;
+        yield return row * gs + (col - 1 + gs) % gs;
+        yield return row * gs + (col + 1) % gs;
+    }
+
+    private void RegisterClassifiedRegions(
+        bool[] candidates,
+        FeatureType type,
+        int[] marginDistCells,
+        SimulationState state,
+        int gs,
+        FeatureRegistry registry,
+        long tick)
+    {
+        var visited = new bool[state.CellCount];
+        var minKm2 = type == FeatureType.Craton ? CratonMinKm2 : OrogenMinKm2;
+        var idx = 0;
+
+        for (var start = 0; start < state.CellCount; start++)
+        {
+            if (visited[start] || !candidates[start]) continue;
+
+            var cells = FloodFill8(start, state.HeightMap, visited, gs, i => candidates[i]);
+            if (cells.Count == 0) continue;
+
+            var areaKm2 = ComputeAreaKm2(cells, gs);
+            if (areaKm2 < minKm2) continue;
+
+            var (cLat, cLon) = ComputeCentroid(cells, gs);
+            var id = MakeId(type, idx);
+            var name = FeatureNameGenerator.Generate(_planetSeed, type, idx);
+            var snap = new FeatureSnapshot(tick, long.MaxValue, name, cLat, cLon, areaKm2,
+                FeatureStatus.Active, null, null, null);
+            var feature = new DetectedFeature
+            {
+                Id = id,
+                Type = type,
+                CellIndices = [.. cells],
+            };
+            feature.History.Add(snap);
+            feature.Metrics["area_km2"] = areaKm2;
+            feature.Metrics["cell_count"] = cells.Count;
+            feature.Metrics["mean_rock_age_ma"] = (float)cells.Average(i => state.RockAgeMap[i]);
+            feature.Metrics["mean_elevation_m"] = (float)cells.Average(i => state.HeightMap[i]);
+            if (type == FeatureType.Craton)
+            {
+                feature.Metrics["is_craton_core"] = 1f;
+                feature.Metrics["min_margin_dist_cells"] = cells.Min(i => marginDistCells[i]);
+            }
+            else
+            {
+                feature.Metrics["is_orogen_margin"] = 1f;
+            }
+
+            registry.Features[id] = feature;
+            idx++;
         }
     }
 

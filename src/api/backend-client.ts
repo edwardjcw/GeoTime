@@ -11,6 +11,8 @@ export interface GenerateResult {
   plateCount: number;
   hotspotCount: number;
   timeMa: number;
+  plateTectonicsOnsetMa?: number;
+  plateTectonicsActive?: boolean;
 }
 
 export interface TickStats {
@@ -49,6 +51,8 @@ export interface AdvanceResult {
 export interface SimulationTimeResult {
   timeMa: number;
   seed: number;
+  plateTectonicsOnsetMa?: number;
+  plateTectonicsActive?: boolean;
 }
 
 export interface CellInspection {
@@ -178,14 +182,23 @@ export interface PlanetStatus {
   exists: boolean;
   seed: number;
   timeMa: number;
+  plateTectonicsOnsetMa?: number;
+  plateTectonicsActive?: boolean;
 }
 
 export async function getPlanetStatus(): Promise<PlanetStatus> {
   return get('/api/planet/status');
 }
 
-export async function generatePlanet(seed: number = 0): Promise<GenerateResult> {
-  return post('/api/planet/generate', { seed });
+export async function generatePlanet(
+  seed: number = 0,
+  plateTectonicsOnsetGa?: number,
+): Promise<GenerateResult> {
+  const body: { seed: number; plateTectonicsOnsetGa?: number } = { seed };
+  if (plateTectonicsOnsetGa !== undefined && plateTectonicsOnsetGa > 0) {
+    body.plateTectonicsOnsetGa = plateTectonicsOnsetGa;
+  }
+  return post('/api/planet/generate', body);
 }
 
 export async function advanceSimulation(deltaMa: number, signal?: AbortSignal): Promise<AdvanceResult> {
@@ -221,6 +234,10 @@ export async function getHeightMap(): Promise<number[]> {
 
 export async function getPlateMap(): Promise<number[]> {
   return get('/api/state/platemap');
+}
+
+export async function getSutureMap(): Promise<number[]> {
+  return get('/api/state/suturemap');
 }
 
 export async function getTemperatureMap(): Promise<number[]> {
@@ -393,7 +410,15 @@ export type SimulationEventHandler = {
   onPlateMapData?: (data: number[]) => void;
   /** Rec 8: raw float32 state bundle pushed after each advance step. */
   onStateBundleData?: (data: ArrayBuffer) => void;
-  onConnected?: (event: { timeMa: number; seed: number; computeMode?: string; computeDevice?: string; computeMemoryMb?: number }) => void;
+  onConnected?: (event: {
+    timeMa: number;
+    seed: number;
+    plateTectonicsOnsetMa?: number;
+    plateTectonicsActive?: boolean;
+    computeMode?: string;
+    computeDevice?: string;
+    computeMemoryMb?: number;
+  }) => void;
   onDisconnected?: () => void;
   /** Called when the backend reports a simulation engine phase (tectonic, surface, biomatter, complete). */
   onProgress?: (event: { phase: string; step?: number; totalSteps?: number; timeMa?: number }) => void;
